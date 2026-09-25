@@ -47,6 +47,10 @@ export function self(env: Env = process.env): Address {
   if (env.CODEX_THREAD_ID) {
     return { mailbox: sessionMailbox('codex', env.CODEX_THREAD_ID), host: 'codex', threadId: env.CODEX_THREAD_ID, ...herdrTarget(env) };
   }
+  // Claude Code exports its session id to tool processes (CLI and desktop app alike).
+  if (env.CLAUDE_CODE_SESSION_ID) {
+    return { mailbox: sessionMailbox('claude', env.CLAUDE_CODE_SESSION_ID), host: 'claude', ...herdrTarget(env) };
+  }
   const ancestor = hostAncestor();
   if (ancestor) return { mailbox: `${ancestor.host}-pid-${ancestor.pid}`, host: ancestor.host, ...herdrTarget(env) };
   throw new Error('crew: cannot tell which Claude Code or Codex session is calling; run crew from inside one');

@@ -287,3 +287,14 @@ describe('trust', async () => {
     rmSync(root, { recursive: true, force: true });
   });
 });
+
+describe('identity', async () => {
+  const { self } = await import('../src/identity.ts');
+  it('prefers a crew run, then the host session ids', () => {
+    run();
+    assert.equal(self({ CREW_RUN: 'b-test', CLAUDE_CODE_SESSION_ID: 'x' }).mailbox, 'b-test');
+    assert.equal(self({ CREW_MAILBOX: 'claude-abc' }).mailbox, 'claude-abc');
+    assert.deepEqual(self({ CODEX_THREAD_ID: 't1' }), { mailbox: 'codex-t1', host: 'codex', threadId: 't1' });
+    assert.deepEqual(self({ CLAUDE_CODE_SESSION_ID: 's1', HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p2' }), { mailbox: 'claude-s1', host: 'claude', herdrAgent: 'w1:p2' });
+  });
+});
