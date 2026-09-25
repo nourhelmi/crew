@@ -60,7 +60,7 @@ export function startAgent(name: string, kind: string, pane: string, argv: strin
   const started = herdr(['agent', 'start', name, '--kind', kind, '--pane', pane, '--timeout', '8000', '--', ...argv], 15_000, session);
   if (started.ok) return;
   for (let waited = 0; waited < 20_000; waited += 1_000) {
-    if (agentStatus(name, session) ?? agentStatus(pane, session)) return;
+    if (agentStatus(pane, session)) return;
     execFileSync('sleep', ['1']);
   }
   throw new Error(`herdr agent start failed: ${started.error}`);

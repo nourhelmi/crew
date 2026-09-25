@@ -82,7 +82,8 @@ function launchHerdr(run: RunMeta, args: string[], extra: Record<string, string>
   const session = process.env.HERDR_SESSION;
   const pane = splitPane(process.env.HERDR_PANE_ID!, run.cwd, extra, session);
   startAgent(run.name, run.route.host, pane, args, session);
-  return { launcher: 'herdr', herdr: { pane, agent: run.name, ...(session ? { session } : {}) } };
+  // Address the agent by pane: the name only binds once herdr sees it ready, which a busy agent may never be.
+  return { launcher: 'herdr', herdr: { pane, agent: pane, ...(session ? { session } : {}) } };
 }
 
 /** Background sessions are looked up by the name we gave them; `claude --bg` output is for humans. */
