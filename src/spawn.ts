@@ -1,6 +1,6 @@
 import { execFileSync, spawn as spawnProcess } from 'node:child_process';
 import { mkdirSync, openSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve as resolvePath } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { agentStatus, inHerdr, splitPane, startAgent } from './herdr.ts';
 import { self } from './identity.ts';
@@ -40,11 +40,26 @@ export function bootstrap(run: Pick<RunMeta, 'id' | 'name' | 'role' | 'keep' | '
   ].join(' ');
 }
 
+/**
+ * Directories a sandboxed child must write outside its cwd: crew's own state (result, mail)
+ * and, for a git worktree, the shared git dir its commits land in.
+ */
+export function writableRoots(cwd: string): string[] {
+  const roots = [home()];
+  try {
+    const common = resolvePath(cwd, execFileSync('git', ['-C', cwd, 'rev-parse', '--git-common-dir'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim());
+    const inside = relative(cwd, common);
+    if (inside.startsWith('..') || isAbsolute(inside)) roots.push(common);
+  } catch { /* not a git checkout */ }
+  return roots;
+}
+
 /** Interactive CLI args for a host; the bootstrap prompt rides along as the first message. */
-export function argv(host: Host, r: Route, name: string, config: Config, firstPrompt: string): string[] {
+export function argv(host: Host, r: Route, name: string, config: Config, firstPrompt: string, roots: string[] = []): string[] {
   const base: Record<Host, string[]> = {
-    claude: ['--model', r.model, '--effort', r.effort, '--name', name],
-    codex: ['--model', r.model, '-c', `model_reasoning_effort="${r.effort}"`],
+    claude: ['--model', r.model, '--effort', r.effort, '--name', name, ...roots.flatMap(root => ['--add-dir', root])],
+    codex: ['--model', r.model, '-c', `model_reasoning_effort="${r.effort}"`,
+      ...(roots.length ? ['-c', `sandbox_workspace_write.writable_roots=${JSON.stringify(roots)}`] : [])],
   };
   return [...base[host], ...config.args[host], firstPrompt];
 }
@@ -113,7 +128,7 @@ export async function spawn(options: SpawnOptions): Promise<RunMeta> {
     cwd: options.cwd, keep: options.keep, parent, launcher: inHerdr() ? 'herdr' : chosen.host === 'claude' ? 'bg' : 'exec',
     createdAt: new Date().toISOString(), state: 'running',
   };
-  const args = argv(chosen.host, chosen, run.name, config, bootstrap(run));
+  const args = argv(chosen.host, chosen, run.name, config, bootstrap(run), writableRoots(options.cwd));
   if (options.dryRun) return run;
 
   mkdirSync(runDir(id), { recursive: true });

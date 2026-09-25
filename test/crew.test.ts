@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, beforeEach, describe, it } from 'node:test';
@@ -13,7 +14,7 @@ const { parseResult } = await import('../src/result.ts');
 const store = await import('../src/store.ts');
 const mail = await import('../src/mail.ts');
 const { runHook } = await import('../src/hook.ts');
-const { argv, bootstrap } = await import('../src/spawn.ts');
+const { argv, bootstrap, writableRoots } = await import('../src/spawn.ts');
 type RunMeta = import('../src/types.ts').RunMeta;
 
 after(() => rmSync(HOME, { recursive: true, force: true }));
@@ -207,6 +208,27 @@ describe('launch shape', () => {
     assert.deepEqual(claude, ['--model', 'claude-opus-5-5', '--effort', 'high', '--name', 'adv', '--permission-mode', 'auto', 'GO']);
     const codex = argv('codex', { host: 'codex', model: 'gpt-6-sol', effort: 'xhigh', strategy: 'jev' }, 'b', config, 'GO');
     assert.deepEqual(codex, ['--model', 'gpt-6-sol', '-c', 'model_reasoning_effort="xhigh"', 'GO']);
+  });
+  it('grants sandboxed children crew state and a worktree\'s shared git dir', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'crew-repo-'));
+    execFileSync('git', ['init', '-q', repo]);
+    execFileSync('git', ['-C', repo, 'commit', '-q', '--allow-empty', '-m', 'init']);
+    const tree = join(tmpdir(), `crew-tree-${process.pid}`);
+    execFileSync('git', ['-C', repo, 'worktree', 'add', '-q', tree]);
+    try {
+      assert.deepEqual(writableRoots(repo), [HOME]);
+      const roots = writableRoots(tree);
+      assert.equal(roots.length, 2);
+      assert.equal(realpathSync(roots[1]!), realpathSync(join(repo, '.git')));
+      const codex = argv('codex', { host: 'codex', model: 'gpt-6-sol', effort: 'high', strategy: 'jev' }, 'b', store.loadConfig(), 'GO', roots);
+      assert.equal(codex[4], '-c');
+      assert.match(codex[5] ?? '', /^sandbox_workspace_write\.writable_roots=\[".*"\]$/);
+      const claude = argv('claude', { host: 'claude', model: 'opus', effort: 'high', strategy: 'jev' }, 'a', store.loadConfig(), 'GO', roots);
+      assert.equal(claude.filter(arg => arg === '--add-dir').length, 2);
+    } finally {
+      rmSync(tree, { recursive: true, force: true });
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
   it('points the child at its role skill, packet and result', () => {
     const text = bootstrap({ id: 'c-1', name: 'checker-1', role: 'checker', keep: false, parent: ROOT });

@@ -11,6 +11,8 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const HOME = homedir();
 const BACKUP = join(HOME, '.crew', 'backups', new Date().toISOString().replace(/[:.]/g, '-'));
 const CREW_BIN = join(HOME, '.local', 'bin', 'crew');
+// `npm run` prepends every ancestor node_modules/.bin; a stale npm Claude Code there must not win.
+const CLAUDE = existsSync(join(HOME, '.local', 'bin', 'claude')) ? join(HOME, '.local', 'bin', 'claude') : 'claude';
 const say = (message: string): void => console.log(`crew install: ${message}`);
 
 const OLD_SKILLS = ['advisor', 'advisor-intelligence', 'advisor-role-advisor', 'advisor-role-builder', 'advisor-role-checker',
@@ -102,10 +104,10 @@ link(join(REPO, 'codex', 'agents', 'advisor-maker.toml'), join(HOME, '.codex', '
 
 // 5. Plugins from this repo as a local marketplace.
 {
-  const added = run('claude', ['plugin', 'marketplace', 'add', REPO]);
+  const added = run(CLAUDE, ['plugin', 'marketplace', 'add', REPO]);
   if (!added.ok && !/already/i.test(added.out)) say(`claude marketplace add: ${added.out.trim()}`);
-  run('claude', ['plugin', 'marketplace', 'update', 'crew']);
-  const installed = run('claude', ['plugin', 'install', 'crew@crew']);
+  run(CLAUDE, ['plugin', 'marketplace', 'update', 'crew']);
+  const installed = run(CLAUDE, ['plugin', 'install', 'crew@crew']);
   say(installed.ok ? 'Claude plugin crew@crew installed' : `claude plugin install: ${installed.out.trim()}`);
 
   const codexAdded = run('codex', ['plugin', 'marketplace', 'add', REPO]);
