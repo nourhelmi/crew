@@ -16,7 +16,7 @@ import { liveChildren, wait } from './wait.ts';
 
 const HELP = `crew: advisor crews on native Claude Code and Codex
 
-  crew spawn --role advisor|builder|checker (--task TEXT | --packet FILE | stdin)
+  crew spawn --role advisor|builder|checker (--task TEXT | --packet FILE | -- TEXT | stdin)
              [--model M[@effort]] [--effort E] [--name N] [--cwd DIR] [--keep] [--dry-run]
       Route (Jev unless --model), pick the CLI from the model, launch it (herdr pane,
       else claude --bg / codex exec). Prints the run.
@@ -99,7 +99,7 @@ async function main(argv: string[]): Promise<void> {
   switch (command) {
     case 'spawn': {
       const role = oneOf<Role>(values.role, ROLES, 'role');
-      const task = values.task ?? (values.packet ? readFileSync(values.packet, 'utf8') : stdin());
+      const task = values.task ?? (values.packet ? readFileSync(values.packet, 'utf8') : positionals.length ? positionals.join(' ') : stdin());
       if (!task.trim()) fail('crew: give the task with --task, --packet FILE, or stdin');
       if (values.effort && !isEffort(values.effort)) fail(`crew: unknown effort "${values.effort}"`);
       const run = await spawn({
