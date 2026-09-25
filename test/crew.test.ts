@@ -209,6 +209,8 @@ describe('hooks', () => {
     const log = join(bin, 'calls');
     writeFileSync(join(bin, 'herdr'), `#!/bin/sh\necho "$@" >> '${log}'\n`, { mode: 0o755 });
     const path = process.env.PATH;
+    const herdrBinPath = process.env.HERDR_BIN_PATH;
+    delete process.env.HERDR_BIN_PATH;
     process.env.PATH = `${bin}:${path}`; // the detached closer resolves herdr from this PATH, never the real one
     try {
       run({ launcher: 'herdr', herdr: { pane: 'w1:p9', agent: 'w1:p9', session: 'stub' } });
@@ -219,6 +221,7 @@ describe('hooks', () => {
       assert.match(readFileSync(log, 'utf8'), /--session stub pane close w1:p9/);
     } finally {
       process.env.PATH = path;
+      if (herdrBinPath) process.env.HERDR_BIN_PATH = herdrBinPath;
       rmSync(bin, { recursive: true, force: true });
     }
   });

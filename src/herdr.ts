@@ -4,12 +4,15 @@ export type AgentStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown';
 
 export const inHerdr = (env = process.env): boolean => env.HERDR_ENV === '1' && Boolean(env.HERDR_PANE_ID);
 
+/** herdr panes export their binary; hooks started by GUI apps may lack ~/.local/bin on PATH. */
+export const herdrBin = (): string => process.env.HERDR_BIN_PATH || 'herdr';
+
 type Result = { ok: true; json: unknown } | { ok: false; error: string };
 
 /** `session` pins the call to one herdr session; without it herdr uses the caller's environment. */
 export function herdr(args: string[], timeoutMs = 15_000, session?: string): Result {
   try {
-    const out = execFileSync('herdr', session ? ['--session', session, ...args] : args, { encoding: 'utf8', timeout: timeoutMs, stdio: ['ignore', 'pipe', 'pipe'] });
+    const out = execFileSync(herdrBin(), session ? ['--session', session, ...args] : args, { encoding: 'utf8', timeout: timeoutMs, stdio: ['ignore', 'pipe', 'pipe'] });
     try { return { ok: true, json: JSON.parse(out) }; } catch { return { ok: true, json: out }; }
   } catch (error) {
     const e = error as { stderr?: string; stdout?: string; message: string };

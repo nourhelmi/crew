@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { herdrBin } from './herdr.ts';
 import { hookSelf, sessionMailbox } from './identity.ts';
 import { format, settle, stall, takeUnread } from './mail.ts';
 import { contract, readResult } from './result.ts';
@@ -71,7 +72,7 @@ function closeFinishedPane(id: string): void {
   if (!run || run.keep || run.state !== 'done' || !run.herdr || run.herdr.closed) return;
   const herdrArgs = [...(run.herdr.session ? ['--session', run.herdr.session] : []), 'pane', 'close', run.herdr.pane];
   const quoted = herdrArgs.map(arg => `'${arg.replace(/'/g, `'\\''`)}'`).join(' ');
-  spawn('sh', ['-c', `sleep 2; herdr ${quoted}`], { detached: true, stdio: 'ignore' }).unref();
+  spawn('sh', ['-c', `sleep 2; '${herdrBin()}' ${quoted}`], { detached: true, stdio: 'ignore' }).unref();
   updateRun(id, current => current.herdr ? { ...current, herdr: { ...current.herdr, closed: true } } : current);
 }
 
