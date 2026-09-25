@@ -2,12 +2,12 @@ import { execFileSync, spawn as spawnProcess } from 'node:child_process';
 import { mkdirSync, openSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { agentStatus, inHerdr, splitPane, startAgent } from './herdr.ts';
+import { inHerdr, splitPane, startAgent } from './herdr.ts';
 import { self } from './identity.ts';
 import { route } from './route.ts';
 import { trustPaths, trustTargets } from './trust.ts';
 import { RESULT_HEADINGS } from './result.ts';
-import { home, listRuns, loadConfig, newId, packetPath, resultPath, runDir, writeRun } from './store.ts';
+import { home, listRuns, loadConfig, newId, packetPath, resultPath, runDir, updateRun, writeRun } from './store.ts';
 import type { Config, Effort, Host, Role, Route, RunMeta } from './types.ts';
 
 export const ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), '..');
@@ -75,14 +75,14 @@ function childEnv(extra: Record<string, string>): NodeJS.ProcessEnv {
   return env;
 }
 
-function launchHerdr(run: RunMeta, args: string[], extra: Record<string, string>): RunMeta {
-  const pane = splitPane(process.env.HERDR_PANE_ID!, run.cwd, extra);
-  try { startAgent(run.name, run.route.host, pane, args); }
-  catch (error) {
-    // The first prompt can keep the agent busy past herdr's readiness check; only a missing agent is fatal.
-    if (!agentStatus(pane)) throw error;
-  }
-  return { ...run, launcher: 'herdr', herdr: { pane, agent: run.name } };
+/** What a launcher learned; merged into the live metadata, which the child's hooks may already have updated. */
+type Launched = Pick<RunMeta, 'launcher'> & Partial<Pick<RunMeta, 'herdr' | 'bgId' | 'pid'>>;
+
+function launchHerdr(run: RunMeta, args: string[], extra: Record<string, string>): Launched {
+  const session = process.env.HERDR_SESSION;
+  const pane = splitPane(process.env.HERDR_PANE_ID!, run.cwd, extra, session);
+  startAgent(run.name, run.route.host, pane, args, session);
+  return { launcher: 'herdr', herdr: { pane, agent: run.name, ...(session ? { session } : {}) } };
 }
 
 /** Background sessions are looked up by the name we gave them; `claude --bg` output is for humans. */
@@ -98,21 +98,21 @@ export function bgSession(name: string): { id: string; status?: string } | undef
   return typeof id === 'string' ? { id, ...(typeof status === 'string' ? { status } : {}) } : undefined;
 }
 
-function launchClaudeBg(run: RunMeta, args: string[], extra: Record<string, string>): RunMeta {
+function launchClaudeBg(run: RunMeta, args: string[], extra: Record<string, string>): Launched {
   const out = execFileSync('claude', ['--bg', ...args], { cwd: run.cwd, env: childEnv(extra), encoding: 'utf8', timeout: 60_000 });
   const bgId = bgSession(run.name)?.id ?? out.trim().split(/\s+/).at(-1);
   if (!bgId) throw new Error(`claude --bg printed no session id: ${out.trim().slice(0, 200)}`);
-  return { ...run, launcher: 'bg', bgId };
+  return { launcher: 'bg', bgId };
 }
 
-function launchCodexExec(run: RunMeta, args: string[], extra: Record<string, string>): RunMeta {
+function launchCodexExec(run: RunMeta, args: string[], extra: Record<string, string>): Launched {
   const log = openSync(join(runDir(run.id), 'exec.log'), 'a');
   const child = spawnProcess('codex', ['exec', '--json', '-C', run.cwd, ...args], {
     cwd: run.cwd, env: childEnv(extra), detached: true, stdio: ['ignore', log, log],
   });
   child.unref();
   if (!child.pid) throw new Error('codex exec did not start');
-  return { ...run, launcher: 'exec', pid: child.pid };
+  return { launcher: 'exec', pid: child.pid };
 }
 
 export async function spawn(options: SpawnOptions): Promise<RunMeta> {
@@ -127,7 +127,7 @@ export async function spawn(options: SpawnOptions): Promise<RunMeta> {
     ...(options.model ? { model: options.model } : {}), ...(options.effort ? { effort: options.effort } : {}),
   }, config);
   const id = newId(options.role.slice(0, 1));
-  let run: RunMeta = {
+  const run: RunMeta = {
     id, name: options.name ?? `${options.role}-${id.slice(-4)}`, role: options.role, route: chosen,
     cwd: options.cwd, keep: options.keep, parent, launcher: inHerdr() ? 'herdr' : chosen.host === 'claude' ? 'bg' : 'exec',
     createdAt: new Date().toISOString(), state: 'running',
@@ -140,14 +140,15 @@ export async function spawn(options: SpawnOptions): Promise<RunMeta> {
   writeRun(run);
   const extra: Record<string, string> = { CREW_RUN: id, ...(process.env.CREW_HOME ? { CREW_HOME: home() } : {}) };
   if (run.launcher !== 'exec') trustPaths(trustTargets(options.cwd, config.trust.roots));
+  let launched: Launched;
   try {
-    run = run.launcher === 'herdr' ? launchHerdr(run, args, extra)
+    launched = run.launcher === 'herdr' ? launchHerdr(run, args, extra)
       : run.launcher === 'bg' ? launchClaudeBg(run, args, extra)
       : launchCodexExec(run, args, extra);
   } catch (error) {
-    writeRun({ ...run, state: 'failed' });
+    updateRun(id, current => ({ ...current, state: 'failed' }));
     throw error;
   }
-  writeRun(run);
-  return run;
+  // A fast child can settle (and its hooks record ids) before launch returns: merge, never overwrite.
+  return updateRun(id, current => ({ ...current, ...launched })) ?? { ...run, ...launched };
 }

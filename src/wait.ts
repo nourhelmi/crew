@@ -33,7 +33,7 @@ function sweep(mailbox: string, checkBg: boolean): void {
       const hasResult = Boolean(readResult(resultPath(run.id)));
       if (hasResult) settle(run.id);
       if (run.state === 'running') {
-        const herdrStatus = run.herdr && !run.herdr.closed ? agentStatus(run.herdr.agent) : undefined;
+        const herdrStatus = run.herdr && !run.herdr.closed ? agentStatus(run.herdr.agent, run.herdr.session) : undefined;
         const bg: Bg | 'unchecked' = run.launcher === 'bg' && checkBg ? bgSession(run.name) : 'unchecked';
         // An approval, question or folder-trust dialog needs a human or the parent.
         if (run.launcher === 'herdr') waiting(run.id, herdrStatus === 'blocked');
@@ -47,9 +47,9 @@ function sweep(mailbox: string, checkBg: boolean): void {
     const fresh = readRun(run.id);
     // Tidy finished, non-kept herdr panes once the agent has gone quiet; failures stay open for inspection.
     if (fresh?.state === 'done' && !fresh.keep && fresh.herdr && !fresh.herdr.closed) {
-      const status = agentStatus(fresh.herdr.agent);
+      const status = agentStatus(fresh.herdr.agent, fresh.herdr.session);
       if (status === 'working' || status === 'blocked') continue;
-      if (status) closePane(fresh.herdr.pane);
+      if (status) closePane(fresh.herdr.pane, fresh.herdr.session);
       writeRun({ ...fresh, herdr: { ...fresh.herdr, closed: true } });
     }
   }

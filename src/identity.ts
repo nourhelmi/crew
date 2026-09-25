@@ -5,8 +5,10 @@ import type { Address, Host } from './types.ts';
 
 type Env = Record<string, string | undefined>;
 
-const herdrTarget = (env: Env): { herdrAgent?: string } =>
-  env.HERDR_ENV === '1' && env.HERDR_PANE_ID ? { herdrAgent: env.HERDR_PANE_ID } : {};
+const herdrTarget = (env: Env): { herdrAgent?: string; herdrSession?: string } =>
+  env.HERDR_ENV === '1' && env.HERDR_PANE_ID
+    ? { herdrAgent: env.HERDR_PANE_ID, ...(env.HERDR_SESSION ? { herdrSession: env.HERDR_SESSION } : {}) }
+    : {};
 
 /** Mailbox id for a host session id, as seen by both the CLI and the hooks. */
 export const sessionMailbox = (host: Host, sessionId: string): string => `${host}-${sessionId}`;
@@ -37,7 +39,7 @@ export function self(env: Env = process.env): Address {
     return {
       mailbox: run.id, host: run.route.host, name: run.name,
       ...(run.threadId ? { threadId: run.threadId } : {}),
-      ...(run.herdr ? { herdrAgent: run.herdr.agent } : herdrTarget(env)),
+      ...(run.herdr ? { herdrAgent: run.herdr.agent, ...(run.herdr.session ? { herdrSession: run.herdr.session } : {}) } : herdrTarget(env)),
     };
   }
   if (env.CREW_MAILBOX) {

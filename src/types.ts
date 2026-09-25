@@ -27,6 +27,8 @@ export interface Address {
   threadId?: string;
   /** Herdr agent name or pane, when the session lives in a herdr pane. */
   herdrAgent?: string;
+  /** The herdr session that pane belongs to; every herdr call for it must target this session. */
+  herdrSession?: string;
 }
 
 export type RunState = 'running' | 'done' | 'blocked' | 'failed' | 'stalled' | 'stopped';
@@ -42,7 +44,7 @@ export interface RunMeta {
   launcher: Launcher;
   createdAt: string;
   state: RunState;
-  herdr?: { pane: string; agent: string; closed?: boolean };
+  herdr?: { pane: string; agent: string; session?: string; closed?: boolean };
   /** `claude --bg` short id. */
   bgId?: string;
   /** `codex exec` process id. */

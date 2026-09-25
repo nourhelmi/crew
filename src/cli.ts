@@ -65,7 +65,7 @@ function row(run: RunMeta): string {
 
 function tail(run: RunMeta): string {
   if (run.herdr && !run.herdr.closed) {
-    const read = herdr(['agent', 'read', run.herdr.agent, '--source', 'recent-unwrapped', '--lines', '40']);
+    const read = herdr(['agent', 'read', run.herdr.agent, '--source', 'recent-unwrapped', '--lines', '40'], 15_000, run.herdr.session);
     if (read.ok) return typeof read.json === 'string' ? read.json : JSON.stringify(read.json);
   }
   if (run.bgId) {
@@ -77,7 +77,7 @@ function tail(run: RunMeta): string {
 }
 
 function stopRun(run: RunMeta): void {
-  if (run.herdr && !run.herdr.closed) closePane(run.herdr.pane);
+  if (run.herdr && !run.herdr.closed) closePane(run.herdr.pane, run.herdr.session);
   if (run.bgId) { try { execFileSync('claude', ['stop', run.bgId], { stdio: 'ignore', timeout: 20_000 }); } catch { /* already gone */ } }
   if (run.pid) { try { process.kill(run.pid, 'SIGTERM'); } catch { /* already gone */ } }
   writeRun({ ...run, state: run.state === 'running' ? 'stopped' : run.state, ...(run.herdr ? { herdr: { ...run.herdr, closed: true } } : {}) });

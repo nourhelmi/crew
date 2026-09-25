@@ -10,7 +10,7 @@ export function runAddress(run: RunMeta): Address {
   return {
     mailbox: run.id, host: run.route.host, name: run.name,
     ...(run.threadId ? { threadId: run.threadId } : {}),
-    ...(run.herdr ? { herdrAgent: run.herdr.agent } : {}),
+    ...(run.herdr ? { herdrAgent: run.herdr.agent, ...(run.herdr.session ? { herdrSession: run.herdr.session } : {}) } : {}),
   };
 }
 
@@ -61,10 +61,10 @@ export function deliver(to: Address, mail: Mail): Delivery {
   }
   appendMail(to.mailbox, mail);
   if (to.herdrAgent) {
-    const status = agentStatus(to.herdrAgent);
+    const status = agentStatus(to.herdrAgent, to.herdrSession);
     if (status === 'idle' || status === 'done') {
       const pointer = `[crew] ${mail.kind === 'message' ? `new message from ${label(mail.from)}` : `${label(mail.from)} ${mail.kind}`}. Run: crew inbox`;
-      if (prompt(to.herdrAgent, pointer).ok) return 'herdr-prompt';
+      if (prompt(to.herdrAgent, pointer, to.herdrSession).ok) return 'herdr-prompt';
     }
   }
   return 'queued';
