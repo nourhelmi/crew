@@ -1,10 +1,13 @@
 {
   "name": "crew",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "description": "Advisor, CoS team and maker-role skills on native Codex and Claude Code, with the crew CLI for cross-host spawn, wake and messaging.",
-  "author": { "name": "Nour Helmi" },
+  "author": {
+    "name": "Nour Helmi"
+  },
   "license": "MIT",
   "skills": "./skills/",
+  "hooks": "./codex/hooks.json",
   "interface": {
     "displayName": "Crew",
     "shortDescription": "Advisor crews across Codex and Claude Code.",

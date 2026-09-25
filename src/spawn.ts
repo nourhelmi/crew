@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { agentStatus, inHerdr, splitPane, startAgent } from './herdr.ts';
 import { self } from './identity.ts';
 import { route } from './route.ts';
+import { trustPaths, trustTargets } from './trust.ts';
 import { RESULT_HEADINGS } from './result.ts';
 import { home, listRuns, loadConfig, newId, packetPath, resultPath, runDir, writeRun } from './store.ts';
 import type { Config, Effort, Host, Role, Route, RunMeta } from './types.ts';
@@ -89,9 +90,11 @@ export function bgSession(name: string): { id: string; status?: string } | undef
   try { listed = JSON.parse(execFileSync('claude', ['agents', '--json', '--all'], { encoding: 'utf8', timeout: 30_000 })); }
   catch { return undefined; }
   const rows = Array.isArray(listed) ? listed as Record<string, unknown>[] : [];
-  const row = rows.findLast(entry => entry.name === name || entry.title === name);
-  const id = row && (row.id ?? row.shortId ?? row.sessionId);
-  return typeof id === 'string' ? { id, ...(typeof row?.status === 'string' ? { status: row.status } : {}) } : undefined;
+  const row = rows.findLast(entry => entry.name === name);
+  const id = row?.id ?? row?.sessionId;
+  // Background rows report `state` (e.g. "done" when idle), interactive rows `status`.
+  const status = row?.state ?? row?.status;
+  return typeof id === 'string' ? { id, ...(typeof status === 'string' ? { status } : {}) } : undefined;
 }
 
 function launchClaudeBg(run: RunMeta, args: string[], extra: Record<string, string>): RunMeta {
@@ -135,6 +138,7 @@ export async function spawn(options: SpawnOptions): Promise<RunMeta> {
   writeFileSync(packetPath(id), options.task.endsWith('\n') ? options.task : `${options.task}\n`, { mode: 0o600 });
   writeRun(run);
   const extra: Record<string, string> = { CREW_RUN: id, ...(process.env.CREW_HOME ? { CREW_HOME: home() } : {}) };
+  if (run.launcher !== 'exec') trustPaths(trustTargets(options.cwd, config.trust.roots));
   try {
     run = run.launcher === 'herdr' ? launchHerdr(run, args, extra)
       : run.launcher === 'bg' ? launchClaudeBg(run, args, extra)

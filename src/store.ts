@@ -11,6 +11,7 @@ const DEFAULT_CONFIG: Config = {
   defaults: { advisor: 'claude-opus-5-5@high', builder: 'gpt-6-sol@high', checker: 'gpt-6-sol@xhigh' },
   router: { enabled: true, command: 'agent-router', timeoutMs: 90_000 },
   args: { claude: ['--permission-mode', 'auto'], codex: [] },
+  trust: { roots: [join(homedir(), 'Dev')] },
 };
 
 export function loadConfig(): Config {
@@ -19,6 +20,7 @@ export function loadConfig(): Config {
     defaults: { ...DEFAULT_CONFIG.defaults, ...user.defaults },
     router: { ...DEFAULT_CONFIG.router, ...user.router },
     args: { ...DEFAULT_CONFIG.args, ...user.args },
+    trust: { roots: (user.trust?.roots ?? DEFAULT_CONFIG.trust.roots).map(root => root.replace(/^~(?=\/|$)/, homedir())) },
   };
 }
 

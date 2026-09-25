@@ -77,4 +77,6 @@ export interface Config {
   router: { enabled: boolean; command: string; timeoutMs: number };
   /** Extra CLI args per host, appended to every spawn. Put bypass flags here if you want them. */
   args: Record<Host, string[]>;
+  /** Every checkout under these roots is trusted by both CLIs (no folder-trust dialogs). */
+  trust: { roots: string[] };
 }

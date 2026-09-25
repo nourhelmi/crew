@@ -116,7 +116,9 @@ export function waiting(id: string, blocked: boolean): Delivery | undefined {
   if (!blocked) return undefined;
   return deliver(run.parent, {
     id: newId('m'), at: new Date().toISOString(), kind: 'waiting', from: fromRun(run),
-    text: `is waiting on an approval or question dialog in herdr pane ${run.herdr?.pane ?? '?'} (look: crew read ${run.name})`,
+    text: run.bgId
+      ? `is waiting on an approval, question or folder-trust dialog in background session ${run.bgId} (answer it: claude attach ${run.bgId})`
+      : `is waiting on an approval, question or folder-trust dialog in herdr pane ${run.herdr?.pane ?? '?'} (look: crew read ${run.name})`,
   });
 }
 

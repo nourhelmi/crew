@@ -1,6 +1,6 @@
 {
   "name": "@nourhelmi/crew",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "description": "Cross-harness advisor crews on native Claude Code and Codex: spawn, wake, message.",
   "type": "module",
   "private": true,

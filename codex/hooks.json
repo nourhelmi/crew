@@ -1,0 +1,50 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'exec \"$HOME/.local/bin/crew\" hook session-start --host codex'",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'exec \"$HOME/.local/bin/crew\" hook stop --host codex'",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "advisor-maker",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'exec \"$HOME/.local/bin/crew\" hook subagent-start --host codex'",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "advisor-maker",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'exec \"$HOME/.local/bin/crew\" hook subagent-stop --host codex'",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

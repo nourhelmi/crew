@@ -239,3 +239,51 @@ describe('launch shape', () => {
     assert.match(text, /crew msg parent/);
   });
 });
+
+describe('trust', async () => {
+  const trust = await import('../src/trust.ts');
+  const files = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'crew-trust-'));
+    const claude = join(dir, 'claude.json');
+    const codex = join(dir, 'config.toml');
+    writeFileSync(claude, JSON.stringify({ projects: { '/a': { hasTrustDialogAccepted: true, allowedTools: [] } }, other: 1 }));
+    writeFileSync(codex, 'model = "gpt-6-sol"\n\n[projects."/a"]\ntrust_level = "trusted"\n\n[projects."/b"]\ntrust_level = "untrusted"\n\n[projects."/c"]\nfoo = 1\n\n[mcp_servers.x]\ncommand = "x"\n');
+    return { dir, claude, codex };
+  };
+
+  it('edits codex trust in place: flips, inserts and appends', () => {
+    const f = files();
+    const out = trust.codexTrust(readFileSync(f.codex, 'utf8'), ['/a', '/b', '/c', '/d']);
+    assert.ok(trust.codexTrusted(out, '/b') && trust.codexTrusted(out, '/c') && trust.codexTrusted(out, '/d'));
+    assert.doesNotMatch(out, /untrusted/);
+    assert.match(out, /\[projects\."\/c"\]\ntrust_level = "trusted"\nfoo = 1/);
+    assert.match(out, /\[mcp_servers\.x\]\ncommand = "x"/);
+    assert.equal(out.match(/\[projects\."\/a"\]/g)?.length, 1);
+    rmSync(f.dir, { recursive: true, force: true });
+  });
+
+  it('records trust in both files only where missing', () => {
+    const f = files();
+    const done = trust.trustPaths(['/a', '/b', '/e'], f);
+    assert.deepEqual(done.claude, ['/b', '/e']);
+    assert.deepEqual(done.codex, ['/b', '/e']);
+    const state = JSON.parse(readFileSync(f.claude, 'utf8'));
+    assert.equal(state.other, 1);
+    assert.equal(state.projects['/e'].hasTrustDialogAccepted, true);
+    assert.deepEqual(trust.trustPaths(['/a', '/b', '/e'], f), { claude: [], codex: [] });
+    rmSync(f.dir, { recursive: true, force: true });
+  });
+
+  it('finds checkouts and worktrees under a root, skipping dependency dirs', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'crew-root-')));
+    execFileSync('git', ['init', '-q', join(root, 'app')]);
+    execFileSync('git', ['-C', join(root, 'app'), 'commit', '-q', '--allow-empty', '-m', 'init']);
+    execFileSync('git', ['-C', join(root, 'app'), 'worktree', 'add', '-q', join(root, 'app-worktrees', 'feat')]);
+    execFileSync('git', ['init', '-q', join(root, 'app', 'node_modules', 'dep')]);
+    const found = trust.checkouts(root);
+    assert.deepEqual(found.sort(), [root, join(root, 'app'), join(root, 'app-worktrees', 'feat')].sort());
+    assert.deepEqual(trust.trustTargets(join(root, 'app-worktrees', 'feat'), [root]), [join(root, 'app-worktrees', 'feat')]);
+    assert.deepEqual(trust.trustTargets(join(root, 'app-worktrees', 'feat'), ['/nowhere'], { claude: '/none', codex: '/none' }), []);
+    rmSync(root, { recursive: true, force: true });
+  });
+});

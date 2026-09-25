@@ -1,7 +1,7 @@
 // Idempotent installer: `node scripts/install.ts` (or `npm run install-crew`).
 // Every file it edits is copied to ~/.crew/backups/<timestamp>/ first.
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readlinkSync, renameSync, symlinkSync, unlinkSync } from 'node:fs';
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -85,21 +85,17 @@ for (const dir of ['.claude/skills', '.codex/skills', '.agents/skills'].map(d =>
   if (existsSync(agent) && !isLink(agent)) { backup(agent); renameSync(agent, join(BACKUP, 'claude-advisor-maker.md')); say('moved ~/.claude/agents/advisor-maker.md aside (the plugin provides it)'); }
 }
 
-// 4. Codex: maker role and hooks. Codex hooks live in ~/.codex/hooks.json and need a one-time trust in the TUI.
+// 4. Codex: maker role. Crew's Codex hooks ship in the plugin (codex/hooks.json); strip old copies from hooks.json.
 link(join(REPO, 'codex', 'agents', 'advisor-maker.toml'), join(HOME, '.codex', 'agents', 'advisor-maker.toml'));
 {
   const path = join(HOME, '.codex', 'hooks.json');
-  const file = readJson<{ hooks?: Hooks }>(path) ?? {};
-  const before = JSON.stringify(file);
-  const hooks = prune(file.hooks ?? {}, hook => OLD_TRACE.test(hook.command ?? '') || (hook.command ?? '').includes('crew" hook') || (hook.command ?? '').includes('/crew hook'));
-  const crew = (event: string, timeout: number): HookCommand => ({ type: 'command', command: `"${CREW_BIN}" hook ${event} --host codex`, timeout });
-  const add = (event: string, group: HookGroup): void => { hooks[event] = [...(hooks[event] ?? []), group]; };
-  add('SessionStart', { hooks: [crew('session-start', 10)] });
-  add('Stop', { hooks: [crew('stop', 30)] });
-  add('SubagentStart', { matcher: 'advisor-maker', hooks: [crew('subagent-start', 10)] });
-  add('SubagentStop', { matcher: 'advisor-maker', hooks: [crew('subagent-stop', 10)] });
-  const next = { ...file, hooks };
-  if (JSON.stringify(next) !== before) { backup(path); writeJson(path, next); say('updated ~/.codex/hooks.json (crew hooks in, old trace hooks out)'); }
+  const file = readJson<{ hooks?: Hooks }>(path);
+  if (file?.hooks) {
+    const before = JSON.stringify(file);
+    const hooks = prune(file.hooks, hook => OLD_TRACE.test(hook.command ?? '') || /crew"? hook /.test(hook.command ?? ''));
+    const next = { ...file, hooks };
+    if (JSON.stringify(next) !== before) { backup(path); writeJson(path, next); say('updated ~/.codex/hooks.json (old trace and duplicate crew hooks out)'); }
+  }
 }
 
 // 5. Plugins from this repo as a local marketplace.
@@ -108,7 +104,8 @@ link(join(REPO, 'codex', 'agents', 'advisor-maker.toml'), join(HOME, '.codex', '
   if (!added.ok && !/already/i.test(added.out)) say(`claude marketplace add: ${added.out.trim()}`);
   run(CLAUDE, ['plugin', 'marketplace', 'update', 'crew']);
   const installed = run(CLAUDE, ['plugin', 'install', 'crew@crew']);
-  say(installed.ok ? 'Claude plugin crew@crew installed' : `claude plugin install: ${installed.out.trim()}`);
+  const updated = run(CLAUDE, ['plugin', 'update', 'crew@crew']);
+  say(installed.ok || updated.ok ? 'Claude plugin crew@crew installed/updated' : `claude plugin install: ${installed.out.trim()}`);
 
   const codexAdded = run('codex', ['plugin', 'marketplace', 'add', REPO]);
   if (!codexAdded.ok && !/already/i.test(codexAdded.out)) say(`codex marketplace add: ${codexAdded.out.trim()}`);
@@ -125,8 +122,54 @@ link(join(REPO, 'codex', 'agents', 'advisor-maker.toml'), join(HOME, '.codex', '
       defaults: { advisor: 'claude-opus-5-5@high', builder: 'gpt-6-sol@high', checker: 'gpt-6-sol@xhigh' },
       router: { enabled: true, command: 'agent-router', timeoutMs: 90000 },
       args: { claude: ['--permission-mode', 'auto'], codex: [] },
+      trust: { roots: ['~/Dev'] },
     });
     say(`wrote ${path}`);
+  }
+}
+
+// 7. No folder-trust dialogs under the trust roots: backfill now, wrap the shell
+//    launchers for brand-new checkouts, and re-sweep every 10 minutes for the desktop apps.
+{
+  const swept = run(CREW_BIN, ['trust', '--all']);
+  say(swept.ok ? swept.out.split('\n')[0]!.trim() : `crew trust --all: ${swept.out.trim()}`);
+
+  const rc = join(HOME, '.zshrc');
+  const block = [
+    '# >>> crew trust >>>',
+    '# Trust new checkouts under the crew trust roots before an agent CLI can ask.',
+    'claude() { command crew trust --quiet "$PWD" >/dev/null 2>&1; command claude "$@"; }',
+    'codex() { command crew trust --quiet "$PWD" >/dev/null 2>&1; command codex "$@"; }',
+    '# <<< crew trust <<<',
+  ].join('\n');
+  const text = existsSync(rc) ? readFileSync(rc, 'utf8') : '';
+  const marked = /# >>> crew trust >>>[\s\S]*?# <<< crew trust <<<\n?/;
+  const next = marked.test(text) ? text.replace(marked, `${block}\n`) : `${text.replace(/\n*$/, '\n')}\n${block}\n`;
+  if (next !== text) { backup(rc); writeFileSync(rc, next); say('added claude/codex trust wrappers to ~/.zshrc'); }
+
+  const label = 'dev.crew.trust';
+  const plist = join(HOME, 'Library', 'LaunchAgents', `${label}.plist`);
+  const body = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${label}</string>
+  <key>ProgramArguments</key>
+  <array><string>${CREW_BIN}</string><string>trust</string><string>--all</string><string>--quiet</string></array>
+  <key>StartInterval</key><integer>600</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardErrorPath</key><string>${join(HOME, '.crew', 'trust.log')}</string>
+</dict>
+</plist>
+`;
+  const current = existsSync(plist) ? readFileSync(plist, 'utf8') : '';
+  if (current !== body) {
+    mkdirSync(dirname(plist), { recursive: true });
+    writeFileSync(plist, body);
+    const domain = `gui/${process.getuid?.() ?? 501}`;
+    run('launchctl', ['bootout', `${domain}/${label}`]);
+    const loaded = run('launchctl', ['bootstrap', domain, plist]);
+    say(loaded.ok ? `launchd ${label}: re-trusts new checkouts every 10 minutes` : `launchctl bootstrap: ${loaded.out.trim()}`);
   }
 }
 
