@@ -1,7 +1,9 @@
 import { execFileSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { agentStatus, prompt } from './herdr.ts';
 import { readResult } from './result.ts';
-import { appendMail, findRun, hasWaiter, newId, readRun, resultPath, unread, writeRun } from './store.ts';
+import { appendMail, findRun, hasWaiter, newId, readRun, resultPath, runDir, unread, writeRun } from './store.ts';
 import type { Address, Delivery, Host, Mail, RunMeta } from './types.ts';
 
 export function runAddress(run: RunMeta): Address {
@@ -77,12 +79,18 @@ export function send(from: Address, to: Address, text: string): Delivery {
 
 const fromRun = (run: RunMeta): Mail['from'] => ({ mailbox: run.id, name: run.name, host: run.route.host });
 
+/** First caller wins: the child's Stop hook and the parent's sweep race to report the same event. */
+function claim(id: string, event: string): boolean {
+  try { writeFileSync(join(runDir(id), `.${event}`), '', { flag: 'wx' }); return true; }
+  catch { return false; }
+}
+
 /** Tell the parent about a (new) terminal result. Idempotent per result content. */
 export function settle(id: string): Delivery | undefined {
   const status = readResult(resultPath(id));
   if (!status) return undefined;
   const run = readRun(id);
-  if (!run || run.settled?.hash === status.hash) return undefined;
+  if (!run || run.settled?.hash === status.hash || !claim(id, `settled-${status.hash}`)) return undefined;
   const fresh: RunMeta = {
     ...run,
     state: run.keep ? run.state : status.verdict,
@@ -98,7 +106,7 @@ export function settle(id: string): Delivery | undefined {
 /** A child that disappeared without a terminal result. Reported once. */
 export function stall(id: string, why: string): Delivery | undefined {
   const run = readRun(id);
-  if (!run || run.state !== 'running') return undefined;
+  if (!run || run.state !== 'running' || !claim(id, 'stalled')) return undefined;
   const fresh: RunMeta = { ...run, state: 'stalled' };
   writeRun(fresh);
   return deliver(fresh.parent, {

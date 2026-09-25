@@ -14,7 +14,7 @@ const { parseResult } = await import('../src/result.ts');
 const store = await import('../src/store.ts');
 const mail = await import('../src/mail.ts');
 const { runHook } = await import('../src/hook.ts');
-const { argv, bootstrap, writableRoots } = await import('../src/spawn.ts');
+const { argv, bootstrap, writableRoots, ROOT: ROOT_DIR } = await import('../src/spawn.ts');
 type RunMeta = import('../src/types.ts').RunMeta;
 
 after(() => rmSync(HOME, { recursive: true, force: true }));
@@ -136,6 +136,14 @@ describe('settlement', () => {
     assert.match(notice?.text ?? '', /DONE: all green/);
     assert.equal(store.readRun('b-test')?.state, 'done');
   });
+  it('settles once when the hook and the sweep race on stale metadata', () => {
+    const stale = run();
+    writeResult('b-test', 'DONE');
+    assert.equal(mail.settle('b-test'), 'queued');
+    store.writeRun(stale); // the loser read meta before the winner wrote it
+    assert.equal(mail.settle('b-test'), undefined);
+    assert.equal(mail.takeUnread('claude-root').length, 1);
+  });
   it('keeps a kept teammate running and re-notifies on a new result', () => {
     run({ keep: true });
     writeResult('b-test', 'DONE: first');
@@ -205,7 +213,8 @@ describe('launch shape', () => {
   it('builds native argv per host with the bootstrap last', () => {
     const config = store.loadConfig();
     const claude = argv('claude', { host: 'claude', model: 'claude-opus-5-5', effort: 'high', strategy: 'jev' }, 'adv', config, 'GO');
-    assert.deepEqual(claude, ['--model', 'claude-opus-5-5', '--effort', 'high', '--name', 'adv', '--permission-mode', 'auto', 'GO']);
+    assert.deepEqual(claude.slice(0, 6), ['--model', 'claude-opus-5-5', '--effort', 'high', '--name', 'adv']);
+    assert.deepEqual(claude.slice(-5), ['--add-dir', ROOT_DIR, '--permission-mode', 'auto', 'GO']);
     const codex = argv('codex', { host: 'codex', model: 'gpt-6-sol', effort: 'xhigh', strategy: 'jev' }, 'b', config, 'GO');
     assert.deepEqual(codex, ['--model', 'gpt-6-sol', '-c', 'model_reasoning_effort="xhigh"', 'GO']);
   });
@@ -225,7 +234,7 @@ describe('launch shape', () => {
       assert.equal(codex[4], '-c');
       assert.match(codex[5] ?? '', /^sandbox_workspace_write\.writable_roots=\[".*"\]$/);
       const claude = argv('claude', { host: 'claude', model: 'opus', effort: 'high', strategy: 'jev' }, 'a', store.loadConfig(), 'GO', roots);
-      assert.equal(claude.filter(arg => arg === '--add-dir').length, 2);
+      assert.equal(claude.filter(arg => arg === '--add-dir').length, 3);
     } finally {
       rmSync(tree, { recursive: true, force: true });
       rmSync(repo, { recursive: true, force: true });

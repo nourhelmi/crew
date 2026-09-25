@@ -58,7 +58,8 @@ export function writableRoots(cwd: string): string[] {
 /** Interactive CLI args for a host; the bootstrap prompt rides along as the first message. */
 export function argv(host: Host, r: Route, name: string, config: Config, firstPrompt: string, roots: string[] = []): string[] {
   const base: Record<Host, string[]> = {
-    claude: ['--model', r.model, '--effort', r.effort, '--name', name, ...roots.flatMap(root => ['--add-dir', root])],
+    // Claude also needs read access to crew's skills, which live outside the child's cwd.
+    claude: ['--model', r.model, '--effort', r.effort, '--name', name, ...[...roots, ROOT].flatMap(root => ['--add-dir', root])],
     codex: ['--model', r.model, '-c', `model_reasoning_effort="${r.effort}"`,
       ...(roots.length ? ['-c', `sandbox_workspace_write.writable_roots=${JSON.stringify(roots)}`] : [])],
   };
