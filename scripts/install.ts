@@ -98,6 +98,35 @@ link(join(REPO, 'codex', 'agents', 'advisor-maker.toml'), join(HOME, '.codex', '
   }
 }
 
+// 4b. Codex sandbox: crew's state dir is writable, and `crew` itself is pre-approved to run
+//     unsandboxed (it launches agents and talks to herdr and the Codex daemon).
+{
+  const rules = join(HOME, '.codex', 'rules', 'crew.rules');
+  const ruleText = '# crew: advisor orchestration CLI. Managed by crew scripts/install.ts.\nprefix_rule(pattern=["crew"], decision="allow")\n';
+  if (!existsSync(rules) || readFileSync(rules, 'utf8') !== ruleText) {
+    mkdirSync(dirname(rules), { recursive: true });
+    writeFileSync(rules, ruleText);
+    say('wrote ~/.codex/rules/crew.rules (crew runs without approval prompts)');
+  }
+  const path = join(HOME, '.codex', 'config.toml');
+  const crewHome = join(HOME, '.crew');
+  if (existsSync(path)) {
+    const text = readFileSync(path, 'utf8');
+    const lines = text.split('\n');
+    let at = lines.findIndex(line => line.trim() === '[sandbox_workspace_write]');
+    if (at < 0) { lines.push('', '[sandbox_workspace_write]'); at = lines.length - 1; }
+    let end = at + 1;
+    while (end < lines.length && !lines[end]!.trimStart().startsWith('[')) end++;
+    const rootsAt = lines.slice(at + 1, end).findIndex(line => /^\s*writable_roots\s*=/.test(line));
+    if (rootsAt < 0) lines.splice(at + 1, 0, `writable_roots = [${JSON.stringify(crewHome)}]`);
+    else if (!lines[at + 1 + rootsAt]!.includes(JSON.stringify(crewHome))) {
+      lines[at + 1 + rootsAt] = lines[at + 1 + rootsAt]!.replace(/\[\s*/, `[${JSON.stringify(crewHome)}, `).replace(', ]', ']');
+    }
+    const next = lines.join('\n');
+    if (next !== text) { backup(path); writeFileSync(path, next); say('added ~/.crew to Codex sandbox writable_roots'); }
+  }
+}
+
 // 5. Plugins from this repo as a local marketplace.
 {
   const added = run(CLAUDE, ['plugin', 'marketplace', 'add', REPO]);

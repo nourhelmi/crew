@@ -195,4 +195,6 @@ async function main(argv: string[]): Promise<void> {
   }
 }
 
+// The launcher's delegation guard must not leak into agents crew starts.
+delete process.env.CREW_NO_DELEGATE;
 main(process.argv.slice(2)).catch(error => fail((error as Error).message));
