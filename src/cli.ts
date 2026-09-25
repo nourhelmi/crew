@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { resolve as resolvePath } from 'node:path';
+import { homedir } from 'node:os';
+import { delimiter, dirname, join, resolve as resolvePath } from 'node:path';
 import { parseArgs } from 'node:util';
 import { closePane, herdr } from './herdr.ts';
 import { isHookEvent, runHook } from './hook.ts';
@@ -197,4 +198,7 @@ async function main(argv: string[]): Promise<void> {
 
 // The launcher's delegation guard must not leak into agents crew starts.
 delete process.env.CREW_NO_DELEGATE;
+// Hooks fired by GUI apps get a thin PATH. crew's tools live in ~/.local/bin (claude, herdr)
+// and next to this node (codex, agent-router: npm globals that need node on PATH).
+process.env.PATH = [join(homedir(), '.local', 'bin'), dirname(process.execPath), process.env.PATH ?? ''].join(delimiter);
 main(process.argv.slice(2)).catch(error => fail((error as Error).message));
