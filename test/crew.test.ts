@@ -209,14 +209,15 @@ describe('launch shape', () => {
     const codex = argv('codex', { host: 'codex', model: 'gpt-6-sol', effort: 'xhigh', strategy: 'jev' }, 'b', config, 'GO');
     assert.deepEqual(codex, ['--model', 'gpt-6-sol', '-c', 'model_reasoning_effort="xhigh"', 'GO']);
   });
-  it('grants sandboxed children crew state and a worktree\'s shared git dir', () => {
+  it('grants sandboxed children crew state and the checkout\'s git dir', () => {
     const repo = mkdtempSync(join(tmpdir(), 'crew-repo-'));
     execFileSync('git', ['init', '-q', repo]);
     execFileSync('git', ['-C', repo, 'commit', '-q', '--allow-empty', '-m', 'init']);
     const tree = join(tmpdir(), `crew-tree-${process.pid}`);
     execFileSync('git', ['-C', repo, 'worktree', 'add', '-q', tree]);
     try {
-      assert.deepEqual(writableRoots(repo), [HOME]);
+      assert.deepEqual(writableRoots(repo).map(root => realpathSync(root)), [realpathSync(HOME), realpathSync(join(repo, '.git'))]);
+      assert.deepEqual(writableRoots(tmpdir()), [HOME]);
       const roots = writableRoots(tree);
       assert.equal(roots.length, 2);
       assert.equal(realpathSync(roots[1]!), realpathSync(join(repo, '.git')));

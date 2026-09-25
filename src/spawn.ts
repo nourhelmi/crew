@@ -1,6 +1,6 @@
 import { execFileSync, spawn as spawnProcess } from 'node:child_process';
 import { mkdirSync, openSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
+import { dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { agentStatus, inHerdr, splitPane, startAgent } from './herdr.ts';
 import { self } from './identity.ts';
@@ -41,15 +41,15 @@ export function bootstrap(run: Pick<RunMeta, 'id' | 'name' | 'role' | 'keep' | '
 }
 
 /**
- * Directories a sandboxed child must write outside its cwd: crew's own state (result, mail)
- * and, for a git worktree, the shared git dir its commits land in.
+ * Directories a sandboxed child must be able to write beyond its cwd: crew's own state
+ * (result, mail) and the checkout's git dir. Codex's workspace-write keeps `.git` read-only
+ * even inside the workspace, so without it every commit costs an escalation round trip.
  */
 export function writableRoots(cwd: string): string[] {
   const roots = [home()];
   try {
-    const common = resolvePath(cwd, execFileSync('git', ['-C', cwd, 'rev-parse', '--git-common-dir'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim());
-    const inside = relative(cwd, common);
-    if (inside.startsWith('..') || isAbsolute(inside)) roots.push(common);
+    const common = execFileSync('git', ['-C', cwd, 'rev-parse', '--git-common-dir'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    roots.push(resolvePath(cwd, common));
   } catch { /* not a git checkout */ }
   return roots;
 }
