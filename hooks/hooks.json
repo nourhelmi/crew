@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/crew\" hook session-start --host claude", "timeout": 10 }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/crew\" hook stop --host claude", "timeout": 30 }] }
+    ],
+    "SubagentStart": [
+      { "matcher": "(crew:)?advisor-maker", "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/crew\" hook subagent-start --host claude", "timeout": 10 }] }
+    ],
+    "SubagentStop": [
+      { "matcher": "(crew:)?advisor-maker", "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/crew\" hook subagent-stop --host claude", "timeout": 10 }] }
+    ]
+  }
+}

@@ -4,11 +4,16 @@
   "description": "Cross-harness advisor crews on native Claude Code and Codex: spawn, wake, message.",
   "type": "module",
   "private": true,
-  "engines": { "node": ">=24" },
-  "bin": { "crew": "./bin/crew" },
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "crew": "./bin/crew"
+  },
   "scripts": {
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "setup": "node --disable-warning=ExperimentalWarning scripts/install.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

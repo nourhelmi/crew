@@ -1,0 +1,14 @@
+{
+  "name": "crew",
+  "description": "Advisor crews on native Claude Code and Codex.",
+  "owner": {
+    "name": "Nour Helmi"
+  },
+  "plugins": [
+    {
+      "name": "crew",
+      "source": "./",
+      "description": "Advisor crews on native Claude Code and Codex."
+    }
+  ]
+}
