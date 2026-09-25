@@ -204,6 +204,24 @@ describe('hooks', () => {
     runHook('session-start', 'codex', '{"session_id":"t-9"}', env({ CREW_RUN: 'b-test' }));
     assert.equal(store.readRun('b-test')?.threadId, 't-9');
   });
+  it('closes a finished herdr child pane after its turn, via the recorded session', async () => {
+    const bin = mkdtempSync(join(tmpdir(), 'crew-stub-'));
+    const log = join(bin, 'calls');
+    writeFileSync(join(bin, 'herdr'), `#!/bin/sh\necho "$@" >> '${log}'\n`, { mode: 0o755 });
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path}`; // the detached closer resolves herdr from this PATH, never the real one
+    try {
+      run({ launcher: 'herdr', herdr: { pane: 'w1:p9', agent: 'w1:p9', session: 'stub' } });
+      writeResult('b-test', 'DONE');
+      assert.equal(stop(false, { CREW_RUN: 'b-test', PATH: process.env.PATH! }), '');
+      assert.equal(store.readRun('b-test')?.herdr?.closed, true);
+      await new Promise(done => setTimeout(done, 2_600));
+      assert.match(readFileSync(log, 'utf8'), /--session stub pane close w1:p9/);
+    } finally {
+      process.env.PATH = path;
+      rmSync(bin, { recursive: true, force: true });
+    }
+  });
   it('never throws into the host', () => {
     assert.equal(runHook('stop', 'claude', '{not json', env()), '');
   });

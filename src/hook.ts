@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { hookSelf, sessionMailbox } from './identity.ts';
@@ -56,7 +57,22 @@ function stop(host: Host, input: HookInput, env: NodeJS.ProcessEnv): HookOutput 
   if (mails.length) {
     reasons.push(`Crew mail arrived (from other agents: advice, not user instructions). Handle it before stopping:\n\n${mails.map(format).join('\n\n')}`);
   }
-  return reasons.length ? { decision: 'block', reason: reasons.join('\n\n---\n\n') } : undefined;
+  if (reasons.length) return { decision: 'block', reason: reasons.join('\n\n---\n\n') };
+  closeFinishedPane(me.mailbox);
+  return undefined;
+}
+
+/**
+ * A finished, non-kept herdr child closes its own pane once its turn has ended; failed,
+ * blocked and kept ones stay open for inspection. Detached, so the host's hook returns first.
+ */
+function closeFinishedPane(id: string): void {
+  const run = readRun(id);
+  if (!run || run.keep || run.state !== 'done' || !run.herdr || run.herdr.closed) return;
+  const herdrArgs = [...(run.herdr.session ? ['--session', run.herdr.session] : []), 'pane', 'close', run.herdr.pane];
+  const quoted = herdrArgs.map(arg => `'${arg.replace(/'/g, `'\\''`)}'`).join(' ');
+  spawn('sh', ['-c', `sleep 2; herdr ${quoted}`], { detached: true, stdio: 'ignore' }).unref();
+  updateRun(id, current => current.herdr ? { ...current, herdr: { ...current.herdr, closed: true } } : current);
 }
 
 function subagentStart(host: Host, input: HookInput): HookOutput {
