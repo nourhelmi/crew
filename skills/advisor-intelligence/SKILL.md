@@ -9,7 +9,9 @@ description: Apply the intelligence profiles when pinning a model for a crew run
 (by default the optional Jev router `agent-router`, fed from these profiles) for the best
 native candidate for the role and task, and falls back to the role default in
 `~/.config/crew/config.json` when no router is installed or it fails. `crew route --role R --task T`
-shows the decision without launching anything. Read a profile only when you are pinning a
+shows the decision without launching anything. If the user wants routing off for this
+session, run `crew router off` (children inherit it; `crew router reset` undoes it) and pin
+with `--model` where the role default is wrong. Read a profile only when you are pinning a
 model yourself or choosing one for a native subagent.
 
 Profiles are advisory judgment/cost guidance, not model availability or tool permissions. Read only the selected profile, and only when a model-routing decision is relevant.

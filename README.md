@@ -120,7 +120,12 @@ defaults. Model ids map to CLIs by provider:
 - `anthropic/…`, `claude-bridge/…`, `claude-*` and `opus`/`sonnet` run in **Claude Code**
 - `openai/…`, `openai-codex/…` and `gpt-*` run in **Codex**
 
-Efforts a CLI lacks are clamped (Codex `max` becomes `xhigh`). Intelligence profiles
+Efforts a CLI lacks are clamped (Codex `max` becomes `xhigh`).
+
+To turn routing off, use `crew router off` for the current session (every child it spawns
+inherits the setting), `crew router off --global` for the config, or `CREW_ROUTER=off` in the
+environment, which beats both. `crew router status` shows which one applies. With routing
+off, spawns use the role `defaults`, and `--model` still pins. Intelligence profiles
 (`skills/advisor-intelligence/profiles`) describe which model fits which role.
 
 ## Configuration: `~/.config/crew/config.json`

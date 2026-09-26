@@ -1,6 +1,6 @@
 {
   "name": "@nourhelmi/crew",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "An advisor-led engineering team on native Claude Code and Codex: spawn, wake and message across hosts.",
   "keywords": [
     "claude-code",

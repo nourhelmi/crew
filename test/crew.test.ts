@@ -329,3 +329,23 @@ describe('identity', async () => {
     assert.deepEqual(self({ CLAUDE_CODE_SESSION_ID: 's1', HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p2' }), { mailbox: 'claude-s1', host: 'claude', herdrAgent: 'w1:p2' });
   });
 });
+
+describe('router switch', async () => {
+  const { routerSetting, setSessionRouter, parseSwitch } = await import('../src/settings.ts');
+  const me = { mailbox: 'claude-switch', host: 'claude' as const };
+  it('resolves env over session over config', () => {
+    const config = store.loadConfig();
+    assert.deepEqual(routerSetting(config, me, {}), { on: true, source: 'config' });
+    setSessionRouter(me, false);
+    assert.deepEqual(routerSetting(config, me, {}), { on: false, source: 'session' });
+    assert.deepEqual(routerSetting(config, me, { CREW_ROUTER: 'on' }), { on: true, source: 'env' });
+    setSessionRouter(me, undefined);
+    assert.deepEqual(routerSetting(config, me, {}), { on: true, source: 'config' });
+    assert.deepEqual(routerSetting({ ...config, router: { ...config.router, enabled: false } }, me, {}), { on: false, source: 'config' });
+  });
+  it('parses switch words and ignores junk', () => {
+    assert.equal(parseSwitch('OFF'), false);
+    assert.equal(parseSwitch('1'), true);
+    assert.equal(parseSwitch('maybe'), undefined);
+  });
+});

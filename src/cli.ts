@@ -10,8 +10,9 @@ import { format, resolve, send, takeUnread } from './mail.ts';
 import { isEffort, route } from './route.ts';
 import { spawn } from './spawn.ts';
 import { checkouts, trustPaths, trustTargets } from './trust.ts';
-import { findRun, listRuns, loadConfig, resultPath, runDir, writeRun } from './store.ts';
-import { HOSTS, ROLES, type Host, type Role, type RunMeta } from './types.ts';
+import { routerSetting, setSessionRouter } from './settings.ts';
+import { configPath, findRun, listRuns, loadConfig, readJson, resultPath, runDir, writeJson, writeRun } from './store.ts';
+import { HOSTS, ROLES, type Address, type Host, type Role, type RunMeta } from './types.ts';
 import { liveChildren, wait } from './wait.ts';
 
 const HELP = `crew: advisor crews on native Claude Code and Codex
@@ -28,10 +29,15 @@ const HELP = `crew: advisor crews on native Claude Code and Codex
   crew read <run>              Result, or the tail of its terminal/log.
   crew stop <run>              Stop a run and close its pane.
   crew route --role R --task T Show where a task would go, without launching.
+  crew router [status|on|off|reset] [--global]
+                               Jev routing for this session (children inherit), or globally.
+                               CREW_ROUTER=off|on in the environment wins over both.
   crew trust [PATH... | --all] [--quiet]
                                Trust checkouts under the trust roots (default ~/Dev) in both CLIs.
   crew whoami                  This session's crew address.
   crew hook <event> --host claude|codex   (used by plugin hooks; reads stdin)`;
+
+const safeSelf = (): Address | undefined => { try { return self(); } catch { return undefined; } };
 
 function fail(message: string): never {
   process.stderr.write(`${message}\n`);
@@ -92,7 +98,7 @@ async function main(argv: string[]): Promise<void> {
       role: { type: 'string' }, task: { type: 'string' }, packet: { type: 'string' }, model: { type: 'string' },
       effort: { type: 'string' }, name: { type: 'string' }, cwd: { type: 'string' }, keep: { type: 'boolean' },
       'dry-run': { type: 'boolean' }, timeout: { type: 'string' }, file: { type: 'string' }, all: { type: 'boolean' },
-      host: { type: 'string' }, json: { type: 'boolean' }, quiet: { type: 'boolean' },
+      host: { type: 'string' }, json: { type: 'boolean' }, quiet: { type: 'boolean' }, global: { type: 'boolean' },
     },
   });
 
@@ -162,9 +168,30 @@ async function main(argv: string[]): Promise<void> {
     }
     case 'route': {
       const role = oneOf<Role>(values.role, ROLES, 'role');
-      const task = values.task ?? stdin();
-      const chosen = await route({ role, task, ...(values.model ? { model: values.model } : {}) }, loadConfig());
+      const task = values.task ?? (positionals.length ? positionals.join(' ') : stdin());
+      const config = loadConfig();
+      const router = routerSetting(config, safeSelf());
+      const chosen = await route({ role, task, ...(values.model ? { model: values.model } : {}) }, { ...config, router: { ...config.router, enabled: router.on } });
+      if (!router.on && chosen.strategy === 'default') chosen.reason = `router off (${router.source})`;
       console.log(JSON.stringify(chosen, null, 2));
+      return;
+    }
+    case 'router': {
+      const config = loadConfig();
+      const action = positionals[0] ?? 'status';
+      if (action === 'on' || action === 'off' || action === 'reset') {
+        const on = action === 'reset' ? undefined : action === 'on';
+        if (values.global) {
+          if (on === undefined) fail('crew: --global takes on or off');
+          const stored = readJson<Record<string, unknown> & { router?: Record<string, unknown> }>(configPath()) ?? {};
+          writeJson(configPath(), { ...stored, router: { ...stored.router, enabled: on } });
+        } else {
+          setSessionRouter(self(), on);
+        }
+      } else if (action !== 'status') fail('crew: crew router [status|on|off|reset] [--global]');
+      const setting = routerSetting(loadConfig(), safeSelf());
+      console.log(`router: ${setting.on ? 'on' : 'off'} (${setting.source === 'env' ? 'CREW_ROUTER' : setting.source === 'session' ? 'this session' : 'config'})`);
+      console.log(`  command: ${config.router.command} · defaults when off or failing: ${ROLES.map(role => `${role}=${config.defaults[role]}`).join(', ')}`);
       return;
     }
     case 'trust': {

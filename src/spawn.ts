@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { inHerdr, splitPane, startAgent } from './herdr.ts';
 import { self } from './identity.ts';
 import { route } from './route.ts';
+import { routerSetting } from './settings.ts';
 import { trustPaths, trustTargets } from './trust.ts';
 import { RESULT_HEADINGS } from './result.ts';
 import { home, listRuns, loadConfig, newId, packetPath, resultPath, runDir, updateRun, writeRun } from './store.ts';
@@ -123,10 +124,12 @@ export async function spawn(options: SpawnOptions): Promise<RunMeta> {
   }
   const parent = self();
   const config = loadConfig();
+  const router = routerSetting(config, parent);
   const chosen = await route({
     role: options.role, task: options.task,
     ...(options.model ? { model: options.model } : {}), ...(options.effort ? { effort: options.effort } : {}),
-  }, config);
+  }, { ...config, router: { ...config.router, enabled: router.on } });
+  if (!router.on && chosen.strategy === 'default') chosen.reason = `router off (${router.source})`;
   const id = newId(options.role.slice(0, 1));
   const run: RunMeta = {
     id, name: options.name ?? `${options.role}-${id.slice(-4)}`, role: options.role, route: chosen,
@@ -139,7 +142,11 @@ export async function spawn(options: SpawnOptions): Promise<RunMeta> {
   mkdirSync(runDir(id), { recursive: true });
   writeFileSync(packetPath(id), options.task.endsWith('\n') ? options.task : `${options.task}\n`, { mode: 0o600 });
   writeRun(run);
-  const extra: Record<string, string> = { CREW_RUN: id, ...(process.env.CREW_HOME ? { CREW_HOME: home() } : {}) };
+  const extra: Record<string, string> = {
+    CREW_RUN: id, ...(process.env.CREW_HOME ? { CREW_HOME: home() } : {}),
+    // A session-level router choice follows the whole tree of children.
+    ...(router.source !== 'config' ? { CREW_ROUTER: router.on ? 'on' : 'off' } : {}),
+  };
   if (run.launcher !== 'exec') trustPaths(trustTargets(options.cwd, config.trust.roots));
   let launched: Launched;
   try {

@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import type { Config, Mail, RunMeta } from './types.ts';
 
 export const home = (): string => process.env.CREW_HOME || join(homedir(), '.crew');
-const configPath = (): string => process.env.CREW_CONFIG || join(homedir(), '.config', 'crew', 'config.json');
+export const configPath = (): string => process.env.CREW_CONFIG || join(homedir(), '.config', 'crew', 'config.json');
 
 const DEFAULT_CONFIG: Config = {
   defaults: { advisor: 'claude-opus-5-5@high', builder: 'gpt-6-sol@high', checker: 'gpt-6-sol@xhigh' },
