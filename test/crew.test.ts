@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, beforeEach, describe, it } from 'node:test';
@@ -368,5 +368,62 @@ describe('checkpoint transfer', () => {
     assert.equal(out.state.sessionId, claude.CLAUDE_SESSION_ID);
     assert.equal(out.state.mode, 'cos');
     rmSync(home, { recursive: true, force: true });
+  });
+});
+
+describe('herdr layout', async () => {
+  const { splitAway } = await import('../src/herdr.ts');
+  const { childPanes } = await import('../src/spawn.ts');
+  const stub = () => {
+    const bin = mkdtempSync(join(tmpdir(), 'crew-herdr-'));
+    const log = join(bin, 'calls');
+    writeFileSync(join(bin, 'herdr'), `#!/bin/sh
+echo "$@" >> '${log}'
+case "$*" in
+  *"pane layout"*) echo '{"result":{"layout":{"panes":[{"pane_id":"w1:p2","rect":{"width":80,"height":50}},{"pane_id":"w1:p3","rect":{"width":160,"height":20}}]}}}' ;;
+  *"pane split w1:pdead"*) echo "pane not found" >&2; exit 1 ;;
+  *"pane split"*) echo '{"result":{"pane":{"pane_id":"w1:pnew"}}}' ;;
+esac
+`, { mode: 0o755 });
+    const path = process.env.PATH, herdrBin = process.env.HERDR_BIN_PATH;
+    delete process.env.HERDR_BIN_PATH;
+    process.env.PATH = `${bin}:${path}`;
+    return {
+      calls: () => readFileSync(log, 'utf8').trim().split('\n').filter(line => line.startsWith('pane split')),
+      done: () => { process.env.PATH = path; if (herdrBin) process.env.HERDR_BIN_PATH = herdrBin; rmSync(bin, { recursive: true, force: true }); },
+    };
+  };
+
+  it('splits the caller to the right when it has no child panes', () => {
+    const s = stub();
+    try {
+      assert.equal(splitAway('w1:p1', [], '/tmp', { CREW_RUN: 'x' }), 'w1:pnew');
+      assert.deepEqual(s.calls(), ['pane split w1:p1 --direction right --cwd /tmp --no-focus --env CREW_RUN=x']);
+    } finally { s.done(); }
+  });
+  it('subdivides the newest live child, skipping dead ones, shaped by geometry', () => {
+    const s = stub();
+    try {
+      assert.equal(splitAway('w1:p1', ['w1:pdead', 'w1:p2'], '/tmp', {}), 'w1:pnew');
+      assert.deepEqual(s.calls(), ['pane split w1:pdead --direction right --cwd /tmp --no-focus', 'pane split w1:p2 --direction down --cwd /tmp --no-focus']);
+    } finally { s.done(); }
+  });
+  it('orders a caller\'s open child panes newest first', () => {
+    const at = (m: number) => new Date(Date.UTC(2026, 8, 26, 12, m)).toISOString();
+    run({ id: 'b-1', createdAt: at(1), launcher: 'herdr', herdr: { pane: 'w1:p2', agent: 'w1:p2' } });
+    run({ id: 'b-2', createdAt: at(2), launcher: 'herdr', herdr: { pane: 'w1:p3', agent: 'w1:p3', closed: true } });
+    run({ id: 'b-3', createdAt: at(3), launcher: 'herdr', herdr: { pane: 'w1:p4', agent: 'w1:p4' } });
+    run({ id: 'b-4', createdAt: at(4), launcher: 'herdr', herdr: { pane: 'w1:p5', agent: 'w1:p5', session: 'other' } });
+    run({ id: 'b-5', createdAt: at(5), launcher: 'herdr', herdr: { pane: 'w1:p6', agent: 'w1:p6' }, parent: { mailbox: 'someone-else', host: 'claude' } });
+    assert.deepEqual(childPanes('claude-root', undefined), ['w1:p4', 'w1:p2']);
+    assert.deepEqual(childPanes('claude-root', undefined, 'b-3'), ['w1:p2']);
+  });
+  it('breaks a stale lock instead of waiting forever', () => {
+    const dir = join(HOME, 'locks', 'split-test');
+    mkdirSync(dir, { recursive: true });
+    const old = new Date(Date.now() - 120_000);
+    utimesSync(dir, old, old);
+    assert.equal(store.withLock('split-test', () => 42, 1_000), 42);
+    assert.equal(existsSync(dir), false);
   });
 });

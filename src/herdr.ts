@@ -44,15 +44,31 @@ function direction(pane: string, session?: string): 'right' | 'down' {
   return rect?.width && rect.height && rect.width < rect.height * WIDE_RATIO ? 'down' : 'right';
 }
 
-/** Split the caller's pane without stealing focus; the child inherits `env`. */
-export function splitPane(caller: string, cwd: string, env: Record<string, string>, session?: string): string {
-  const args = ['pane', 'split', caller, '--direction', direction(caller, session), '--cwd', cwd, '--no-focus'];
+function split(target: string, dir: 'right' | 'down', cwd: string, env: Record<string, string>, session?: string): Result & { pane?: string } {
+  const args = ['pane', 'split', target, '--direction', dir, '--cwd', cwd, '--no-focus'];
   for (const [key, value] of Object.entries(env)) args.push('--env', `${key}=${value}`);
-  const split = herdr(args, 15_000, session);
-  if (!split.ok) throw new Error(`herdr pane split failed: ${split.error}`);
-  const pane = find(split.json, 'pane_id');
-  if (!pane) throw new Error('herdr pane split returned no pane_id');
-  return pane;
+  const result = herdr(args, 15_000, session);
+  if (!result.ok) return result;
+  const pane = find(result.json, 'pane_id');
+  return pane ? { ...result, pane } : { ok: false, error: 'herdr pane split returned no pane_id' };
+}
+
+/**
+ * Stack-first layout (as pi-detach did): split away from the caller by subdividing its newest
+ * surviving child, shaped by that pane's geometry. The caller is split only when no child pane
+ * is left, and then to the right, so the root keeps its column. The child inherits `env`.
+ */
+export function splitAway(caller: string, stack: readonly string[], cwd: string, env: Record<string, string>, session?: string): string {
+  let lastError = 'pane split refused';
+  for (const target of stack) {
+    if (target === caller) continue;
+    const attempt = split(target, direction(target, session), cwd, env, session);
+    if (attempt.ok && attempt.pane) return attempt.pane;
+    if (!attempt.ok) lastError = attempt.error;
+  }
+  const attempt = split(caller, stack.length ? direction(caller, session) : 'right', cwd, env, session);
+  if (attempt.ok && attempt.pane) return attempt.pane;
+  throw new Error(`herdr pane split failed: ${attempt.ok ? lastError : attempt.error}`);
 }
 
 /**

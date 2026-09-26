@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { Config, Mail, RunMeta } from './types.ts';
@@ -101,6 +101,29 @@ export function unread(mailbox: string): { mails: Mail[]; commit: () => void } {
   const mails = chunk.subarray(0, complete).toString('utf8').split('\n').filter(Boolean)
     .flatMap(line => { try { return [JSON.parse(line) as Mail]; } catch { return []; } });
   return { mails, commit: () => { if (complete) writeFileSync(cursorFile, String(start + complete)); } };
+}
+
+// ---- locks -----------------------------------------------------------------
+
+const pause = (ms: number): void => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+
+/** Cross-process mutex (mkdir is atomic). A holder older than `staleMs` is presumed dead. */
+export function withLock<T>(name: string, work: () => T, waitMs = 30_000, staleMs = 60_000): T {
+  const dir = join(home(), 'locks', name.replace(/[^a-zA-Z0-9._-]/g, '_'));
+  mkdirSync(dirname(dir), { recursive: true });
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    try { mkdirSync(dir); break; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const age = Date.now() - (mtime(dir) ?? Date.now());
+      if (age > staleMs) { try { rmdirSync(dir); } catch { /* raced with another breaker */ } continue; }
+      if (Date.now() > deadline) throw new Error(`crew: timed out waiting for lock ${name}`);
+      pause(100);
+    }
+  }
+  try { return work(); }
+  finally { try { rmdirSync(dir); } catch { /* already broken as stale */ } }
 }
 
 // ---- waiter presence -------------------------------------------------------

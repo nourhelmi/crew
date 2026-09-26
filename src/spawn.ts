@@ -2,13 +2,13 @@ import { execFileSync, spawn as spawnProcess } from 'node:child_process';
 import { mkdirSync, openSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { inHerdr, labelPane, splitPane, startAgent } from './herdr.ts';
+import { inHerdr, labelPane, splitAway, startAgent } from './herdr.ts';
 import { self } from './identity.ts';
 import { route } from './route.ts';
 import { routerSetting } from './settings.ts';
 import { trustPaths, trustTargets } from './trust.ts';
 import { RESULT_HEADINGS } from './result.ts';
-import { home, listRuns, loadConfig, newId, packetPath, resultPath, runDir, updateRun, writeRun } from './store.ts';
+import { home, listRuns, loadConfig, newId, packetPath, resultPath, runDir, updateRun, withLock, writeRun } from './store.ts';
 import type { Config, Effort, Host, Role, Route, RunMeta } from './types.ts';
 
 export const ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), '..');
@@ -79,9 +79,22 @@ function childEnv(extra: Record<string, string>): NodeJS.ProcessEnv {
 /** What a launcher learned; merged into the live metadata, which the child's hooks may already have updated. */
 type Launched = Pick<RunMeta, 'launcher'> & Partial<Pick<RunMeta, 'herdr' | 'bgId' | 'pid'>>;
 
+/** The caller's open child panes in its herdr session, newest first. */
+export function childPanes(parentMailbox: string, session: string | undefined, except?: string): string[] {
+  return listRuns()
+    .filter(r => r.id !== except && r.parent.mailbox === parentMailbox && r.herdr && !r.herdr.closed && r.herdr.session === session)
+    .reverse().map(r => r.herdr!.pane);
+}
+
 function launchHerdr(run: RunMeta, args: string[], extra: Record<string, string>): Launched {
   const session = process.env.HERDR_SESSION;
-  const pane = splitPane(process.env.HERDR_PANE_ID!, run.cwd, extra, session);
+  const caller = process.env.HERDR_PANE_ID!;
+  // Serialize fan-out: the next spawn must see this pane before choosing where to split.
+  const pane = withLock(`split-${session ?? 'default'}-${caller}`, () => {
+    const created = splitAway(caller, childPanes(run.parent.mailbox, session, run.id), run.cwd, extra, session);
+    updateRun(run.id, current => ({ ...current, herdr: { pane: created, agent: created, ...(session ? { session } : {}) } }));
+    return created;
+  });
   startAgent(run.name, run.route.host, pane, args, session);
   // Label after start: herdr shows the agent kind until a pane has a label of its own.
   labelPane(pane, `${run.role} · ${run.name}`, session);

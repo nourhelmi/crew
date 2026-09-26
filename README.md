@@ -154,8 +154,10 @@ config (approvals and sandbox). crew never adds bypass flags; put them in `args`
   git dir and `~/.crew` as writable roots, and builders commit without an escalation. Claude
   children get the same dirs, plus crew's skills, via `--add-dir`.
 - **herdr**: every call is pinned to the session the run was spawned in, and agents are addressed
-  by pane. Panes are named `role · name` for children and `advisor · <workstream>` for the root
-  (`crew label <text>` to rename your own). Finished children close their own pane; failed or blocked ones stay open.
+  by pane. New children split *away* from their parent: the first takes the right side, and
+  each later one subdivides the newest child pane, so the parent keeps its column. Parallel
+  spawns are serialized so they don't all split the same pane. Panes are named `role · name`
+  for children and `advisor · <workstream>` for the root (`crew label <text>` to rename your own). Finished children close their own pane; failed or blocked ones stay open.
 - **Dialogs**: a child stuck on an approval, question or trust dialog wakes its parent with a
   `waiting` notice that says where to answer it.
 
