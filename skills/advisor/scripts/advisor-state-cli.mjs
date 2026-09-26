@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { advisorStateRoot, nativeAdvisorIdentity, readAdvisorSession, claimAdvisorCheckpoint, readAdvisorCheckpoint, updateAdvisorCheckpoint } from './advisor-state.mjs';
+import { advisorIdentity, advisorStateRoot, nativeAdvisorIdentity, readAdvisorSession, claimAdvisorCheckpoint, readAdvisorCheckpoint, updateAdvisorCheckpoint } from './advisor-state.mjs';
 
 export async function checkpointCommand(argv, env = process.env, input) {
   const [op, ...args] = argv;
-  if (!['init', 'read', 'write'].includes(op) || args.length % 2) throw new Error('Usage: advisor-state-cli.mjs init|read|write [--cwd path] [--workstream slug] [--mode advisor|cos] [--expected-digest hash]. write reads the checkpoint from stdin.');
+  if (!['init', 'read', 'write'].includes(op) || args.length % 2) throw new Error('Usage: advisor-state-cli.mjs init|read|write [--cwd path] [--workstream slug] [--mode advisor|cos] [--expected-digest hash] [--transfer-from host:session]. write reads the checkpoint from stdin.');
   const options = {};
   for (let i = 0; i < args.length; i += 2) {
     const key = args[i];
-    if (!['--cwd', '--workstream', '--mode', '--expected-digest'].includes(key) || Object.hasOwn(options, key)) throw new Error('Unknown or duplicate checkpoint option; owner/session/display overrides are not accepted.');
+    if (!['--cwd', '--workstream', '--mode', '--expected-digest', '--transfer-from'].includes(key) || Object.hasOwn(options, key)) throw new Error('Unknown or duplicate checkpoint option; owner/session/display overrides are not accepted.');
     options[key] = args[i + 1];
   }
   const identity = nativeAdvisorIdentity(env);
@@ -18,7 +18,14 @@ export async function checkpointCommand(argv, env = process.env, input) {
   const workstream = options['--workstream'] ?? prior?.workstream;
   const request = { root, identity, workstream };
   let value;
-  if (op === 'init') value = claimAdvisorCheckpoint({ ...request, workerHarness: 'native', mode: options['--mode'] });
+  // A transfer must name the exact current owner (the refusal prints it) and needs the user's go-ahead.
+  let transferFrom;
+  if (options['--transfer-from'] !== undefined) {
+    if (op !== 'init') throw new Error('--transfer-from only applies to init');
+    const at = options['--transfer-from'].indexOf(':');
+    transferFrom = advisorIdentity(options['--transfer-from'].slice(0, at), options['--transfer-from'].slice(at + 1));
+  }
+  if (op === 'init') value = claimAdvisorCheckpoint({ ...request, workerHarness: 'native', mode: options['--mode'], ...(transferFrom ? { transferFrom } : {}) });
   else if (op === 'read') value = readAdvisorCheckpoint(request);
   else {
     let content = input;

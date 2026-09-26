@@ -349,3 +349,24 @@ describe('router switch', async () => {
     assert.equal(parseSwitch('maybe'), undefined);
   });
 });
+
+describe('checkpoint transfer', () => {
+  it('resumes a workstream owned by a gone session only when its exact owner is named', () => {
+    const home = mkdtempSync(join(tmpdir(), 'crew-ckpt-'));
+    const repo = join(home, 'repo');
+    execFileSync('git', ['init', '-q', repo]);
+    const cli = join(ROOT_DIR, 'skills', 'advisor', 'scripts', 'advisor-state-cli.mjs');
+    const run = (env: Record<string, string>, ...args: string[]) =>
+      execFileSync(process.execPath, [cli, 'init', '--cwd', repo, '--workstream', 'tests', '--mode', 'cos', ...args],
+        { env: { PATH: process.env.PATH!, HOME: home, ...env }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const oldOwner = '01a0d84d-4683-7499-9114-bebe61cef2db';
+    run({ CODEX_THREAD_ID: oldOwner });
+    const claude = { CLAUDE_SESSION_ID: '2d9a5f6b-b7a6-4088-b092-9629196cd4ea' };
+    assert.throws(() => run(claude), /owned by codex session 01a0d84d/);
+    assert.throws(() => run(claude, '--transfer-from', 'codex:00000000-0000-0000-0000-000000000000'), /owner-confirmed transfer/);
+    const out = JSON.parse(run(claude, '--transfer-from', `codex:${oldOwner}`));
+    assert.equal(out.state.sessionId, claude.CLAUDE_SESSION_ID);
+    assert.equal(out.state.mode, 'cos');
+    rmSync(home, { recursive: true, force: true });
+  });
+});

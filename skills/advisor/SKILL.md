@@ -121,8 +121,10 @@ Code invokes:
 CLAUDE_SESSION_ID='${CLAUDE_SESSION_ID}' node <this-skill-directory>/scripts/advisor-state-cli.mjs init --workstream <accepted-slug>
 ```
 
-If the substitution stays literal, identity is missing, a foreign owner exists or storage
-is denied, report it; do not invent a fallback. Use `read` for content and digest and
+If the substitution stays literal, identity is missing or storage is denied, report it; do
+not invent a fallback. A foreign owner (for example a Pi or earlier session that is gone) is
+refused with its exact `host session`; resume it only after the user confirms, by adding
+`--transfer-from <host>:<session>` to `init`, which archives the old checkpoint as a handoff. Use `read` for content and digest and
 `write --expected-digest <digest>` with replacement Markdown on stdin. Update it on
 material changes (decisions, ownership, handles, done-when, evidence locators, next
 action), not every read or status tick. A scoped child reports to the parent and never
