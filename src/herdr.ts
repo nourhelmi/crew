@@ -81,6 +81,11 @@ export function agentStatus(target: string, session?: string): AgentStatus | und
   return status === 'idle' || status === 'working' || status === 'blocked' || status === 'done' ? status : 'unknown';
 }
 
+/** Border label herdr shows for a pane, e.g. `builder · ts-ui-api`. Best effort. */
+export function labelPane(pane: string, label: string, session?: string): boolean {
+  return herdr(['pane', 'rename', pane, label], 5_000, session).ok;
+}
+
 export function closePane(pane: string, session?: string): void {
   herdr(['pane', 'close', pane], 5_000, session);
 }

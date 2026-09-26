@@ -2,7 +2,7 @@ import { execFileSync, spawn as spawnProcess } from 'node:child_process';
 import { mkdirSync, openSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { inHerdr, splitPane, startAgent } from './herdr.ts';
+import { inHerdr, labelPane, splitPane, startAgent } from './herdr.ts';
 import { self } from './identity.ts';
 import { route } from './route.ts';
 import { routerSetting } from './settings.ts';
@@ -83,6 +83,8 @@ function launchHerdr(run: RunMeta, args: string[], extra: Record<string, string>
   const session = process.env.HERDR_SESSION;
   const pane = splitPane(process.env.HERDR_PANE_ID!, run.cwd, extra, session);
   startAgent(run.name, run.route.host, pane, args, session);
+  // Label after start: herdr shows the agent kind until a pane has a label of its own.
+  labelPane(pane, `${run.role} · ${run.name}`, session);
   // Address the agent by pane: the name only binds once herdr sees it ready, which a busy agent may never be.
   return { launcher: 'herdr', herdr: { pane, agent: pane, ...(session ? { session } : {}) } };
 }

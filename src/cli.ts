@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join, resolve as resolvePath } from 'node:path';
 import { parseArgs } from 'node:util';
-import { closePane, herdr } from './herdr.ts';
+import { closePane, herdr, inHerdr, labelPane } from './herdr.ts';
 import { isHookEvent, runHook } from './hook.ts';
 import { self } from './identity.ts';
 import { format, resolve, send, takeUnread } from './mail.ts';
@@ -34,6 +34,7 @@ const HELP = `crew: advisor crews on native Claude Code and Codex
                                CREW_ROUTER=off|on in the environment wins over both.
   crew trust [PATH... | --all] [--quiet]
                                Trust checkouts under the trust roots (default ~/Dev) in both CLIs.
+  crew label <text>            Name this herdr pane (children are named role · name automatically).
   crew whoami                  This session's crew address.
   crew hook <event> --host claude|codex   (used by plugin hooks; reads stdin)`;
 
@@ -204,6 +205,14 @@ async function main(argv: string[]): Promise<void> {
         console.log(`checked ${new Set(targets).size} path(s) under ${config.trust.roots.join(', ')}; newly trusted: claude ${done.claude.length}, codex ${done.codex.length}`);
         for (const path of new Set([...done.claude, ...done.codex])) console.log(`  ${path}`);
       }
+      return;
+    }
+    case 'label': {
+      const text = positionals.join(' ').trim();
+      if (!text) fail('crew: crew label <text>');
+      if (!inHerdr()) { console.log('not in a herdr pane; nothing to label'); return; }
+      const ok = labelPane(process.env.HERDR_PANE_ID!, text, process.env.HERDR_SESSION);
+      console.log(ok ? `labelled ${process.env.HERDR_PANE_ID}: ${text}` : 'herdr refused the label');
       return;
     }
     case 'whoami': {
