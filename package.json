@@ -1,7 +1,27 @@
 {
   "name": "@nourhelmi/crew",
-  "version": "0.3.0",
-  "description": "Cross-harness advisor crews on native Claude Code and Codex: spawn, wake, message.",
+  "version": "0.4.0",
+  "description": "An advisor-led engineering team on native Claude Code and Codex: spawn, wake and message across hosts.",
+  "keywords": [
+    "claude-code",
+    "codex",
+    "agents",
+    "multi-agent",
+    "orchestration",
+    "herdr",
+    "plugin",
+    "skills"
+  ],
+  "homepage": "https://github.com/nourhelmi/crew#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nourhelmi/crew.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nourhelmi/crew/issues"
+  },
+  "author": "Nour Helmi",
+  "license": "MIT",
   "type": "module",
   "private": true,
   "engines": {
@@ -18,6 +38,5 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "typescript": "^7.0.2"
-  },
-  "license": "MIT"
+  }
 }

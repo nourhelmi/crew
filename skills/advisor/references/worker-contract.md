@@ -2,11 +2,11 @@
 
 Read your packet and the relevant repository instructions. Use only the tools and
 permissions this host exposes; the parent grants a task, not a bypass of authentication,
-approval, sandboxing or delegation limits. This contract needs neither Pi nor Herdr.
+approval, sandboxing or delegation limits. This contract needs no runtime or multiplexer.
 
 - Own the outcome within the assigned surface. Trace the real flow before editing; reuse
-  existing code and standard libraries. Apply Ponytail when active and honor an explicit
-  off choice; simplicity never removes safety, accessibility, error handling or required
+  existing code and standard libraries. Apply Ponytail (minimalism) when active and honor an
+  explicit off choice; simplicity never removes safety, accessibility, error handling or required
   checks.
 - Plans are recommendations except explicitly accepted decisions. Resolve ordinary
   environment and tooling obstacles yourself and report them as deviations; do not
@@ -42,8 +42,8 @@ browser-facing impact (including backend auth, API wiring, saved state, navigati
 loading/error behavior) exercise the journey in a real browser against the integrated
 changed application with a relevant persona/state and meaningful failure or edge path.
 Reuse current project browser tests when they actually cover that flow; mocked requests,
-rendered shells and screenshots alone do not prove interactions. Follow `agent-browser`
-unless the user specifies another tool; safe targets, credentials, accessibility and
+rendered shells and screenshots alone do not prove interactions. Use the browser
+automation the user or project prefers (for example `agent-browser`); safe targets, credentials, accessibility and
 action permissions remain binding. Internal changes without plausible browser impact use
 the relevant unit, API or integration checks with a brief rationale. Uncertain impact
 means inspect the callers. If the flow cannot be safely exercised, report the missing

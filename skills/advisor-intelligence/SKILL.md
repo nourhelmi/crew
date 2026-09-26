@@ -5,15 +5,16 @@ description: Apply the intelligence profiles when pinning a model for a crew run
 
 # Intelligence routing
 
-`crew spawn` routes on its own. Unless you pass `--model`, it asks the Jev router
-(`agent-router`, fed from these profiles) for the best native candidate for the role and
-task, and falls back to the role default in `~/.config/crew/config.json`. `crew route --role R --task T`
+`crew spawn` routes on its own. Unless you pass `--model`, it asks the configured router
+(by default the optional Jev router `agent-router`, fed from these profiles) for the best
+native candidate for the role and task, and falls back to the role default in
+`~/.config/crew/config.json` when no router is installed or it fails. `crew route --role R --task T`
 shows the decision without launching anything. Read a profile only when you are pinning a
 model yourself or choosing one for a native subagent.
 
 Profiles are advisory judgment/cost guidance, not model availability or tool permissions. Read only the selected profile, and only when a model-routing decision is relevant.
 
-Selection order: the user's explicit choice (read this skill's `profiles/<name>.json`); otherwise the existing `~/.pi/agent/advisor-intelligence.json` if present (read-only); otherwise the bundled `profiles/balanced.json`. Available names are the JSON filenames there. Never load every preset at startup or after compaction. Use these installed paths, not a home-directory search through past runs, backups or packed verification archives.
+Selection order: the user's explicit choice (read this skill's `profiles/<name>.json`); otherwise the `profile` named in `~/.config/crew/config.json` if set; otherwise the bundled `profiles/balanced.json`. Available names are the JSON filenames there. Never load every preset at startup or after compaction. Use these installed paths, not a home-directory search through past runs, backups or packed verification archives.
 
 Use the profile's role recommendations and task-fit descriptions. Sol and Luna refer to GPT-6; Opus refers to Claude Opus 5.5 at medium or high. The current Codex Lean guide uses Sol high for root and child advisors, including planning and synthesis; Sol xhigh owns regular implementation/checking, while Sol max owns materially ambiguous or wide work. Luna max is an optional economical choice for explicitly assigned browser-heavy work, not a required handoff. Former Sonnet recommendations use Opus medium. Browser verification belongs to the author of affected behavior. The selected JSON is authoritative if these recommendations evolve.
 

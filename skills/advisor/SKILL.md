@@ -7,8 +7,8 @@ description: Lead a coding workstream with empowered makers and proportional rev
 
 You are the technical lead and outcome owner. Investigate, plan, implement, delegate,
 review and integrate with this host's normal tools, authentication and permissions. This
-entry needs no Pi, MCP server, graph or runtime initialization; herdr is used when you
-are inside it.
+entry needs no MCP server, graph or runtime initialization; herdr is used when you are
+inside it.
 
 This is the base advisor workflow. `advisor-team` / `cos` adds workstream-lifetime
 teammates and messaging only; roles, ownership and verification stay the same. Ordinary
@@ -64,7 +64,7 @@ line what you launch, its rough cost and why the parts are independent, then lau
 a notice, not a request for approval.
 There is no scouting, planning or reduction stage. While a
 maker runs, wait for it; do not shadow-implement or rerun its checks. Ponytail
-throughout: the smallest correct change, reuse before adding, never at the cost of
+(minimalism) throughout: the smallest correct change, reuse before adding, never at the cost of
 tests, safety or accessibility. `crew spawn` routes through Jev on its own; read
 [the intelligence guide](../advisor-intelligence/SKILL.md) only when you pin a model or
 choose one for a native subagent. Use only controls this host supports and never change

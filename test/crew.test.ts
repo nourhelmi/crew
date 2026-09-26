@@ -217,8 +217,9 @@ describe('hooks', () => {
       writeResult('b-test', 'DONE');
       assert.equal(stop(false, { CREW_RUN: 'b-test', PATH: process.env.PATH! }), '');
       assert.equal(store.readRun('b-test')?.herdr?.closed, true);
-      await new Promise(done => setTimeout(done, 2_600));
-      assert.match(readFileSync(log, 'utf8'), /--session stub pane close w1:p9/);
+      const calls = async (): Promise<string> => { try { return readFileSync(log, 'utf8'); } catch { return ''; } };
+      for (let waited = 0; waited < 8_000 && !(await calls()); waited += 200) await new Promise(done => setTimeout(done, 200));
+      assert.match(await calls(), /--session stub pane close w1:p9/);
     } finally {
       process.env.PATH = path;
       if (herdrBinPath) process.env.HERDR_BIN_PATH = herdrBinPath;

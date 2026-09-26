@@ -1,7 +1,7 @@
 {
   "name": "crew",
-  "version": "0.3.0",
-  "description": "Advisor, CoS team and maker-role skills on native Codex and Claude Code, with the crew CLI for cross-host spawn, wake and messaging.",
+  "version": "0.4.0",
+  "description": "Advisor, CoS team and maker-role skills on native Claude Code and Codex, with the crew CLI for cross-host spawn, wake and messaging.",
   "author": {
     "name": "Nour Helmi"
   },
@@ -13,5 +13,7 @@
     "shortDescription": "Advisor crews across Codex and Claude Code.",
     "developerName": "Nour Helmi",
     "category": "Developer Tools"
-  }
+  },
+  "homepage": "https://github.com/nourhelmi/crew",
+  "repository": "https://github.com/nourhelmi/crew"
 }

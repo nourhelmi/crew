@@ -1,5 +1,6 @@
-// Idempotent installer: `node scripts/install.ts` (or `npm run install-crew`).
+// Idempotent installer: `node scripts/install.ts [--trust-root <dir>]...` (or `npm run setup -- …`).
 // Every file it edits is copied to ~/.crew/backups/<timestamp>/ first.
+// --trust-root opts into "never show a folder-trust dialog for checkouts under <dir>" (e.g. ~/Dev).
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -143,23 +144,27 @@ link(join(REPO, 'codex', 'agents', 'advisor-maker.toml'), join(HOME, '.codex', '
   say(codexInstalled.ok ? 'Codex plugin crew@crew installed' : `codex plugin add: ${codexInstalled.out.trim()}`);
 }
 
-// 6. Config with the defaults spelled out, never overwritten.
+// 6. Config with the defaults spelled out; existing settings are kept, --trust-root adds roots.
+const CONFIG = join(HOME, '.config', 'crew', 'config.json');
+const requestedRoots = process.argv.flatMap((arg, i, all) => (arg === '--trust-root' && all[i + 1] ? [all[i + 1]!] : []))
+  .map(root => resolve(root.replace(/^~(?=\/|$)/, HOME)).replace(HOME, '~'));
 {
-  const path = join(HOME, '.config', 'crew', 'config.json');
-  if (!existsSync(path)) {
-    writeJson(path, {
-      defaults: { advisor: 'claude-opus-5-5@high', builder: 'gpt-6-sol@high', checker: 'gpt-6-sol@xhigh' },
-      router: { enabled: true, command: 'agent-router', timeoutMs: 90000 },
-      args: { claude: ['--permission-mode', 'auto'], codex: [] },
-      trust: { roots: ['~/Dev'] },
-    });
-    say(`wrote ${path}`);
-  }
+  type Stored = { trust?: { roots?: string[] } } & Record<string, unknown>;
+  const current = readJson<Stored>(CONFIG) ?? {
+    defaults: { advisor: 'claude-opus-5-5@high', builder: 'gpt-6-sol@high', checker: 'gpt-6-sol@xhigh' },
+    router: { enabled: true, command: 'agent-router', timeoutMs: 90000 },
+    args: { claude: ['--permission-mode', 'auto'], codex: [] },
+  };
+  const roots = [...new Set([...(current.trust?.roots ?? []), ...requestedRoots])];
+  const next: Stored = { ...current, trust: { roots } };
+  if (!existsSync(CONFIG) || JSON.stringify(next) !== JSON.stringify(current)) { writeJson(CONFIG, next); say(`wrote ${CONFIG}`); }
 }
+const trustRoots = readJson<{ trust?: { roots?: string[] } }>(CONFIG)?.trust?.roots ?? [];
 
-// 7. No folder-trust dialogs under the trust roots: backfill now, wrap the shell
+// 7. Opt-in: no folder-trust dialogs under the trust roots. Backfill now, wrap the shell
 //    launchers for brand-new checkouts, and re-sweep every 10 minutes for the desktop apps.
-{
+if (!trustRoots.length) say('no trust roots configured; folder-trust dialogs are left alone (see --trust-root)');
+else {
   const swept = run(CREW_BIN, ['trust', '--all']);
   say(swept.ok ? swept.out.split('\n')[0]!.trim() : `crew trust --all: ${swept.out.trim()}`);
 
