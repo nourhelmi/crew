@@ -25,5 +25,8 @@
 - Claude Code: `/advisor` is a built-in command, so the skill is `/crew:advisor`.
 - OpenCode has no hooks: `opencode/crew.js` maps its plugin events onto `crew hook …` and wakes its
   own idle sessions from their crew inbox (the TUI serves no port, so nothing outside can push).
+- Work goes through `crew spawn`. Inside a crew run, the Claude PreToolUse hook refuses native
+  subagents other than read-only Explore/Plan: they inherit the run's model and skip routing,
+  capacity and grading.
 - Routing evidence is only a reviewed verdict: a `--checks` checker's `As found:` line or the
   parent's `crew grade`. A run's own DONE never is. Tests point `router.command` at a fake router.

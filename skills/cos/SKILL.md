@@ -6,7 +6,7 @@ description: Opt into a workstream-lifetime team of empowered outcome owners (ke
 
 Follow [the advisor](../advisor/SKILL.md) with canonical checkpoint mode `cos`:
 pass `--mode cos` to its shared checkpoint initialization. Retain the chosen
-execution lane, existing ownership and selected intelligence profile. Do not
+execution lane and existing ownership. Do not
 initialize a managed runtime merely to persist state. This is an additive team overlay,
 not another role, review policy or workflow.
 

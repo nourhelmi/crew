@@ -15,26 +15,26 @@ teammates and messaging only; roles, ownership and verification stay the same. O
 advisor mode already permits direct work and child advisors. Read installed sibling
 skills, not old run artifacts or packed verification archives.
 
-## Execution lane: native first, crew across hosts
+## Execution lane: crew for work, native only for lookups
 
 A child inherits its parent's lane and remaining limits rather than choosing again. Never
 mix schedulers for the same worker or switch lanes to bypass an error. Host permissions,
 repository instructions and explicit user constraints stay binding; a skill grants no
 missing tool. If delegation is unavailable, work directly where permitted.
 
-- **Same-host maker** (the model you want runs on your own CLI, and the work is one
-  bounded packet): the host's native subagent. Claude Code: the `Agent` tool with the
-  `advisor-maker` agent type and a model override; run it in the background when you have
-  other work, and you are woken when it returns. Codex: `spawn_agent` with the
-  `advisor-maker` role, then its native wait. A hook injects the maker's result path and
-  refuses to let it stop before a terminal result exists.
-- **Everything else** (the routed model runs on the other CLI, a child advisor, a
-  teammate, or work you want visible and resumable in herdr):
-  `crew spawn --role <advisor|builder|checker> --packet <file> [--name <n>] [--keep]`.
-  crew routes through Jev unless you pin `--model <model[@effort]>`, derives the CLI from
-  the model (Anthropic models run in Claude Code, OpenAI models in Codex), launches it in a
-  herdr pane beside you (outside herdr: `claude --bg` or `codex exec`), and prints the run
-  name, result path and how to wait.
+- **Every maker, checker and child advisor**:
+  `crew spawn --role <advisor|builder|checker> --packet <file> [--name <n>] [--keep]`, plus
+  `--checks <run>` for a checker of a crew run's work. crew routes it through the user's
+  roster unless you pin `--model <host>/<model>[@effort]`, derives the CLI from the model,
+  launches it in a herdr pane beside you (outside herdr: `claude --bg`, `codex exec` or
+  `opencode run`), and prints the run name, result path and how to wait. That is what puts
+  the work on the cheapest adequate model, counts it against capacity and lets its result be
+  graded. A native subagent inherits your own model and skips all of it: in one sweep, Opus
+  child advisors ran 60 native makers, every one on Opus.
+- **Native subagents only for read-only lookups** (search, reading, summarizing code or
+  docs): Claude Code's `Explore` or `Plan` agent, or Codex's `spawn_agent`, on the cheapest
+  model the host lets you choose. Inside a crew run, Claude Code refuses any other native
+  subagent.
 - **Waiting.** Never sleep or poll in a loop. Claude Code: run `crew wait` as a
   **background** Bash command (the tool's background option; never `&` or a pipe, which
   lose its output and the wake). It exits when any child settles, stalls or sits on an
@@ -78,10 +78,9 @@ a notice, not a request for approval.
 There is no scouting, planning or reduction stage. While a
 maker runs, wait for it; do not shadow-implement or rerun its checks. Ponytail
 (minimalism) throughout: the smallest correct change, reuse before adding, never at the cost of
-tests, safety or accessibility. `crew spawn` routes through Jev on its own; read
-[the intelligence guide](../advisor-intelligence/SKILL.md) only when you pin a model or
-choose one for a native subagent. Use only controls this host supports and never change
-your root model or global settings.
+tests, safety or accessibility. `crew spawn` routes through the roster on its own; read
+[the intelligence guide](../advisor-intelligence/SKILL.md) only when you pin a model. Use
+only controls this host supports and never change your root model or global settings.
 
 ## Delegate
 

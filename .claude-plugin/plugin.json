@@ -1,6 +1,6 @@
 {
   "name": "crew",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Advisor, CoS team and maker-role skills on native Claude Code and Codex, with the crew CLI for cross-host spawn, wake and messaging.",
   "author": {
     "name": "Nour Helmi"

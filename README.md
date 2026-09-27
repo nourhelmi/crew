@@ -289,6 +289,11 @@ part of normal review.
   pane. Children split *away* from their parent: the first takes the right side, and each later
   one subdivides the newest child pane, so the parent keeps its column. Parallel spawns are
   serialized. Panes are named `role · name`, and finished children close their own pane.
+- **Native subagents:** a Claude Code subagent can only run opus, sonnet, haiku or fable, and it
+  inherits its parent's model by default. So inside a crew run, crew's hook refuses native
+  subagents except the read-only `Explore` and `Plan`, and work goes through `crew spawn`, where it
+  is routed, capped and graded. In the first sweep, Opus child advisors had run 60 native makers,
+  every one on Opus. Codex children, whose native agents inherit Sol, are asked but not forced.
 - **Dialogs:** a child stuck on an approval, question or trust dialog wakes its parent with a
   `waiting` notice that says where to answer it.
 - **Prompt cache:** a parent idle past its cache's life pays to rewrite its whole context on wake

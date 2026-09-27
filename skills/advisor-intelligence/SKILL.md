@@ -1,26 +1,24 @@
 ---
 name: advisor-intelligence
-description: Apply the intelligence profiles when pinning a model for a crew run or a native subagent, without changing global settings.
+description: Choose or pin a model for a crew run from the user's roster, without changing global settings.
 ---
 
-# Intelligence routing
+# Model choice
 
-`crew spawn` routes on its own. Unless you pass `--model`, it asks the configured router
-(by default the optional Jev router `agent-router`, fed from these profiles) for the best
-native candidate for the role and task, and falls back to the role default in
-`~/.config/crew/config.json` when no router is installed or it fails. `crew route --role R --task T`
-shows the decision without launching anything. If the user wants routing off for this
-session, run `crew router off` (children inherit it; `crew router reset` undoes it; users can
-also invoke the `router` skill themselves) and pin
-with `--model` where the role default is wrong. Read a profile only when you are pinning a
-model yourself or choosing one for a native subagent.
+`crew spawn` picks the model itself. The router judges the task against the user's roster
+(`crew roster` shows each model's roles, cost, what it is for and not for, and its track
+record); without a router, a spawn takes the roster's first model for the role, then the role
+defaults in `~/.config/crew/config.json`. `crew route --role R --task T` shows the pick
+without launching anything.
 
-Profiles are advisory judgment/cost guidance, not model availability or tool permissions. Read only the selected profile, and only when a model-routing decision is relevant.
+Leave the choice to the router unless the user named a model or the pick is plainly wrong for
+the task. Then pin one from the roster, `crew spawn --model <host>/<model>@<effort>`, and say
+why in one line. A model outside the roster needs the user's say-so. If the user wants
+routing off for this session, run `crew router off` (children inherit it; `crew router reset`
+undoes it). With no roster yet, the user can build one with the `roster` skill.
 
-Selection order: the user's explicit choice (read this skill's `profiles/<name>.json`); otherwise the `profile` named in `~/.config/crew/config.json` if set; otherwise the bundled `profiles/balanced.json`. Available names are the JSON filenames there. Never load every preset at startup or after compaction. Use these installed paths, not a home-directory search through past runs, backups or packed verification archives.
+For a native read-only lookup, pick the cheapest model the host offers that can do it
+(Claude Code: `model: "haiku"` or `"sonnet"`), never your own model by default.
 
-Use the profile's role recommendations and task-fit descriptions. Sol and Luna refer to GPT-6; Opus refers to Claude Opus 5.5 at medium or high. The current Codex Lean guide uses Sol high for root and child advisors, including planning and synthesis; Sol xhigh owns regular implementation/checking, while Sol max owns materially ambiguous or wide work. Luna max is an optional economical choice for explicitly assigned browser-heavy work, not a required handoff. Former Sonnet recommendations use Opus medium. Browser verification belongs to the author of affected behavior. The selected JSON is authoritative if these recommendations evolve.
-
-Model ids map to CLIs by provider: `anthropic/` and `claude-bridge/` models (or bare `claude-*`, `opus`) run in Claude Code, and `openai/` and `openai-codex/` models (or bare `gpt-*`) run in Codex. `crew spawn --model` accepts either form plus `@effort`, and clamps efforts a CLI lacks (Codex has no `max`; it becomes `xhigh`). Other providers have no native CLI and are refused. For a native subagent, use only the model and effort controls the host actually exposes and disclose material differences.
-
-A skill cannot change your running root model. Do not modify global settings, authentication or permissions to follow this guide. A user may choose a profile for this workstream without globally switching anything. Native delegation may expose fewer model/effort controls; preserve the role's reasoning and evidence requirements even when model choice is unavailable.
+A skill cannot change your running root model. Do not modify global settings, authentication
+or permissions to follow this guide.

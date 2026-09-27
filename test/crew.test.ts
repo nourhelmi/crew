@@ -260,6 +260,17 @@ describe('hooks', () => {
     assert.equal(store.readRun('b-test')?.state, 'running');
     assert.equal(store.readRun('b-test')?.settled, undefined);
   });
+  it('reports a one-shot run waiting on its own background work as paused, not stalled', () => {
+    run();
+    writeResult('b-test', 'IN PROGRESS: waiting on the Explore agent');
+    assert.match(stop(false, { CREW_RUN: 'b-test' }), /"decision":"block".*Keep going/);
+    assert.equal(stop(true, { CREW_RUN: 'b-test' }), '');
+    assert.deepEqual(mail.takeUnread('claude-root').map(m => m.kind), ['waiting']);
+    assert.equal(store.readRun('b-test')?.state, 'running');
+    writeResult('b-test', 'DONE: listed');
+    assert.equal(stop(false, { CREW_RUN: 'b-test' }), '');
+    assert.equal(store.readRun('b-test')?.state, 'done');
+  });
   it('never throws into the host', () => {
     assert.equal(runHook('stop', 'claude', '{not json', env()), '');
   });
@@ -820,5 +831,22 @@ describe('opencode host', async () => {
       await tick();
       assert.equal(prompts.length, 2, 'new mail wakes again');
     } finally { for (const k of ['CREW_BIN', 'CREW_RUN', 'CREW_OPENCODE_POLL_MS']) delete process.env[k]; }
+  });
+});
+
+describe('native subagents in crew runs', () => {
+  const agent = (type?: string) => JSON.stringify({ tool_name: 'Agent', tool_input: type ? { subagent_type: type } : {} });
+  it('refuses native work subagents inside a crew run and points at crew spawn', () => {
+    run({ role: 'advisor' });
+    for (const type of ['general-purpose', 'crew:advisor-maker', undefined]) {
+      const out = JSON.parse(runHook('pre-agent', 'claude', agent(type), { CREW_HOME: HOME, CREW_RUN: 'b-test' }));
+      assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+      assert.match(out.hookSpecificOutput.permissionDecisionReason, /crew spawn --role/);
+    }
+  });
+  it('allows read-only lookups, and leaves sessions outside crew runs alone', () => {
+    run({ role: 'advisor' });
+    assert.equal(runHook('pre-agent', 'claude', agent('Explore'), { CREW_HOME: HOME, CREW_RUN: 'b-test' }), '');
+    assert.equal(runHook('pre-agent', 'claude', agent('general-purpose'), { CREW_HOME: HOME }), '');
   });
 });

@@ -1,19 +1,73 @@
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/crew\" hook session-start --host claude", "timeout": 10 }] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/crew\" hook session-start --host claude",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c '[ -n \"$CREW_RUN\" ] || exit 0; exec \"$0\" hook pre-agent --host claude' \"${CLAUDE_PLUGIN_ROOT}/bin/crew\"",
+            "timeout": 5
+          }
+        ]
+      }
     ],
     "PostToolUse": [
-      { "hooks": [{ "type": "command", "command": "sh -c '[ -n \"$CREW_RUN\" ] || exit 0; exec \"$0\" hook post-tool --host claude' \"${CLAUDE_PLUGIN_ROOT}/bin/crew\"", "timeout": 5 }] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c '[ -n \"$CREW_RUN\" ] || exit 0; exec \"$0\" hook post-tool --host claude' \"${CLAUDE_PLUGIN_ROOT}/bin/crew\"",
+            "timeout": 5
+          }
+        ]
+      }
     ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/crew\" hook stop --host claude", "timeout": 30 }] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/crew\" hook stop --host claude",
+            "timeout": 30
+          }
+        ]
+      }
     ],
     "SubagentStart": [
-      { "matcher": "(crew:)?advisor-maker", "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/crew\" hook subagent-start --host claude", "timeout": 10 }] }
+      {
+        "matcher": "(crew:)?advisor-maker",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/crew\" hook subagent-start --host claude",
+            "timeout": 10
+          }
+        ]
+      }
     ],
     "SubagentStop": [
-      { "matcher": "(crew:)?advisor-maker", "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/crew\" hook subagent-stop --host claude", "timeout": 10 }] }
+      {
+        "matcher": "(crew:)?advisor-maker",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/crew\" hook subagent-stop --host claude",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

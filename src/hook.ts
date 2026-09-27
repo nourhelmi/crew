@@ -13,11 +13,14 @@ export interface HookInput {
   stop_hook_active?: boolean;
   agent_type?: string;
   agent_id?: string;
+  tool_name?: string;
+  tool_input?: { subagent_type?: string; model?: string };
 }
 
 export type HookOutput =
   | { decision: 'block'; reason: string }
   | { hookSpecificOutput: { hookEventName: string; additionalContext: string } }
+  | { hookSpecificOutput: { hookEventName: 'PreToolUse'; permissionDecision: 'deny'; permissionDecisionReason: string } }
   | undefined;
 
 const MAKER = /(^|:)advisor-maker$/;
@@ -48,19 +51,19 @@ function stop(host: Host, input: HookInput, env: NodeJS.ProcessEnv): HookOutput 
   const run = readRun(me.mailbox);
   // A blocked child often continues once its parent answers, so its next result settles too.
   if (run && (run.state === 'running' || run.state === 'stalled' || run.state === 'blocked')) {
+    // A draft saying IN PROGRESS is still working (often waiting on its own background task):
+    // nudged once, then reported as paused, never as stalled.
+    const progress = progressLine(resultPath(run.id));
     if (readResult(resultPath(run.id))) settle(run.id);
     else if (run.state !== 'running') { /* already reported; wait for a result or new mail */ }
+    else if (progress && !input.stop_hook_active) {
+      reasons.push(`Your result says "${progress}". Keep going toward this assignment's done-when now;`
+        + ' set Status to DONE, PASS, FAIL or BLOCKED: <question> only when that is true.');
+    } else if (progress) paused(run.id, progress);
     else if (!run.keep && !input.stop_hook_active) {
       reasons.push(`You are crew run ${run.id} and have not written a terminal result.\n${contract(resultPath(run.id))}\n`
         + 'If you need a decision first, write Status BLOCKED: <question> (or ask with crew msg parent "...") and stop.');
     } else if (!run.keep) stall(run.id, 'stopped without a result');
-    else {
-      const progress = progressLine(resultPath(run.id));
-      if (progress && !input.stop_hook_active) {
-        reasons.push(`Your result says "${progress}". Keep going toward this assignment's done-when now;`
-          + ' set Status to DONE, PASS, FAIL or BLOCKED: <question> only when that is true.');
-      } else if (progress) paused(run.id, progress);
-    }
   }
   const mails = takeUnread(me.mailbox);
   if (mails.length) {
@@ -107,6 +110,25 @@ function postTool(host: Host, input: HookInput, env: NodeJS.ProcessEnv): HookOut
     additionalContext: `[crew] ${mails.length} unread crew mail from ${from.join(', ')}${amended}. Run \`crew inbox\` before your next step.` } };
 }
 
+/** Read-only agents a crew run may still start natively. */
+const LOOKUP_AGENTS = new Set(['Explore', 'Plan', 'claude-code-guide']);
+
+/**
+ * Inside a crew run, work goes through `crew spawn`: a native subagent inherits the run's own
+ * model and skips routing, the capacity cap and grading (in one sweep, Opus child advisors ran
+ * 60 native makers, all on Opus). Read-only lookups may stay native.
+ */
+function preAgent(_host: Host, input: HookInput, env: NodeJS.ProcessEnv): HookOutput {
+  if (!env.CREW_RUN || !readRun(env.CREW_RUN)) return undefined;
+  const type = input.tool_input?.subagent_type ?? 'general-purpose';
+  if (LOOKUP_AGENTS.has(type)) return undefined;
+  return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny',
+    permissionDecisionReason: `A crew run delegates work through crew, not a native "${type}" subagent: `
+      + 'crew spawn --role builder|checker|advisor --packet <file> (a checker of a crew run adds --checks <run>). '
+      + 'That routes it to the right model and cost, counts it against capacity and lets its result be graded. '
+      + 'Native subagents are for read-only lookups here: Explore or Plan.' } };
+}
+
 function subagentStart(host: Host, input: HookInput): HookOutput {
   if (!input.agent_type || !MAKER.test(input.agent_type) || !input.agent_id) return undefined;
   const path = makerResult(host, input.agent_id);
@@ -125,6 +147,7 @@ const HANDLERS = {
   'session-start': sessionStart,
   stop,
   'post-tool': postTool,
+  'pre-agent': preAgent,
   'subagent-start': subagentStart,
   'subagent-stop': subagentStop,
 } as const satisfies Record<string, (host: Host, input: HookInput, env: NodeJS.ProcessEnv) => HookOutput>;
