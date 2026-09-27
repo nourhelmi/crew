@@ -136,7 +136,7 @@ Five primitives, each built on something the hosts already do:
 | **Wake** | The child writes `result.md` and its Stop hook settles it to the parent, which wakes the way its host does (table below). The parent's sweep is the backstop for a child whose hook never ran. |
 | **Message** | `crew msg` writes to a file inbox (the source of truth), then pushes a one-line pointer: one per unread batch, so nothing stale is replayed. A busy child hears about new mail after its next tool call. |
 | **Amend** | Children treat messages as advice. `crew amend` changes a child's scope, authority or done-when by appending to its packet. |
-| **Watch** | Each parent gets one detached watcher. Whenever no `crew wait` is running, it catches children stuck on a dialog, children that died, and settles no hook reported. It exits when no child is live. |
+| **Watch** | Each parent gets one detached watcher. Whenever no `crew wait` is running, it catches children stuck on a dialog or gone without a result, and results no hook reported. It exits when no child is live. |
 
 | When the parent is… | …it wakes because |
 |---|---|
