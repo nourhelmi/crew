@@ -122,7 +122,7 @@ sequenceDiagram
     C->>B: opens a herdr pane (or codex exec)
     A->>A: crew wait in the background, keeps working
     B->>B: investigates, implements, tests, commits
-    B->>C: writes result.md; its Stop hook settles it
+    B->>C: writes result.md, which its Stop hook settles
     C-->>A: the wait exits, so the session wakes
     A->>C: crew read api
     A->>You: reviewed and delivered
