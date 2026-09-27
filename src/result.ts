@@ -54,7 +54,8 @@ export function contract(path: string): string {
   return [
     `Write your complete result to exactly: ${path}`,
     `Use these top-level headings: ${RESULT_HEADINGS.join(', ')}.`,
-    'The first nonempty line under Status must be terminal: DONE, PASS, FAIL, or BLOCKED: <reason>. Never leave it IN PROGRESS.',
+    'When you finish, the first nonempty line under Status must be terminal: DONE, PASS, FAIL, or BLOCKED: <reason>.',
+    'While still working, a draft says IN PROGRESS; never use BLOCKED or FAIL as a placeholder, because they report to your parent.',
     'Map Claims one-to-one to the packet\'s done-when criteria, with command or artifact evidence for each.',
   ].join('\n');
 }

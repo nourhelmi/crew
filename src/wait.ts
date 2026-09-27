@@ -1,5 +1,5 @@
 import { spawn as spawnProcess } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { agentStatus, closePane, type AgentStatus } from './herdr.ts';
@@ -31,7 +31,7 @@ function gone(run: RunMeta, herdrStatus: AgentStatus | undefined, bg: Bg | 'unch
 function sweep(mailbox: string, checkBg: boolean): void {
   for (const run of listRuns()) {
     if (run.parent.mailbox !== mailbox) continue;
-    if (run.state === 'running' || run.state === 'stalled') {
+    if (run.state === 'running' || run.state === 'stalled' || run.state === 'blocked') {
       // Parent-side settlement covers a child whose Stop hook never ran.
       const hasResult = Boolean(readResult(resultPath(run.id)));
       if (hasResult) settle(run.id);
@@ -101,7 +101,7 @@ const watcherFile = (mailbox: string): string => join(mailDir(mailbox), 'watcher
 export async function watch(mailbox: string, everyMs = LIVENESS_EVERY_MS, maxMs = 24 * 3_600_000): Promise<void> {
   const deadline = Date.now() + maxMs;
   let lastBg = 0;
-  while (Date.now() < deadline && liveChildren(mailbox).length) {
+  while (Date.now() < deadline && watched(mailbox).length) {
     if (!hasWaiter(mailbox)) {
       const checkBg = Date.now() - lastBg >= BG_EVERY_MS;
       sweep(mailbox, checkBg);
@@ -114,6 +114,7 @@ export async function watch(mailbox: string, everyMs = LIVENESS_EVERY_MS, maxMs 
 export function ensureWatcher(mailbox: string): void {
   withLock(`watch-${mailbox}`, () => {
     try { if (alive(Number(readFileSync(watcherFile(mailbox), 'utf8')))) return; } catch { /* none yet */ }
+    mkdirSync(mailDir(mailbox), { recursive: true }); // a parent that has never had mail has no mailbox yet
     const child = spawnProcess(join(ROOT, 'bin', 'crew'), ['watch', mailbox], { detached: true, stdio: 'ignore' });
     child.unref();
     if (child.pid) writeFileSync(watcherFile(mailbox), String(child.pid));
@@ -122,6 +123,14 @@ export function ensureWatcher(mailbox: string): void {
 
 export function liveChildren(mailbox: string): RunMeta[] {
   return listRuns().filter(run => run.parent.mailbox === mailbox && run.state === 'running');
+}
+
+/** Children the watcher keeps sweeping: running ones, and blocked ones still alive to answer. */
+function watched(mailbox: string): RunMeta[] {
+  return listRuns().filter(run => run.parent.mailbox === mailbox && (run.state === 'running'
+    || (run.state === 'blocked' && (run.launcher === 'exec' ? alive(run.pid)
+      : run.launcher === 'herdr' ? Boolean(run.herdr && !run.herdr.closed && agentStatus(run.herdr.agent, run.herdr.session))
+      : false))));
 }
 
 export { format };

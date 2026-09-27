@@ -153,6 +153,16 @@ describe('settlement', () => {
     assert.equal(store.readRun('b-test')?.state, 'running');
     assert.equal(mail.takeUnread('claude-root').length, 2);
   });
+  it('settles a blocked child again when it goes on to finish', () => {
+    run();
+    writeResult('b-test', 'BLOCKED: which currency table?');
+    mail.settle('b-test');
+    assert.equal(store.readRun('b-test')?.state, 'blocked');
+    writeResult('b-test', 'DONE: used the ISO table');
+    assert.equal(runHook('stop', 'codex', '{"session_id":"t"}', { CREW_HOME: HOME, CREW_RUN: 'b-test' }), '');
+    assert.equal(store.readRun('b-test')?.state, 'done');
+    assert.deepEqual(mail.takeUnread('claude-root').map(m => m.text.replace(/^.*: /, '')), ['which currency table?', 'used the ISO table']);
+  });
   it('reports a dialog-blocked child once per episode', () => {
     run({ launcher: 'herdr', herdr: { pane: 'w1:p2', agent: 'builder-x' } });
     assert.equal(mail.waiting('b-test', true), 'queued');
@@ -292,7 +302,8 @@ describe('launch shape', () => {
     assert.match(text, /runs\/c-1\/result\.md/);
     assert.match(text, /crew msg parent/);
     assert.match(text, /\[amendment\] from your parent is part of your packet/);
-    assert.doesNotMatch(text, /IN PROGRESS/);
+    assert.match(text, /never placeholders/);
+    assert.doesNotMatch(text, /IN PROGRESS: <next step>/);
     assert.match(bootstrap({ id: 'a-1', name: 'lead', role: 'advisor', keep: true, parent: ROOT }), /IN PROGRESS: <next step>/);
   });
 });
@@ -395,8 +406,9 @@ describe('router switch', async () => {
     assert.equal(existsSync(join(dir, `shell-${process.pid}.json`)), true);
     setShellRouter(process.pid, undefined);
   });
-  it('walks the real process ancestry', () => {
+  it('walks the real process ancestry', t => {
     const chain = ancestry(process.pid);
+    if (!chain.length) return t.skip('ps is unavailable here (a sandbox)');
     assert.equal(chain[0]?.pid, process.pid);
     assert.equal(chain[1]?.pid, process.ppid);
   });
@@ -573,6 +585,13 @@ describe('watcher', async () => {
     const kinds = mail.takeUnread('claude-root').map(m => `${m.from.name}:${m.kind}`).sort();
     assert.deepEqual(kinds, ['builder-x:stalled', 'builder-y:settled']);
     assert.equal(store.readRun('b-test')?.state, 'stalled');
+  });
+  it('starts one watcher for a parent that has never had mail', async () => {
+    const { ensureWatcher } = await import('../src/wait.ts');
+    ensureWatcher('claude-fresh'); // no live children: the watcher exits at once
+    const pid = Number(readFileSync(join(store.mailDir('claude-fresh'), 'watcher'), 'utf8'));
+    assert.ok(pid > 0);
+    ensureWatcher('claude-fresh'); // idempotent while one may still be alive
   });
   it('leaves the sweep to an armed crew wait', async () => {
     run({ launcher: 'exec', pid: 999_999 });

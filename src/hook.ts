@@ -46,9 +46,10 @@ function stop(host: Host, input: HookInput, env: NodeJS.ProcessEnv): HookOutput 
   if (!me) return undefined;
   const reasons: string[] = [];
   const run = readRun(me.mailbox);
-  if (run && (run.state === 'running' || run.state === 'stalled')) {
+  // A blocked child often continues once its parent answers, so its next result settles too.
+  if (run && (run.state === 'running' || run.state === 'stalled' || run.state === 'blocked')) {
     if (readResult(resultPath(run.id))) settle(run.id);
-    else if (run.state === 'stalled') { /* already reported; wait for a result or new mail */ }
+    else if (run.state !== 'running') { /* already reported; wait for a result or new mail */ }
     else if (!run.keep && !input.stop_hook_active) {
       reasons.push(`You are crew run ${run.id} and have not written a terminal result.\n${contract(resultPath(run.id))}\n`
         + 'If you need a decision first, write Status BLOCKED: <question> (or ask with crew msg parent "...") and stop.');

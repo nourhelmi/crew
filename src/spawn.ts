@@ -34,7 +34,8 @@ export function bootstrap(run: Pick<RunMeta, 'id' | 'name' | 'role' | 'keep' | '
     `You are crew ${run.role} "${run.name}" (run ${run.id}), working for ${parent}.`,
     `Read and follow your role skill: ${skillPath(run.role)}. Your packet: ${packetPath(run.id)}.`,
     `Write your result to ${resultPath(run.id)} with headings ${RESULT_HEADINGS.join(', ')};`,
-    'the first line under Status must be DONE, PASS, FAIL or BLOCKED: <reason>.',
+    'when you finish, the first line under Status must be DONE, PASS, FAIL or BLOCKED: <reason>',
+    '(a draft written while you work says IN PROGRESS: BLOCKED and FAIL report to your parent, so they are never placeholders).',
     run.keep
       ? 'You are a kept teammate: after each result, stay available. New assignments arrive as crew messages; rewrite result.md for each one.'
         + ' Mid-assignment, keep going; if a turn must end before done-when is met, set Status to IN PROGRESS: <next step> (it wakes nobody).'
