@@ -242,6 +242,11 @@ With routing off, spawns use the role `defaults`, and `--model` still pins.
   serialized. Panes are named `role · name`, and finished children close their own pane.
 - **Dialogs:** a child stuck on an approval, question or trust dialog wakes its parent with a
   `waiting` notice that says where to answer it.
+- **Prompt cache:** a parent idle past its cache's life pays to rewrite its whole context on wake
+  (Claude Code keeps 1-hour entries; OpenAI's current models, 30 minutes). A read refreshes the
+  timer, so a Claude root in `crew wait` stays warm through the wait's 30-minute timeout, and the
+  watcher nudges any other idle parent just before expiry. It stops after a few hours of quiet,
+  when one cold rewrite becomes cheaper than more nudges.
 - **Codex's background server** keeps the working directory of whichever process started it, and a
   deleted worktree there breaks every Codex session. Spawn starts it from your home directory
   first. To recover by hand: `cd ~ && codex app-server daemon restart`.

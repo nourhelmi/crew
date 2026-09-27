@@ -39,7 +39,8 @@ missing tool. If delegation is unavailable, work directly where permitted.
   **background** Bash command (the tool's background option; never `&` or a pipe, which
   lose its output and the wake). It exits when any child settles, stalls or sits on an
   approval dialog, or when mail arrives, and its exit wakes you. Read the output, act, and
-  re-arm it while children or teammates remain. Tell the user only what changed; ask a
+  re-arm it while children or teammates remain; its 30-minute timeout also keeps your prompt
+  cache warm, so re-arm it even when nothing arrived. A `[crew] keepalive` line needs only "ok". Tell the user only what changed; ask a
   pending question once, not on every wake. Codex: settlements, mail and dialog notices are pushed
   into your thread (`codex queue`, with a watcher sweeping for you), so keep working or end
   your turn; run `crew wait` in the foreground only when there is nothing else to do.

@@ -48,7 +48,7 @@ function wakePending(mailbox: string): boolean {
   return unread(mailbox).mails.some(mail => mail.pushed && Date.now() - Date.parse(mail.at) < WAKE_COVERS_MS);
 }
 
-function codexQueue(threadId: string, text: string): boolean {
+export function codexQueue(threadId: string, text: string): boolean {
   try {
     execFileSync('codex', ['queue', '--thread', threadId, '--message', text], { timeout: 20_000, stdio: 'ignore' });
     return true;

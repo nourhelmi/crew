@@ -600,3 +600,28 @@ describe('watcher', async () => {
     assert.equal(store.readRun('b-test')?.state, 'running');
   });
 });
+
+describe('prompt-cache keepalive', async () => {
+  const { keepaliveDue, transcriptPath, KEEPALIVE } = await import('../src/wait.ts');
+  it('nudges just before each host\'s cache expires, and gives up when a rewrite is cheaper', () => {
+    const minutes = (n: number) => n * 60_000;
+    assert.equal(keepaliveDue('codex', minutes(24), 0), false);
+    assert.equal(keepaliveDue('codex', minutes(25), 0), true);   // OpenAI: 30-minute cache
+    assert.equal(keepaliveDue('claude', minutes(49), 0), false);
+    assert.equal(keepaliveDue('claude', minutes(50), 0), true);  // Claude Code: 1-hour cache
+    assert.equal(keepaliveDue('codex', minutes(90), KEEPALIVE.codex.max), false);
+  });
+  it('finds the transcript a host appends to for each session', () => {
+    const codexHome = join(HOME, 'codex-home');
+    const rollout = join(codexHome, 'sessions', '2026', '09', '27', 'rollout-2026-09-27T10-00-00-thread-9.jsonl');
+    mkdirSync(join(rollout, '..'), { recursive: true });
+    writeFileSync(rollout, '');
+    assert.equal(transcriptPath({ mailbox: 'codex-thread-9', host: 'codex', threadId: 'thread-9' }, { CODEX_HOME: codexHome }), rollout);
+    const claudeHome = join(HOME, 'claude-home');
+    const session = join(claudeHome, 'projects', '-Users-me-repo', 'sess-1.jsonl');
+    mkdirSync(join(session, '..'), { recursive: true });
+    writeFileSync(session, '');
+    assert.equal(transcriptPath({ mailbox: 'claude-sess-1', host: 'claude' }, { CLAUDE_CONFIG_DIR: claudeHome }), session);
+    assert.equal(transcriptPath({ mailbox: 'claude-nope', host: 'claude' }, { CLAUDE_CONFIG_DIR: claudeHome }), undefined);
+  });
+});
