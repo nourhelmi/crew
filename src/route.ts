@@ -17,7 +17,7 @@ const BARE: ReadonlyArray<readonly [RegExp, Host]> = [
 /** Efforts each CLI accepts; anything else is clamped to the nearest supported level. */
 const SUPPORTED = {
   claude: ['low', 'medium', 'high', 'xhigh', 'max'],
-  codex: ['minimal', 'low', 'medium', 'high', 'xhigh'],
+  codex: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
 } as const satisfies Record<Host, readonly Effort[]>;
 
 export class RouteError extends Error {}

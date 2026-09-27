@@ -47,7 +47,7 @@ describe('parseModel', () => {
     assert.equal(parseModel('claude-sonnet-5').host, 'claude');
   });
   it('clamps efforts a CLI does not support', () => {
-    assert.equal(parseModel('openai-codex/gpt-6-sol@max').effort, 'xhigh');
+    assert.equal(parseModel('openai-codex/gpt-6-sol@max').effort, 'max');
     assert.equal(clampEffort('claude', 'minimal'), 'low');
     assert.equal(parseModel('gpt-6-sol@off').effort, 'minimal');
   });
@@ -523,7 +523,7 @@ describe('capacity', async () => {
     const moved = withinCapacity(opus, config, undefined, () => 2);
     assert.deepEqual({ ...moved, reason: undefined }, { host: 'codex', model: 'gpt-6-sol', effort: 'high', strategy: 'overflow', reason: undefined });
     assert.match(moved.reason ?? '', /claude has 2 live runs \(cap 2\)/);
-    assert.equal(withinCapacity(opus, config, 'max', () => 3).effort, 'xhigh');
+    assert.equal(withinCapacity(opus, config, 'max', () => 3).effort, 'max');
   });
   it('leaves pins and uncapped hosts alone', () => {
     assert.deepEqual(withinCapacity({ ...opus, strategy: 'pinned' }, config, undefined, () => 9).host, 'claude');
