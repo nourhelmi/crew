@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="700" viewBox="0 0 1200 700" role="img" aria-label="A crew workstream in herdr: a Claude Code advisor leading a Codex checker and a Claude teammate">
+  <title>crew in herdr</title>
+  <rect width="1200" height="700" rx="12" fill="#16161e" stroke="#292e42"/>
+  <circle cx="22" cy="20" r="6" fill="#f7768e"/><circle cx="42" cy="20" r="6" fill="#e0af68"/><circle cx="62" cy="20" r="6" fill="#9ece6a"/>
+  <text x="600.0" y="24" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#565f89">herdr — billing-migration</text>
+  <g font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="12">
+  <text x="22" y="58" fill="#565f89">crew</text>
+  <rect x="92" y="44" width="80" height="20" rx="4" fill="#e0af68"/><text x="106" y="58" fill="#16161e" font-weight="700">billing</text><rect x="179.8" y="44" width="72" height="20" rx="4" fill="#24283b"/><text x="193.8" y="58" fill="#565f89" font-weight="400">server</text><rect x="260.20000000000005" y="44" width="72" height="20" rx="4" fill="#24283b"/><text x="274.20000000000005" y="58" fill="#565f89" font-weight="400">schema</text><text x="346.6" y="58" fill="#565f89">+</text>
+  <rect x="12" y="80" width="584" height="606" rx="8" fill="#1a1b26" stroke="#7aa2f7" stroke-width="1.5"/>
+<rect x="26" y="72" width="216" height="16" fill="#16161e"/>
+<text x="34" y="84" xml:space="preserve"><tspan fill="#7aa2f7" font-weight="700">advisor · billing-migration</tspan></text>
+<rect x="403" y="72" width="179" height="16" fill="#16161e"/>
+<text x="411.2" y="84" xml:space="preserve"><tspan fill="#ff9e64">Claude Code · Opus 5.5</tspan></text>
+<text x="28" y="110" xml:space="preserve"><tspan fill="#bb9af7">❯ </tspan><tspan fill="#e0e6ff" font-weight="700">/crew:advisor ship the billing migration</tspan></text>
+<text x="28" y="146" xml:space="preserve"><tspan fill="#c0caf5">⏺ </tspan><tspan fill="#c0caf5">The API change and the ledger backfill are independent.</tspan></text>
+<text x="28" y="164" xml:space="preserve"><tspan fill="#c0caf5">  </tspan><tspan fill="#c0caf5">One builder for the API, a kept teammate for the backfill.</tspan></text>
+<text x="28" y="200" xml:space="preserve"><tspan fill="#9ece6a">⏺ </tspan><tspan fill="#e0e6ff" font-weight="700">Bash</tspan><tspan fill="#565f89">(crew spawn --role builder --name api --packet api.md)</tspan></text>
+<text x="28" y="218" xml:space="preserve"><tspan fill="#565f89">  ⎿ </tspan><tspan fill="#c0caf5">spawned api (run b-7k2q): </tspan><tspan fill="#7dcfff">codex gpt-6-sol@high</tspan><tspan fill="#565f89"> [jev]</tspan></text>
+<text x="28" y="236" xml:space="preserve"><tspan fill="#9ece6a">⏺ </tspan><tspan fill="#e0e6ff" font-weight="700">Bash</tspan><tspan fill="#565f89">(crew spawn --role advisor --keep --name ledger …)</tspan></text>
+<text x="28" y="254" xml:space="preserve"><tspan fill="#565f89">  ⎿ </tspan><tspan fill="#c0caf5">spawned ledger (run a-3hq8): </tspan><tspan fill="#ff9e64">claude claude-opus-5-5@high</tspan><tspan fill="#565f89"> [jev]</tspan></text>
+<text x="28" y="272" xml:space="preserve"><tspan fill="#9ece6a">⏺ </tspan><tspan fill="#e0e6ff" font-weight="700">Bash</tspan><tspan fill="#565f89">(crew wait)</tspan><tspan fill="#565f89">  running in the background</tspan></text>
+<text x="28" y="308" xml:space="preserve"><tspan fill="#565f89">  ✻ 14 minutes later</tspan></text>
+<text x="28" y="344" xml:space="preserve"><tspan fill="#c0caf5">⏺ </tspan><tspan fill="#9ece6a" font-weight="700">[settled]</tspan><tspan fill="#c0caf5"> api: builder on gpt-6-sol@high: </tspan><tspan fill="#9ece6a" font-weight="700">DONE</tspan></text>
+<text x="28" y="362" xml:space="preserve"><tspan fill="#c0caf5">  </tspan><tspan fill="#c0caf5">3 commits, 214 tests green. It touches money, so it gets</tspan></text>
+<text x="28" y="380" xml:space="preserve"><tspan fill="#c0caf5">  </tspan><tspan fill="#c0caf5">a fresh-context checker before delivery.</tspan></text>
+<text x="28" y="398" xml:space="preserve"><tspan fill="#9ece6a">⏺ </tspan><tspan fill="#e0e6ff" font-weight="700">Bash</tspan><tspan fill="#565f89">(crew spawn --role checker --name review …)</tspan></text>
+<text x="28" y="416" xml:space="preserve"><tspan fill="#565f89">  ⎿ </tspan><tspan fill="#c0caf5">spawned review (run c-9x1m): </tspan><tspan fill="#7dcfff">codex gpt-6-sol@xhigh</tspan><tspan fill="#565f89"> [jev]</tspan></text>
+<text x="28" y="434" xml:space="preserve"><tspan fill="#9ece6a">⏺ </tspan><tspan fill="#e0e6ff" font-weight="700">Bash</tspan><tspan fill="#565f89">(crew amend ledger &quot;backfill in batches of 5k rows&quot;)</tspan></text>
+<text x="28" y="452" xml:space="preserve"><tspan fill="#565f89">  ⎿ </tspan><tspan fill="#c0caf5">amendment 1 appended to ledger&#x27;s packet: queued</tspan></text>
+<text x="28" y="470" xml:space="preserve"><tspan fill="#9ece6a">⏺ </tspan><tspan fill="#e0e6ff" font-weight="700">Bash</tspan><tspan fill="#565f89">(crew wait)</tspan><tspan fill="#565f89">  running in the background</tspan></text>
+<text x="28" y="506" xml:space="preserve"><tspan fill="#565f89">  ✻ 6 minutes later</tspan></text>
+<text x="28" y="542" xml:space="preserve"><tspan fill="#c0caf5">⏺ </tspan><tspan fill="#9ece6a" font-weight="700">[settled]</tspan><tspan fill="#c0caf5"> review: checker on gpt-6-sol@xhigh: </tspan><tspan fill="#9ece6a" font-weight="700">PASS</tspan></text>
+<text x="28" y="560" xml:space="preserve"><tspan fill="#c0caf5">  </tspan><tspan fill="#c0caf5">Fixed one refund assertion; every mutation was caught.</tspan></text>
+<text x="28" y="578" xml:space="preserve"><tspan fill="#c0caf5">  </tspan><tspan fill="#c0caf5">Opening the API PR now. The ledger keeps backfilling.</tspan></text>
+<line x1="24" y1="636" x2="584" y2="636" stroke="#3b4261" stroke-dasharray="2 3"/>
+<text x="28" y="652" xml:space="preserve"><tspan fill="#c0caf5" font-weight="700"> crew </tspan><tspan fill="#bb9af7"> ⎇ feat/billing ✓ </tspan><tspan fill="#7aa2f7"> ✱ Opus 5.5 </tspan><tspan fill="#e0af68"> ✦ high </tspan></text>
+<text x="28" y="670" xml:space="preserve"><tspan fill="#7dcfff"> ▪▪▪▫▫▫▫▫▫▫ 31% </tspan><tspan fill="#9ece6a"> ◱ ▪▪▪▪▫◇▫▫▫▫ 42%/50% (2h 38m) </tspan><tspan fill="#565f89"> ◑ 18% </tspan></text>
+<rect x="604" y="80" width="584" height="296" rx="8" fill="#1a1b26" stroke="#3b4261" stroke-width="1"/>
+<rect x="618" y="72" width="134" height="16" fill="#16161e"/>
+<text x="626" y="84" xml:space="preserve"><tspan fill="#c0caf5" font-weight="700">advisor · ledger</tspan></text>
+<rect x="995" y="72" width="179" height="16" fill="#16161e"/>
+<text x="1003.2" y="84" xml:space="preserve"><tspan fill="#ff9e64">Claude Code · Opus 5.5</tspan></text>
+<text x="620" y="110" xml:space="preserve"><tspan fill="#c0caf5">⏺ </tspan><tspan fill="#c0caf5">1.2M ledger rows. Idempotent upserts keyed on</tspan></text>
+<text x="620" y="128" xml:space="preserve"><tspan fill="#c0caf5">  </tspan><tspan fill="#c0caf5">(account_id, entry_id); dry run before writes.</tspan></text>
+<text x="620" y="146" xml:space="preserve"><tspan fill="#9ece6a">⏺ </tspan><tspan fill="#e0e6ff" font-weight="700">Bash</tspan><tspan fill="#565f89">(pnpm backfill --dry-run --limit 50000)</tspan></text>
+<text x="620" y="164" xml:space="preserve"><tspan fill="#565f89">  ⎿ </tspan><tspan fill="#c0caf5">50,000 rows · 0 conflicts · 41s</tspan></text>
+<text x="620" y="182" xml:space="preserve"><tspan fill="#c0caf5">  </tspan><tspan fill="#e0af68">[crew] 1 unread crew mail from your parent, including</tspan></text>
+<text x="620" y="200" xml:space="preserve"><tspan fill="#c0caf5">  </tspan><tspan fill="#e0af68">a packet amendment. Run `crew inbox` before your next step.</tspan></text>
+<text x="620" y="218" xml:space="preserve"><tspan fill="#9ece6a">⏺ </tspan><tspan fill="#e0e6ff" font-weight="700">Bash</tspan><tspan fill="#565f89">(crew inbox)</tspan></text>
+<text x="620" y="236" xml:space="preserve"><tspan fill="#565f89">  ⎿ </tspan><tspan fill="#bb9af7" font-weight="700">[amendment]</tspan><tspan fill="#c0caf5"> from root (part of your packet):</tspan></text>
+<text x="620" y="254" xml:space="preserve"><tspan fill="#c0caf5">    </tspan><tspan fill="#c0caf5">Amendment 1: backfill in batches of 5k rows</tspan></text>
+<text x="620" y="272" xml:space="preserve"><tspan fill="#c0caf5">⏺ </tspan><tspan fill="#c0caf5">Switching to 5k batches and re-running the dry run.</tspan></text>
+<text x="620" y="290" xml:space="preserve"><tspan fill="#ff9e64">✻ </tspan><tspan fill="#ff9e64">Backfilling… </tspan><tspan fill="#565f89">(2m 10s · esc to interrupt)</tspan></text>
+<rect x="604" y="390" width="584" height="296" rx="8" fill="#1a1b26" stroke="#3b4261" stroke-width="1"/>
+<rect x="618" y="382" width="134" height="16" fill="#16161e"/>
+<text x="626" y="394" xml:space="preserve"><tspan fill="#c0caf5" font-weight="700">checker · review</tspan></text>
+<rect x="1032" y="382" width="142" height="16" fill="#16161e"/>
+<text x="1040.2" y="394" xml:space="preserve"><tspan fill="#7dcfff">Codex · GPT-6 Sol</tspan></text>
+<text x="620" y="420" xml:space="preserve"><tspan fill="#c0caf5">• </tspan><tspan fill="#c0caf5">Reviewing feat/billing-api (3 commits) against the packet</tspan></text>
+<text x="620" y="438" xml:space="preserve"><tspan fill="#c0caf5">• </tspan><tspan fill="#e0e6ff" font-weight="700">Ran </tspan><tspan fill="#c0caf5">pnpm test --filter @app/billing-api</tspan></text>
+<text x="620" y="456" xml:space="preserve"><tspan fill="#565f89">  └ </tspan><tspan fill="#9ece6a">214 passed</tspan></text>
+<text x="620" y="474" xml:space="preserve"><tspan fill="#c0caf5">• </tspan><tspan fill="#e0e6ff" font-weight="700">Mutation: </tspan><tspan fill="#c0caf5">drop the currency guard in charge.ts</tspan></text>
+<text x="620" y="492" xml:space="preserve"><tspan fill="#565f89">  └ </tspan><tspan fill="#c0caf5">2 tests fail </tspan><tspan fill="#9ece6a">✓</tspan><tspan fill="#565f89"> source restored</tspan></text>
+<text x="620" y="510" xml:space="preserve"><tspan fill="#c0caf5">• </tspan><tspan fill="#e0e6ff" font-weight="700">Mutation: </tspan><tspan fill="#c0caf5">skip the idempotency-key check</tspan></text>
+<text x="620" y="528" xml:space="preserve"><tspan fill="#565f89">  └ </tspan><tspan fill="#c0caf5">1 test fails </tspan><tspan fill="#9ece6a">✓</tspan><tspan fill="#565f89"> source restored</tspan></text>
+<text x="620" y="546" xml:space="preserve"><tspan fill="#c0caf5">• </tspan><tspan fill="#c0caf5">Repaired: refund path asserted the wrong status code</tspan></text>
+<text x="620" y="564" xml:space="preserve"><tspan fill="#c0caf5">• </tspan><tspan fill="#c0caf5">Writing result.md: </tspan><tspan fill="#9ece6a" font-weight="700">PASS</tspan></text>
+<text x="620" y="600" xml:space="preserve"><tspan fill="#c0caf5">  </tspan><tspan fill="#565f89">gpt-6-sol xhigh · ~/code/billing-api</tspan></text>
+  </g>
+</svg>
