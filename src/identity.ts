@@ -13,18 +13,26 @@ const herdrTarget = (env: Env): { herdrAgent?: string; herdrSession?: string } =
 /** Mailbox id for a host session id, as seen by both the CLI and the hooks. */
 export const sessionMailbox = (host: Host, sessionId: string): string => `${host}-${sessionId}`;
 
+export interface Proc { pid: number; ppid: number; comm: string }
+
+/** The calling process's ancestors, nearest first, from one `ps` snapshot. */
+export function ancestry(start = process.ppid): Proc[] {
+  let table: Map<number, Proc>;
+  try {
+    table = new Map(execFileSync('ps', ['-A', '-o', 'pid=,ppid=,comm='], { encoding: 'utf8' }).split('\n').flatMap(line => {
+      const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
+      return match ? [[Number(match[1]), { pid: Number(match[1]), ppid: Number(match[2]), comm: match[3]! }] as const] : [];
+    }));
+  } catch { return []; }
+  const chain: Proc[] = [];
+  for (let proc = table.get(start); proc && proc.pid > 1 && chain.length < 32; proc = table.get(proc.ppid)) chain.push(proc);
+  return chain;
+}
+
 function hostAncestor(): { host: Host; pid: number } | undefined {
-  let pid = process.ppid;
-  for (let depth = 0; depth < 12 && pid > 1; depth++) {
-    let line: string;
-    try { line = execFileSync('ps', ['-o', 'ppid=,comm=', '-p', String(pid)], { encoding: 'utf8' }).trim(); }
-    catch { return undefined; }
-    const match = line.match(/^(\d+)\s+(.*)$/);
-    if (!match) return undefined;
-    const comm = match[2]!;
+  for (const { pid, comm } of ancestry()) {
     if (basename(comm) === 'claude' || comm.includes('/claude/versions/')) return { host: 'claude', pid };
     if (basename(comm) === 'codex') return { host: 'codex', pid };
-    pid = Number(match[1]);
   }
   return undefined;
 }

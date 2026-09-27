@@ -91,6 +91,8 @@ shell wrappers for new ones, and re-sweeps every 10 minutes (launchd). Only poin
 | Claude Code (CLI or desktop) | `/crew:advisor …` | `/crew:cos …` |
 | Codex (CLI or app) | `$advisor …` | `$cos …` |
 
+Routing switch: `/crew:router off` (Claude Code) or `$router off` (Codex).
+
 > In Claude Code, `/advisor` on its own is a built-in command. Use `/crew:advisor`.
 
 The advisor decides when to delegate. You can also drive crew by hand:
@@ -123,11 +125,17 @@ defaults. Model ids map to CLIs by provider:
 
 Efforts a CLI lacks are clamped (Codex `max` becomes `xhigh`).
 
-To turn routing off, use `crew router off` for the current session (every child it spawns
-inherits the setting), `crew router off --global` for the config, or `CREW_ROUTER=off` in the
-environment, which beats both. `crew router status` shows which one applies. With routing
-off, spawns use the role `defaults`, and `--model` still pins. Intelligence profiles
-(`skills/advisor-intelligence/profiles`) describe which model fits which role.
+To turn routing off (every child the session spawns inherits the setting):
+
+- **Inside a session:** `/crew:router off` in Claude Code or `$router off` in Codex (the
+  `router` skill; any Agent Skills host gets it). `on`, `reset` and `status` work the same way.
+- **From a terminal, before launching:** `crew router off` in that shell applies to every
+  session you start from it, until the shell exits. `CREW_ROUTER=off claude` does the same
+  for one launch, and beats every other setting.
+- **Everywhere:** `crew router off --global` edits the config.
+
+With routing off, spawns use the role `defaults`, and `--model` still pins. Intelligence
+profiles (`skills/advisor-intelligence/profiles`) describe which model fits which role.
 
 ## Configuration: `~/.config/crew/config.json`
 

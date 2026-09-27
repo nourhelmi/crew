@@ -357,17 +357,46 @@ describe('identity', async () => {
 });
 
 describe('router switch', async () => {
-  const { routerSetting, setSessionRouter, parseSwitch } = await import('../src/settings.ts');
+  const { routerSetting, setSessionRouter, setShellRouter, parseSwitch } = await import('../src/settings.ts');
+  const { ancestry } = await import('../src/identity.ts');
   const me = { mailbox: 'claude-switch', host: 'claude' as const };
+  const none = () => [];
   it('resolves env over session over config', () => {
     const config = store.loadConfig();
-    assert.deepEqual(routerSetting(config, me, {}), { on: true, source: 'config' });
+    assert.deepEqual(routerSetting(config, me, {}, none), { on: true, source: 'config' });
     setSessionRouter(me, false);
-    assert.deepEqual(routerSetting(config, me, {}), { on: false, source: 'session' });
-    assert.deepEqual(routerSetting(config, me, { CREW_ROUTER: 'on' }), { on: true, source: 'env' });
+    assert.deepEqual(routerSetting(config, me, {}, none), { on: false, source: 'session' });
+    assert.deepEqual(routerSetting(config, me, { CREW_ROUTER: 'on' }, none), { on: true, source: 'env' });
     setSessionRouter(me, undefined);
-    assert.deepEqual(routerSetting(config, me, {}), { on: true, source: 'config' });
-    assert.deepEqual(routerSetting({ ...config, router: { ...config.router, enabled: false } }, me, {}), { on: false, source: 'config' });
+    assert.deepEqual(routerSetting(config, me, {}, none), { on: true, source: 'config' });
+    assert.deepEqual(routerSetting({ ...config, router: { ...config.router, enabled: false } }, me, {}, none), { on: false, source: 'config' });
+  });
+  it('lets a terminal switch cover every session launched from that shell', () => {
+    const config = store.loadConfig();
+    const shell = process.pid; // alive, so the sweep keeps it
+    setShellRouter(shell, false);
+    // a session started from that shell: its crew calls see the shell among their ancestors
+    assert.deepEqual(routerSetting(config, me, {}, () => [4242, shell, 1]), { on: false, source: 'shell', shell });
+    assert.deepEqual(routerSetting(config, me, {}, () => [4242]), { on: true, source: 'config' });
+    setSessionRouter(me, true);
+    assert.equal(routerSetting(config, me, {}, () => [shell]).source, 'session');
+    setSessionRouter(me, undefined);
+    setShellRouter(shell, undefined);
+    assert.equal(routerSetting(config, me, {}, () => [shell]).source, 'config');
+  });
+  it('sweeps switches left by exited shells', () => {
+    const dir = join(HOME, 'sessions');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'shell-999999.json'), '{"router":false}');
+    setShellRouter(process.pid, false);
+    assert.equal(existsSync(join(dir, 'shell-999999.json')), false);
+    assert.equal(existsSync(join(dir, `shell-${process.pid}.json`)), true);
+    setShellRouter(process.pid, undefined);
+  });
+  it('walks the real process ancestry', () => {
+    const chain = ancestry(process.pid);
+    assert.equal(chain[0]?.pid, process.pid);
+    assert.equal(chain[1]?.pid, process.ppid);
   });
   it('parses switch words and ignores junk', () => {
     assert.equal(parseSwitch('OFF'), false);

@@ -19,4 +19,7 @@
   shell guard (`$CREW_RUN` unset) before starting node.
 - Codex: hook trust is keyed on the command string, so hook commands must stay version-stable
   (`codex/hooks.json`). `workspace-write` keeps `.git` read-only; spawn grants it via `writable_roots`.
+- Host-agnostic: user entry points are skills (`skills/<name>/SKILL.md`), never host-specific
+  commands, so every Agent Skills host gets them (Claude `/crew:<name>`, Codex `$<name>`, OpenCode
+  and others). Host-only frontmatter keys (e.g. Claude's `allowed-tools`) are fine; others ignore them.
 - Claude Code: `/advisor` is a built-in command, so the skill is `/crew:advisor`.

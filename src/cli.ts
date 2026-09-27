@@ -10,7 +10,7 @@ import { amend, format, resolve, send, takeUnread } from './mail.ts';
 import { isEffort, route } from './route.ts';
 import { liveOnHost, spawn } from './spawn.ts';
 import { checkouts, trustPaths, trustTargets } from './trust.ts';
-import { routerSetting, setSessionRouter } from './settings.ts';
+import { routerSetting, setSessionRouter, setShellRouter } from './settings.ts';
 import { configPath, findRun, listRuns, loadConfig, readJson, resultPath, runDir, writeJson, writeRun } from './store.ts';
 import { HOSTS, ROLES, type Address, type Host, type Role, type RunMeta } from './types.ts';
 import { liveChildren, wait } from './wait.ts';
@@ -31,8 +31,9 @@ const HELP = `crew: advisor crews on native Claude Code and Codex
   crew stop <run>              Stop a run and close its pane.
   crew route --role R --task T Show where a task would go, without launching.
   crew router [status|on|off|reset] [--global]
-                               Jev routing for this session (children inherit), or globally.
-                               CREW_ROUTER=off|on in the environment wins over both.
+                               Jev routing for this agent session, or (run in a plain terminal)
+                               for every session launched from that shell; children inherit it.
+                               --global edits the config; CREW_ROUTER=off|on in the env wins.
   crew trust [PATH... | --all] [--quiet]
                                Trust checkouts under the trust roots (default ~/Dev) in both CLIs.
   crew label <text>            Name this herdr pane (children are named role · name automatically).
@@ -203,11 +204,21 @@ async function main(argv: string[]): Promise<void> {
           const stored = readJson<Record<string, unknown> & { router?: Record<string, unknown> }>(configPath()) ?? {};
           writeJson(configPath(), { ...stored, router: { ...stored.router, enabled: on } });
         } else {
-          setSessionRouter(self(), on);
+          // Inside an agent session: that session. In a plain terminal: this shell, so every
+          // session launched from it (and their children) picks it up.
+          const me = safeSelf();
+          if (me) setSessionRouter(me, on);
+          else setShellRouter(process.ppid, on);
         }
       } else if (action !== 'status') fail('crew: crew router [status|on|off|reset] [--global]');
       const setting = routerSetting(loadConfig(), safeSelf());
-      console.log(`router: ${setting.on ? 'on' : 'off'} (${setting.source === 'env' ? 'CREW_ROUTER' : setting.source === 'session' ? 'this session' : 'config'})`);
+      const scope = {
+        env: 'CREW_ROUTER in the environment',
+        session: 'this session and the children it spawns',
+        shell: `terminal shell ${setting.shell}: sessions launched from it and their children`,
+        config: `config ${configPath()}`,
+      }[setting.source];
+      console.log(`router: ${setting.on ? 'on' : 'off'} (${scope})`);
       console.log(`  command: ${config.router.command} · defaults when off or failing: ${ROLES.map(role => `${role}=${config.defaults[role]}`).join(', ')}`);
       return;
     }
