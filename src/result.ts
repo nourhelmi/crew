@@ -31,6 +31,18 @@ export function parseResult(text: string): Omit<ResultStatus, 'hash'> | undefine
   return verdict ? { verdict, line: cleaned } : undefined;
 }
 
+/** A kept teammate's mid-assignment status (`IN PROGRESS: <next step>`); it settles nothing. */
+export function progressLine(path: string): string | undefined {
+  let text: string;
+  try { text = readFileSync(path, 'utf8'); } catch { return undefined; }
+  const lines = text.split('\n').map(line => line.trim());
+  const heading = lines.findIndex(line => /^#{1,6}\s*status\b/i.test(line) || /^status\s*:/i.test(line));
+  if (heading < 0) return undefined;
+  const line = (lines[heading]!.match(/^status\s*:\s*(.+)$/i)?.[1] ?? lines.slice(heading + 1).find(Boolean) ?? '')
+    .replace(/^[-*>\s`*_]+|[`*_]+$/g, '').trim();
+  return /^IN[ _-]PROGRESS\b/i.test(line) ? line : undefined;
+}
+
 export function readResult(path: string): ResultStatus | undefined {
   let text: string;
   try { text = readFileSync(path, 'utf8'); } catch { return undefined; }

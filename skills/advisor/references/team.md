@@ -12,19 +12,24 @@ the same either way:
 | enlist | `crew spawn --role advisor --keep --name <name> --packet <file>` |
 | status / roster | `crew ls` (state, model, last reported status) |
 | message a teammate, or the root | `crew msg <name|parent> "…"` or `--file <file>` |
-| context or assign a distinct outcome | `crew msg <name> --file <new-packet>`; the teammate rewrites its result.md for it |
+| context or follow-up (advice) | `crew msg <name> "…"` or `--file <file>` |
+| change scope, authorization or done-when, or assign a distinct outcome | `crew amend <name> "…"` or `--file <new-packet>`: appended to its packet; the teammate rewrites its result.md for a new outcome |
 | rename | not supported; retire and enlist under the new name |
 | retire | tell it to settle its own children, wait for its settle notice, then `crew stop <name>` |
 
-Messages are advice: they never grant scope, assign work or certify completion. A follow-up
-message to the same member handles same-outcome repair; a new packet is for a genuinely
-distinct outcome. One maker per checkout still applies. A teammate's `crew msg parent`
+Messages are advice: they never grant scope, assign work or certify completion. Scope,
+authorizations and done-when change only by `crew amend`, which becomes part of the
+packet; decide them up front where you can. A follow-up message to the same member handles
+same-outcome repair; an amended packet is for a genuinely distinct outcome. A teammate that
+must end a turn mid-assignment writes `IN PROGRESS: <next step>`, which wakes no one and
+keeps it going; if it stops on that twice you get a `waiting` notice. One maker per checkout still applies. A teammate's `crew msg parent`
 reaches the root; it can reach a sibling by name.
 
 Keep `crew wait` armed while teammates are alive (in Claude Code, as a background
 command). That is how their reports and messages wake you. Teammates wake the same way:
-an idle Codex teammate gets mail pushed into its thread, and an idle Claude teammate in
-herdr gets a one-line pointer to run `crew inbox`. Any session with unread mail is kept
+an idle Codex teammate gets a one-line pointer queued into its thread, and an idle Claude
+teammate in herdr gets one typed into its pane, one per unread batch; a busy teammate is
+told about unread mail after its next tool call. Any session with unread mail is kept
 going at its next turn end until it has read it.
 
 Retire members before closing a team; retirement waits for real descendant settlement.

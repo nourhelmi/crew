@@ -103,10 +103,10 @@ describe('mailbox', () => {
     writeFileSync(join(store.mailDir('mb'), 'inbox.jsonl'), '{"id":"partial"', { flag: 'a' });
     assert.equal(store.unread('mb').mails.length, 0);
   });
-  it('skips mail a push already showed in full', () => {
+  it('reads pushed mail too: a push is only a pointer to the inbox', () => {
     store.appendMail('mb2', { id: '1', at: '', kind: 'message', from: { mailbox: 'x' }, text: 'a', pushed: true });
     store.appendMail('mb2', { id: '2', at: '', kind: 'message', from: { mailbox: 'x' }, text: 'b' });
-    assert.deepEqual(mail.takeUnread('mb2').map(m => m.id), ['2']);
+    assert.deepEqual(mail.takeUnread('mb2').map(m => m.id), ['1', '2']);
   });
   it('prefers an armed waiter and otherwise queues', () => {
     const release = store.markWaiter('claude-root');
@@ -226,6 +226,29 @@ describe('hooks', () => {
       rmSync(bin, { recursive: true, force: true });
     }
   });
+  it('announces new mail to a busy child once per batch, after a tool call', () => {
+    run({ keep: true });
+    const post = (extra: Record<string, string>) => runHook('post-tool', 'codex', '{"session_id":"t-1"}', env(extra));
+    assert.equal(post({ CREW_RUN: 'b-test' }), '');
+    mail.send(ROOT, { mailbox: 'b-test', host: 'codex' }, 'widen the sweep to data');
+    assert.match(post({ CREW_RUN: 'b-test' }), /"hookEventName":"PostToolUse".*1 unread crew mail from your parent/);
+    assert.equal(post({ CREW_RUN: 'b-test' }), '');
+    mail.send({ mailbox: 'a-peer', host: 'claude', name: 'peer' }, { mailbox: 'b-test', host: 'codex' }, 'fyi');
+    assert.match(post({ CREW_RUN: 'b-test' }), /2 unread crew mail from your parent, peer/);
+    assert.equal(post({}), '');
+  });
+  it('keeps a kept teammate going on IN PROGRESS, then reports it paused once', () => {
+    run({ keep: true });
+    writeResult('b-test', 'IN PROGRESS: batch 3 of 9 next');
+    assert.match(stop(false, { CREW_RUN: 'b-test' }), /"decision":"block".*Keep going/);
+    assert.equal(stop(true, { CREW_RUN: 'b-test' }), '');
+    assert.equal(stop(true, { CREW_RUN: 'b-test' }), '');
+    const notices = mail.takeUnread('claude-root');
+    assert.deepEqual(notices.map(m => m.kind), ['waiting']);
+    assert.match(notices[0]?.text ?? '', /paused mid-assignment \(IN PROGRESS: batch 3 of 9 next\)/);
+    assert.equal(store.readRun('b-test')?.state, 'running');
+    assert.equal(store.readRun('b-test')?.settled, undefined);
+  });
   it('never throws into the host', () => {
     assert.equal(runHook('stop', 'claude', '{not json', env()), '');
   });
@@ -238,7 +261,7 @@ describe('launch shape', () => {
     assert.deepEqual(claude.slice(0, 6), ['--model', 'claude-opus-5-5', '--effort', 'high', '--name', 'adv']);
     assert.deepEqual(claude.slice(-5), ['--add-dir', ROOT_DIR, '--permission-mode', 'auto', 'GO']);
     const codex = argv('codex', { host: 'codex', model: 'gpt-6-sol', effort: 'xhigh', strategy: 'jev' }, 'b', config, 'GO');
-    assert.deepEqual(codex, ['--model', 'gpt-6-sol', '-c', 'model_reasoning_effort="xhigh"', 'GO']);
+    assert.deepEqual(codex, ['--model', 'gpt-6-sol', '-c', 'model_reasoning_effort="xhigh"', '-c', 'check_for_update_on_startup=false', 'GO']);
   });
   it('grants sandboxed children crew state and the checkout\'s git dir', () => {
     const repo = mkdtempSync(join(tmpdir(), 'crew-repo-'));
@@ -253,8 +276,8 @@ describe('launch shape', () => {
       assert.equal(roots.length, 2);
       assert.equal(realpathSync(roots[1]!), realpathSync(join(repo, '.git')));
       const codex = argv('codex', { host: 'codex', model: 'gpt-6-sol', effort: 'high', strategy: 'jev' }, 'b', store.loadConfig(), 'GO', roots);
-      assert.equal(codex[4], '-c');
-      assert.match(codex[5] ?? '', /^sandbox_workspace_write\.writable_roots=\[".*"\]$/);
+      assert.equal(codex[6], '-c');
+      assert.match(codex[7] ?? '', /^sandbox_workspace_write\.writable_roots=\[".*"\]$/);
       const claude = argv('claude', { host: 'claude', model: 'opus', effort: 'high', strategy: 'jev' }, 'a', store.loadConfig(), 'GO', roots);
       assert.equal(claude.filter(arg => arg === '--add-dir').length, 3);
     } finally {
@@ -268,6 +291,9 @@ describe('launch shape', () => {
     assert.match(text, /runs\/c-1\/packet\.md/);
     assert.match(text, /runs\/c-1\/result\.md/);
     assert.match(text, /crew msg parent/);
+    assert.match(text, /\[amendment\] from your parent is part of your packet/);
+    assert.doesNotMatch(text, /IN PROGRESS/);
+    assert.match(bootstrap({ id: 'a-1', name: 'lead', role: 'advisor', keep: true, parent: ROOT }), /IN PROGRESS: <next step>/);
   });
 });
 
@@ -425,5 +451,83 @@ esac
     utimesSync(dir, old, old);
     assert.equal(store.withLock('split-test', () => 42, 1_000), 42);
     assert.equal(existsSync(dir), false);
+  });
+});
+
+describe('amendments', () => {
+  it('appends numbered amendments to the packet and mails them as packet content', () => {
+    run();
+    writeFileSync(store.packetPath('b-test'), 'Sweep the session lane.\n');
+    const first = mail.amend(ROOT, 'builder-x', 'Test-script repairs are in scope.');
+    const second = mail.amend(ROOT, 'b-test', 'Delete smoke-only suites.');
+    assert.deepEqual([first.number, second.number], [1, 2]);
+    const packet = readFileSync(store.packetPath('b-test'), 'utf8');
+    assert.match(packet, /## Amendment 1 .*\n\nTest-script repairs are in scope\.\n\n## Amendment 2 /s);
+    const [one] = mail.takeUnread('b-test');
+    assert.equal(one?.kind, 'amendment');
+    assert.match(mail.format(one!), /^\[amendment\] from root \(part of your packet\):\nAmendment 1/);
+    assert.throws(() => mail.amend({ mailbox: 'a-peer', host: 'claude' }, 'b-test', 'x'), /only builder-x's parent/);
+  });
+});
+
+describe('capacity', async () => {
+  const { withinCapacity } = await import('../src/spawn.ts');
+  const config = { ...store.loadConfig(), capacity: { claude: { max: 2, overflow: 'gpt-6-sol@high' } } };
+  const opus = { host: 'claude' as const, model: 'claude-opus-5-5', effort: 'high' as const, strategy: 'jev' as const };
+
+  it('moves a routed spawn off a host at its cap', () => {
+    assert.deepEqual(withinCapacity(opus, config, undefined, () => 1), opus);
+    const moved = withinCapacity(opus, config, undefined, () => 2);
+    assert.deepEqual({ ...moved, reason: undefined }, { host: 'codex', model: 'gpt-6-sol', effort: 'high', strategy: 'overflow', reason: undefined });
+    assert.match(moved.reason ?? '', /claude has 2 live runs \(cap 2\)/);
+    assert.equal(withinCapacity(opus, config, 'max', () => 3).effort, 'xhigh');
+  });
+  it('leaves pins and uncapped hosts alone', () => {
+    assert.deepEqual(withinCapacity({ ...opus, strategy: 'pinned' }, config, undefined, () => 9).host, 'claude');
+    const sol = { host: 'codex' as const, model: 'gpt-6-sol', effort: 'high' as const, strategy: 'jev' as const };
+    assert.deepEqual(withinCapacity(sol, config, undefined, () => 9), sol);
+  });
+});
+
+describe('wakes', async () => {
+  const { deliver } = mail;
+  const { startAgent } = await import('../src/herdr.ts');
+  const stub = () => {
+    const bin = mkdtempSync(join(tmpdir(), 'crew-wake-'));
+    const log = join(bin, 'calls');
+    const starts = join(bin, 'starts');
+    writeFileSync(join(bin, 'herdr'), `#!/bin/sh
+echo "$@" >> '${log}'
+case "$*" in
+  *"agent get"*) echo '{"result":{"agent":{"agent_status":"idle"}}}' ;;
+  *"agent start"*) echo x >> '${starts}'; [ "$(wc -l < '${starts}')" -gt 2 ] || { echo '{"error":{"code":"agent_pane_busy"}}' >&2; exit 1; } ;;
+esac
+`, { mode: 0o755 });
+    const path = process.env.PATH, herdrBin = process.env.HERDR_BIN_PATH;
+    delete process.env.HERDR_BIN_PATH;
+    process.env.PATH = `${bin}:${path}`;
+    return {
+      calls: (verb: string) => readFileSync(log, 'utf8').trim().split('\n').filter(line => line.startsWith(verb)),
+      done: () => { process.env.PATH = path; if (herdrBin) process.env.HERDR_BIN_PATH = herdrBin; rmSync(bin, { recursive: true, force: true }); },
+    };
+  };
+  const letter = (text: string) => ({ id: text, at: new Date().toISOString(), kind: 'message' as const, from: { mailbox: 'b-test', name: 'lane' }, text });
+
+  it('pushes one pointer per unread batch, never the stale text itself', () => {
+    const s = stub();
+    try {
+      const idle = { mailbox: 'claude-busy', host: 'claude' as const, herdrAgent: 'w1:p1' };
+      assert.deepEqual(['one', 'two', 'three'].map(text => deliver(idle, letter(text))), ['herdr-prompt', 'queued', 'queued']);
+      assert.deepEqual(s.calls('agent prompt'), ['agent prompt w1:p1 [crew] new message from lane. Run: crew inbox']);
+      assert.deepEqual(mail.takeUnread('claude-busy').map(m => m.text), ['one', 'two', 'three']);
+      assert.equal(deliver(idle, letter('four')), 'herdr-prompt');
+    } finally { s.done(); }
+  });
+  it('retries agent start while a fresh pane is still loading its shell', () => {
+    const s = stub();
+    try {
+      startAgent('lane', 'codex', 'w1:p7', ['--model', 'm', 'GO']);
+      assert.equal(s.calls('agent start').length, 3);
+    } finally { s.done(); }
   });
 });

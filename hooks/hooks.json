@@ -3,6 +3,9 @@
     "SessionStart": [
       { "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/crew\" hook session-start --host claude", "timeout": 10 }] }
     ],
+    "PostToolUse": [
+      { "hooks": [{ "type": "command", "command": "sh -c '[ -n \"$CREW_RUN\" ] || exit 0; exec \"$0\" hook post-tool --host claude' \"${CLAUDE_PLUGIN_ROOT}/bin/crew\"", "timeout": 5 }] }
+    ],
     "Stop": [
       { "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/crew\" hook stop --host claude", "timeout": 30 }] }
     ],

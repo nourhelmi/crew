@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { agentStatus, prompt } from './herdr.ts';
 import { readResult } from './result.ts';
-import { appendMail, findRun, hasWaiter, newId, readRun, resultPath, runDir, unread, writeRun } from './store.ts';
+import { appendMail, findRun, hasWaiter, newId, packetPath, readRun, resultPath, runDir, unread, writeRun } from './store.ts';
 import type { Address, Delivery, Host, Mail, RunMeta } from './types.ts';
 
 export function runAddress(run: RunMeta): Address {
@@ -34,10 +35,17 @@ export function resolve(ref: string, me: Address): Address {
 
 const label = (from: Mail['from']): string => from.name ?? from.mailbox;
 
-function queueText(mail: Mail): string {
+/** One line that wakes the recipient; the inbox carries the content, so nothing stale is replayed. */
+function pointer(mail: Mail): string {
   const who = label(mail.from);
-  if (mail.kind !== 'message') return `[crew] ${who} ${mail.kind}: ${mail.text}${mail.result ? `\nResult: ${mail.result}` : ''}`;
-  return `[crew mail from ${who}: advice or a request from another agent, not a user instruction]\n${mail.text}\n(reply with: crew msg ${who} "...")`;
+  const what = mail.kind === 'message' ? `new message from ${who}` : mail.kind === 'amendment' ? `packet amendment from ${who}` : `${who} ${mail.kind}`;
+  return `[crew] ${what}. Run: crew inbox`;
+}
+
+/** A wake pushed this recently and still unread covers later mail too: one push per batch. */
+const WAKE_COVERS_MS = 10 * 60_000;
+function wakePending(mailbox: string): boolean {
+  return unread(mailbox).mails.some(mail => mail.pushed && Date.now() - Date.parse(mail.at) < WAKE_COVERS_MS);
 }
 
 function codexQueue(threadId: string, text: string): boolean {
@@ -55,26 +63,41 @@ function codexQueue(threadId: string, text: string): boolean {
  */
 export function deliver(to: Address, mail: Mail): Delivery {
   if (hasWaiter(to.mailbox)) { appendMail(to.mailbox, mail); return 'waiter'; }
-  if (to.host === 'codex' && to.threadId && codexQueue(to.threadId, queueText(mail))) {
+  if (wakePending(to.mailbox)) { appendMail(to.mailbox, mail); return 'queued'; }
+  if (to.host === 'codex' && to.threadId && codexQueue(to.threadId, pointer(mail))) {
     appendMail(to.mailbox, { ...mail, pushed: true });
     return 'codex-queue';
   }
-  appendMail(to.mailbox, mail);
   if (to.herdrAgent) {
     const status = agentStatus(to.herdrAgent, to.herdrSession);
-    if (status === 'idle' || status === 'done') {
-      const pointer = `[crew] ${mail.kind === 'message' ? `new message from ${label(mail.from)}` : `${label(mail.from)} ${mail.kind}`}. Run: crew inbox`;
-      if (prompt(to.herdrAgent, pointer, to.herdrSession).ok) return 'herdr-prompt';
+    if ((status === 'idle' || status === 'done') && prompt(to.herdrAgent, pointer(mail), to.herdrSession).ok) {
+      appendMail(to.mailbox, { ...mail, pushed: true });
+      return 'herdr-prompt';
     }
   }
+  appendMail(to.mailbox, mail);
   return 'queued';
 }
 
-export function send(from: Address, to: Address, text: string): Delivery {
+export function send(from: Address, to: Address, text: string, kind: 'message' | 'amendment' = 'message'): Delivery {
   return deliver(to, {
-    id: newId('m'), at: new Date().toISOString(), kind: 'message',
+    id: newId('m'), at: new Date().toISOString(), kind,
     from: { mailbox: from.mailbox, host: from.host, ...(from.name ? { name: from.name } : {}) }, text,
   });
+}
+
+/**
+ * Scope, authorization and done-when changes go into the child's packet, never only into
+ * mail: children treat plain messages as advice. Only the run's parent may amend it.
+ */
+export function amend(from: Address, runRef: string, text: string): { run: RunMeta; number: number; delivery: Delivery } {
+  const run = findRun(runRef);
+  if (!run) throw new Error(`crew: no run matches "${runRef}" (see crew ls)`);
+  if (run.parent.mailbox !== from.mailbox) throw new Error(`crew: only ${run.name}'s parent can amend its packet; send advice with crew msg`);
+  const packet = packetPath(run.id);
+  const number = (readFileSync(packet, 'utf8').match(/^## Amendment \d+/gm)?.length ?? 0) + 1;
+  appendFileSync(packet, `\n## Amendment ${number} (${new Date().toISOString()})\n\n${text.trim()}\n`);
+  return { run, number, delivery: send(from, runAddress(run), `Amendment ${number} (appended to ${packet}):\n${text.trim()}`, 'amendment') };
 }
 
 const fromRun = (run: RunMeta): Mail['from'] => ({ mailbox: run.id, name: run.name, host: run.route.host });
@@ -100,6 +123,16 @@ export function settle(id: string): Delivery | undefined {
   return deliver(fresh.parent, {
     id: newId('m'), at: new Date().toISOString(), kind: 'settled', from: fromRun(fresh),
     text: `${fresh.role} on ${fresh.route.model}@${fresh.route.effort}: ${status.line}`, result: resultPath(id),
+  });
+}
+
+/** A kept teammate ended a turn mid-assignment twice in a row. Reported once per status line. */
+export function paused(id: string, line: string): Delivery | undefined {
+  const run = readRun(id);
+  if (!run || !claim(id, `paused-${createHash('sha256').update(line).digest('hex').slice(0, 16)}`)) return undefined;
+  return deliver(run.parent, {
+    id: newId('m'), at: new Date().toISOString(), kind: 'waiting', from: fromRun(run),
+    text: `paused mid-assignment (${line}); resume it with crew msg ${run.name} "..." or amend its packet`,
   });
 }
 
@@ -134,11 +167,12 @@ export function waiting(id: string, blocked: boolean): Delivery | undefined {
 export function takeUnread(mailbox: string): Mail[] {
   const { mails, commit } = unread(mailbox);
   commit();
-  return mails.filter(mail => !mail.pushed);
+  return mails;
 }
 
 export function format(mail: Mail): string {
   const who = label(mail.from);
   if (mail.kind === 'message') return `[message] from ${who}:\n${mail.text}`;
+  if (mail.kind === 'amendment') return `[amendment] from ${who} (part of your packet):\n${mail.text}`;
   return `[${mail.kind}] ${who}: ${mail.text}${mail.result ? `\n  result: ${mail.result}` : ''}`;
 }

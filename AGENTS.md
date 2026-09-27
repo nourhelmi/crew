@@ -12,6 +12,11 @@
   claim file (`runs/<id>/.settled-<hash>`, `.stalled`) or by merging into live metadata
   (`updateRun`). Never write a stale `RunMeta` back.
 - Herdr: always pass the run's recorded session (`--session`) and address agents by pane id.
+- Mail: the inbox is the only content channel. Pushes (`codex queue`, herdr prompts) are one-line
+  pointers, one per unread batch, so nothing stale is replayed turn by turn. Children treat plain
+  mail as advice; scope changes go through `crew amend`, which appends to the packet.
+- Hooks run in every Claude/Codex session on the machine: per-tool-call hooks must exit in the
+  shell guard (`$CREW_RUN` unset) before starting node.
 - Codex: hook trust is keyed on the command string, so hook commands must stay version-stable
   (`codex/hooks.json`). `workspace-write` keeps `.git` read-only; spawn grants it via `writable_roots`.
 - Claude Code: `/advisor` is a built-in command, so the skill is `/crew:advisor`.

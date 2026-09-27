@@ -12,6 +12,7 @@ const DEFAULT_CONFIG: Config = {
   router: { enabled: true, command: 'agent-router', timeoutMs: 90_000 },
   args: { claude: ['--permission-mode', 'auto'], codex: [] },
   trust: { roots: [] },
+  capacity: {},
 };
 
 export function loadConfig(): Config {
@@ -21,6 +22,7 @@ export function loadConfig(): Config {
     router: { ...DEFAULT_CONFIG.router, ...user.router },
     args: { ...DEFAULT_CONFIG.args, ...user.args },
     trust: { roots: (user.trust?.roots ?? DEFAULT_CONFIG.trust.roots).map(root => root.replace(/^~(?=\/|$)/, homedir())) },
+    capacity: { ...DEFAULT_CONFIG.capacity, ...user.capacity },
   };
 }
 

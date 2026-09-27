@@ -23,14 +23,14 @@ most of what's needed:
 - **Codex** has subagents, hooks, plugins, and `codex queue`, which starts a turn in an idle thread.
 - **herdr** gives agents visible panes and lifecycle state.
 
-What's missing is the glue *between* hosts. crew is that glue: about 1,400 lines of
+What's missing is the glue *between* hosts. crew is that glue: about 1,600 lines of
 dependency-free TypeScript, plus plain files in `~/.crew`.
 
 | Primitive | How crew does it |
 |---|---|
 | **Spawn** | `crew spawn` picks a model (pinned, a pluggable router, or role defaults), and **the model decides the CLI**. Inside herdr the child opens in a pane beside you; outside, it runs as `claude --bg` or `codex exec`. |
 | **Wake** | The child writes `result.md`, and its Stop hook settles it to the parent. The parent is woken natively: its background `crew wait` exits in Claude Code, `codex queue` pushes into its thread in Codex, or an idle herdr pane gets a one-line pointer. The parent also sweeps for children whose hooks never ran. |
-| **Message** | `crew msg <name\|parent\|run>` writes to a file inbox (the source of truth), then pushes the same wake. A session with unread mail is held open at turn end until it has read it. |
+| **Message** | `crew msg <name\|parent\|run>` writes to a file inbox (the source of truth), then pushes a one-line pointer (one per unread batch). A busy child hears about new mail after its next tool call, and a session with unread mail is held open at turn end until it has read it. Children treat messages as advice; `crew amend <run>` changes a child's scope by appending to its packet. |
 
 Same-host, short-lived makers use the host's own subagents: Claude's `Agent` tool and Codex's
 `spawn_agent`, both with an `advisor-maker` agent that must write a terminal result before stopping.
@@ -100,7 +100,8 @@ crew spawn --role builder --packet packet.md --name api       # routed: model �
 crew spawn --role checker --model gpt-6-sol@xhigh -- "review the auth diff"
 crew spawn --role advisor --keep --name billing --packet p.md # a CoS teammate
 crew wait                  # blocks until a child settles/stalls/needs a dialog, or mail arrives
-crew msg billing "…"       # follow-up, answer, or a new assignment (--file for long ones)
+crew msg billing "…"       # follow-up or answer: advice (--file for long ones)
+crew amend billing "…"     # scope, authorization, done-when or a new assignment: appended to its packet
 crew inbox · crew ls · crew read api · crew stop api
 crew route --role builder --task "…"                           # where would this go?
 ```
@@ -135,11 +136,15 @@ off, spawns use the role `defaults`, and `--model` still pins. Intelligence prof
   "defaults": { "advisor": "claude-opus-5-5@high", "builder": "gpt-6-sol@high", "checker": "gpt-6-sol@xhigh" },
   "router":   { "enabled": true, "command": "agent-router", "timeoutMs": 90000 },
   "args":     { "claude": ["--permission-mode", "auto"], "codex": [] },
-  "trust":    { "roots": [] }
+  "trust":    { "roots": [] },
+  "capacity": { "claude": { "max": 2, "overflow": "gpt-6-sol@high" } }
 }
 ```
 
-`args` are appended to every child of that host. Codex children otherwise inherit your Codex
+`args` are appended to every child of that host. `capacity` (opt-in, empty by default) caps
+live crew runs per host. Every session on a host shares one subscription's rate limits, and
+a router that picks per spawn can't see four Opus lanes burning one 5-hour window. A routed
+spawn past the cap goes to that host's `overflow` model; a `--model` pin stays put, with a warning. Codex children otherwise inherit your Codex
 config (approvals and sandbox). crew never adds bypass flags; put them in `args` if you want them.
 
 ## How it holds up
@@ -160,6 +165,9 @@ config (approvals and sandbox). crew never adds bypass flags; put them in `args`
   for children and `advisor · <workstream>` for the root (`crew label <text>` to rename your own). Finished children close their own pane; failed or blocked ones stay open.
 - **Dialogs**: a child stuck on an approval, question or trust dialog wakes its parent with a
   `waiting` notice that says where to answer it.
+- **Kept teammates** that must end a turn mid-assignment write `IN PROGRESS: <next step>`.
+  It settles nothing; the Stop hook sends them back to work once, and a second stop on it
+  reaches the parent as a `waiting` notice.
 
 Verified end to end on Claude Code 2.1.280 and Codex 0.157:
 

@@ -6,9 +6,9 @@ import { parseArgs } from 'node:util';
 import { closePane, herdr, inHerdr, labelPane } from './herdr.ts';
 import { isHookEvent, runHook } from './hook.ts';
 import { self } from './identity.ts';
-import { format, resolve, send, takeUnread } from './mail.ts';
+import { amend, format, resolve, send, takeUnread } from './mail.ts';
 import { isEffort, route } from './route.ts';
-import { spawn } from './spawn.ts';
+import { liveOnHost, spawn } from './spawn.ts';
 import { checkouts, trustPaths, trustTargets } from './trust.ts';
 import { routerSetting, setSessionRouter } from './settings.ts';
 import { configPath, findRun, listRuns, loadConfig, readJson, resultPath, runDir, writeJson, writeRun } from './store.ts';
@@ -23,7 +23,8 @@ const HELP = `crew: advisor crews on native Claude Code and Codex
       else claude --bg / codex exec). Prints the run.
   crew wait [--timeout 30m]    Block until a child settles/stalls or mail arrives; print it; exit.
                                Claude: run it as a background command, it wakes you on exit.
-  crew msg <to> [TEXT... | --file F]   to = parent | run name | run id | mailbox
+  crew msg <to> [TEXT... | --file F]   to = parent | run name | run id | mailbox (advice)
+  crew amend <run> [TEXT... | --file F] Append to your child's packet: scope, authorization, done-when.
   crew inbox                   Print unread mail.
   crew ls [--all]              Your children (or everything).
   crew read <run>              Result, or the tail of its terminal/log.
@@ -118,6 +119,12 @@ async function main(argv: string[]): Promise<void> {
       const where = run.herdr ? `herdr pane ${run.herdr.pane}` : run.bgId ? `claude --bg ${run.bgId}` : run.pid ? `codex exec pid ${run.pid}` : run.launcher;
       console.log(`${values['dry-run'] ? 'would spawn' : 'spawned'} ${run.name} (run ${run.id}): ${run.route.host} ${run.route.model}@${run.route.effort} [${run.route.strategy}] via ${where}`);
       if (run.route.reason && run.route.strategy === 'default') console.log(`  routing fell back to the role default: ${run.route.reason}`);
+      if (run.route.strategy === 'overflow') console.log(`  capacity: ${run.route.reason}`);
+      const cap = loadConfig().capacity[run.route.host];
+      const live = liveOnHost(run.route.host) + (values['dry-run'] ? 1 : 0);
+      if (cap && run.route.strategy === 'pinned' && live > cap.max) {
+        console.log(`  note: ${live} live ${run.route.host} runs, over the cap of ${cap.max}; they share one rate limit`);
+      }
       if (!values['dry-run']) console.log(`  result: ${resultPath(run.id)}\n  wake: crew wait${run.parent.host === 'claude' ? ' (as a background command)' : ''}`);
       return;
     }
@@ -137,6 +144,15 @@ async function main(argv: string[]): Promise<void> {
       const me = self();
       const target = resolve(to, me);
       console.log(`sent to ${target.name ?? target.mailbox}: ${send(me, target, text)}`);
+      return;
+    }
+    case 'amend': {
+      const [ref, ...words] = positionals;
+      if (!ref) fail('crew: crew amend <run> TEXT');
+      const text = values.file ? readFileSync(values.file, 'utf8') : words.length ? words.join(' ') : stdin();
+      if (!text.trim()) fail('crew: empty amendment');
+      const { run, number, delivery } = amend(self(), ref, text);
+      console.log(`amendment ${number} appended to ${run.name}'s packet: ${delivery}`);
       return;
     }
     case 'inbox': {

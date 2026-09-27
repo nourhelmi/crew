@@ -12,7 +12,7 @@ export interface Route {
   host: Host;
   model: string;
   effort: Effort;
-  strategy: 'pinned' | 'jev' | 'fallback' | 'default';
+  strategy: 'pinned' | 'jev' | 'fallback' | 'default' | 'overflow';
   reason?: string;
 }
 
@@ -57,7 +57,7 @@ export interface RunMeta {
   waitingSince?: string;
 }
 
-export type MailKind = 'message' | 'settled' | 'stalled' | 'waiting';
+export type MailKind = 'message' | 'amendment' | 'settled' | 'stalled' | 'waiting';
 
 export interface Mail {
   id: string;
@@ -67,7 +67,7 @@ export interface Mail {
   text: string;
   /** Result file for settlement notices. */
   result?: string;
-  /** Already shown to the recipient in full by a push (e.g. `codex queue`); readers skip it. */
+  /** A wake pointer was pushed for this mail (`codex queue` or a herdr prompt). */
   pushed?: boolean;
 }
 
@@ -81,4 +81,9 @@ export interface Config {
   args: Record<Host, string[]>;
   /** Opt-in: every checkout under these roots is trusted by both CLIs (no folder-trust dialogs). */
   trust: { roots: string[] };
+  /**
+   * Opt-in per-host cap on live crew runs. They share one subscription's rate limits, which a
+   * point-in-time router can't see being burned. A routed spawn over the cap goes to `overflow`.
+   */
+  capacity: Partial<Record<Host, { max: number; overflow: string }>>;
 }

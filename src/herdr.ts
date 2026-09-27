@@ -76,7 +76,13 @@ export function splitAway(caller: string, stack: readonly string[], cwd: string,
  * which a working one never is, so give it a few seconds and then only require that herdr sees it.
  */
 export function startAgent(name: string, kind: string, pane: string, argv: string[], session?: string): void {
-  const started = herdr(['agent', 'start', name, '--kind', kind, '--pane', pane, '--timeout', '8000', '--', ...argv], 15_000, session);
+  const start = (): Result => herdr(['agent', 'start', name, '--kind', kind, '--pane', pane, '--timeout', '8000', '--', ...argv], 15_000, session);
+  let started = start();
+  // A fresh split's shell may still be loading its rc files; herdr refuses (nothing typed) until it's up.
+  for (let waited = 0; !started.ok && started.error.includes('agent_pane_busy') && waited < 10_000; waited += 500) {
+    execFileSync('sleep', ['0.5']);
+    started = start();
+  }
   if (started.ok) return;
   for (let waited = 0; waited < 20_000; waited += 1_000) {
     if (agentStatus(pane, session)) return;
