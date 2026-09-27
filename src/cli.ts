@@ -7,6 +7,7 @@ import { closePane, herdr, inHerdr, labelPane } from './herdr.ts';
 import { isHookEvent, runHook } from './hook.ts';
 import { self } from './identity.ts';
 import { amend, format, resolve, send, takeUnread } from './mail.ts';
+import { grade } from './outcome.ts';
 import { isEffort, route } from './route.ts';
 import { liveOnHost, spawn } from './spawn.ts';
 import { checkouts, trustPaths, trustTargets } from './trust.ts';
@@ -19,12 +20,15 @@ const HELP = `crew: advisor crews on native Claude Code and Codex
 
   crew spawn --role advisor|builder|checker (--task TEXT | --packet FILE | -- TEXT | stdin)
              [--model M[@effort]] [--effort E] [--name N] [--cwd DIR] [--keep] [--dry-run]
+             [--checks RUN]
       Route (Jev unless --model), pick the CLI from the model, launch it (herdr pane,
-      else claude --bg / codex exec). Prints the run.
+      else claude --bg / codex exec). Prints the run. A checker given --checks RUN reports
+      how RUN's work held up, and routing learns from it.
   crew wait [--timeout 30m]    Block until a child settles/stalls or mail arrives; print it; exit.
                                Claude: run it as a background command, it wakes you on exit.
   crew msg <to> [TEXT... | --file F]   to = parent | run name | run id | mailbox (advice)
   crew amend <run> [TEXT... | --file F] Append to your child's packet: scope, authorization, done-when.
+  crew grade <run> good|bad [NOTE...]   Your verdict on a child's work; routing learns from it.
   crew inbox                   Print unread mail.
   crew ls [--all]              Your children (or everything).
   crew read <run>              Result, or the tail of its terminal/log.
@@ -102,6 +106,7 @@ async function main(argv: string[]): Promise<void> {
       effort: { type: 'string' }, name: { type: 'string' }, cwd: { type: 'string' }, keep: { type: 'boolean' },
       'dry-run': { type: 'boolean' }, timeout: { type: 'string' }, file: { type: 'string' }, all: { type: 'boolean' },
       host: { type: 'string' }, json: { type: 'boolean' }, quiet: { type: 'boolean' }, global: { type: 'boolean' },
+      checks: { type: 'string' },
     },
   });
 
@@ -114,7 +119,7 @@ async function main(argv: string[]): Promise<void> {
       const run = await spawn({
         role, task, cwd: resolvePath(values.cwd ?? process.cwd()), keep: Boolean(values.keep), dryRun: Boolean(values['dry-run']),
         ...(values.model ? { model: values.model } : {}), ...(values.effort && isEffort(values.effort) ? { effort: values.effort } : {}),
-        ...(values.name ? { name: values.name } : {}),
+        ...(values.name ? { name: values.name } : {}), ...(values.checks ? { checks: values.checks } : {}),
       });
       if (values.json) { console.log(JSON.stringify(run)); return; }
       const where = run.herdr ? `herdr pane ${run.herdr.pane}` : run.bgId ? `claude --bg ${run.bgId}` : run.pid ? `codex exec pid ${run.pid}` : run.launcher;
@@ -154,6 +159,13 @@ async function main(argv: string[]): Promise<void> {
       if (!text.trim()) fail('crew: empty amendment');
       const { run, number, delivery } = amend(self(), ref, text);
       console.log(`amendment ${number} appended to ${run.name}'s packet: ${delivery}`);
+      return;
+    }
+    case 'grade': {
+      const [ref, verdict, ...words] = positionals;
+      if (!ref || (verdict !== 'good' && verdict !== 'bad')) fail('crew: crew grade <run> good|bad [NOTE...]');
+      const { run, routed } = grade(safeSelf(), ref, verdict === 'good', words.join(' '));
+      console.log(`graded ${run.name} (${run.route.model}@${run.route.effort}, ${run.role}) ${verdict}${routed ? '' : '; router unavailable, kept in ~/.crew/outcomes.jsonl'}`);
       return;
     }
     case 'inbox': {

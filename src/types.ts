@@ -55,6 +55,10 @@ export interface RunMeta {
   settled?: { hash: string; at: string; status: string };
   /** Set while herdr reports the child blocked on a dialog. */
   waitingSince?: string;
+  /** Checker only: the run whose work it reviews; its verdict becomes routing evidence for that run. */
+  checks?: string;
+  /** The parent's verdict on this run's work (`crew grade`). */
+  grade?: { good: boolean; at: string; note?: string };
 }
 
 export type MailKind = 'message' | 'amendment' | 'settled' | 'stalled' | 'waiting';

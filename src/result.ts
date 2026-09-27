@@ -9,8 +9,12 @@ export interface ResultStatus {
   verdict: Verdict;
   /** First line under Status, verbatim. */
   line: string;
+  /** A --checks checker's judgment of the work before its own repairs (`As found: HELD|FIXED|BROKEN`). */
+  found?: Found;
   hash: string;
 }
+
+export type Found = 'held' | 'fixed' | 'broken';
 
 const TERMINAL: ReadonlyArray<readonly [RegExp, Verdict]> = [
   [/^(DONE|PASS(ED)?)\b/i, 'done'],
@@ -28,7 +32,10 @@ export function parseResult(text: string): Omit<ResultStatus, 'hash'> | undefine
   if (!line || /^#/.test(line)) return undefined;
   const cleaned = line.replace(/^[-*>\s`*_]+|[`*_]+$/g, '').trim();
   const verdict = TERMINAL.find(([pattern]) => pattern.test(cleaned))?.[1];
-  return verdict ? { verdict, line: cleaned } : undefined;
+  if (!verdict) return undefined;
+  const found = lines.map(l => l.replace(/^[-*>\s`*_]+/, '').match(/^as found\s*:?[\s`*_]*(held|fixed|broken)\b/i)?.[1])
+    .find(Boolean)?.toLowerCase() as Found | undefined;
+  return { verdict, line: cleaned, ...(found ? { found } : {}) };
 }
 
 /** A kept teammate's mid-assignment status (`IN PROGRESS: <next step>`); it settles nothing. */

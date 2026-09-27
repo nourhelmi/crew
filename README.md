@@ -168,11 +168,12 @@ The advisor drives crew for you. By hand:
 
 ```sh
 crew spawn --role builder --packet api.md --name api          # routed: the model picks the CLI
-crew spawn --role checker --model gpt-6-sol@xhigh -- "review the auth diff"
+crew spawn --role checker --checks api --packet review.md        # its verdict on api's work teaches routing
 crew spawn --role advisor --keep --name billing --packet p.md # a CoS teammate
 crew wait                       # until a child settles, stalls or needs a dialog, or mail arrives
 crew msg billing "…"            # follow-up or answer (advice)
 crew amend billing "…"          # scope, authority, done-when or a new assignment: appended to its packet
+crew grade api bad "missed the migration"                      # your verdict; routing learns from it
 crew inbox · crew ls · crew read api · crew stop api
 crew route --role builder --task "…"                           # where would this go?
 crew router off                 # this session and its children (see Routing)
@@ -193,7 +194,7 @@ follows that contract works. If no router is installed or it fails, spawn uses t
 | `anthropic/…`, `claude-bridge/…`, `claude-*`, `opus`, `sonnet` | **Claude Code** |
 | `openai/…`, `openai-codex/…`, `gpt-*` | **Codex** |
 
-Efforts a CLI lacks are clamped (Codex has no `max`, so it becomes `xhigh`).
+Efforts a CLI lacks are clamped to the nearest one it has (Claude Code has no `minimal`).
 
 | To turn routing off… | Run | Applies to |
 |---|---|---|
@@ -203,6 +204,22 @@ Efforts a CLI lacks are clamped (Codex has no `max`, so it becomes `xhigh`).
 | everywhere | `crew router off --global` | the config |
 
 With routing off, spawns use the role `defaults`, and `--model` still pins.
+
+### Routing learns
+
+A maker's own DONE says little, so crew learns from reviewed verdicts instead:
+
+- **A checker's verdict.** A checker spawned with `--checks <run>` adds `As found: HELD`, `FIXED` or
+  `BROKEN` under its status, judging that run's work before its own repairs. HELD counts for that
+  run's model in its role; FIXED and BROKEN count against it.
+- **The parent's grade.** `crew grade <run> good|bad "<why>"` records the parent's verdict on any
+  child, including checkers and child advisors. Agents grade only their own children; you can grade
+  any run from a plain terminal. Grading a run again replaces the earlier grade.
+
+Every outcome is appended to `~/.crew/outcomes.jsonl` and sent to the router's `outcomes record`.
+agent-router keeps a per-model, per-role track record that fades with age and shifts task fit once
+evidence builds up (`agent-router outcomes stats` shows it). The advisor skill does both steps as
+part of normal review.
 
 ## Configuration
 

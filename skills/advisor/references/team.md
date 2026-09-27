@@ -14,6 +14,7 @@ the same either way:
 | message a teammate, or the root | `crew msg <name|parent> "…"` or `--file <file>` |
 | context or follow-up (advice) | `crew msg <name> "…"` or `--file <file>` |
 | change scope, authorization or done-when, or assign a distinct outcome | `crew amend <name> "…"` or `--file <new-packet>`: appended to its packet; the teammate rewrites its result.md for a new outcome |
+| judge a delivered outcome (routing learns from it) | `crew grade <name> good\|bad "<why>"` |
 | rename | not supported; retire and enlist under the new name |
 | retire | tell it to settle its own children, wait for its settle notice, then `crew stop <name>` |
 

@@ -625,3 +625,79 @@ describe('prompt-cache keepalive', async () => {
     assert.equal(transcriptPath({ mailbox: 'claude-nope', host: 'claude' }, { CLAUDE_CONFIG_DIR: claudeHome }), undefined);
   });
 });
+
+describe('routing evidence', async () => {
+  const { grade, outcomesPath } = await import('../src/outcome.ts');
+  const { chmodSync } = await import('node:fs');
+  const sent = join(HOME, 'router-received.jsonl');
+  const fake = join(HOME, 'fake-router.sh');
+  const config = process.env.CREW_CONFIG!;
+  const received = () => (existsSync(sent) ? readFileSync(sent, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)) : []);
+  beforeEach(() => {
+    writeFileSync(fake, `#!/bin/sh\n[ "$1 $2" = "outcomes record" ] || exit 2\ncat >> '${sent}'\necho >> '${sent}'\n`);
+    chmodSync(fake, 0o755);
+    writeFileSync(config, JSON.stringify({ router: { command: fake } }));
+    rmSync(sent, { force: true }); rmSync(outcomesPath(), { force: true });
+  });
+  after(() => rmSync(config, { force: true }));
+
+  const checker = (status: string, found?: string) => {
+    run({ id: 'c-test', name: 'checker-y', role: 'checker', checks: 'b-test', route: { host: 'claude', model: 'claude-sonnet-5', effort: 'high', strategy: 'jev' } });
+    writeFileSync(store.resultPath('c-test'), `# Status\n${status}\n${found ? `- **As found:** ${found}\n` : ''}\n# Claims\n- ok\n`);
+    return mail.settle('c-test');
+  };
+
+  it('parses the as-found line in its usual spellings', () => {
+    assert.equal(parseResult('# Status\nPASS\nAs found: HELD\n')?.found, 'held');
+    assert.equal(parseResult('# Status\nPASS: repaired two\n- **As found:** FIXED\n')?.found, 'fixed');
+    assert.equal(parseResult('## Status\nFAIL\n`As found: broken`\n')?.found, 'broken');
+    assert.equal(parseResult('# Status\nPASS\n')?.found, undefined);
+  });
+  it("turns a checker's verdict into evidence about the checked run's model", () => {
+    run();
+    assert.equal(checker('PASS: repaired the rounding bug', 'FIXED'), 'queued');
+    const [entry] = received();
+    assert.equal(entry.model, 'gpt-6-sol'); assert.equal(entry.thinking, 'high'); assert.equal(entry.role, 'builder');
+    assert.equal(entry.signal, 'review'); assert.equal(entry.success, false); assert.equal(entry.run, 'b-test');
+    assert.match(entry.note, /checker-y: PASS/);
+    assert.deepEqual(readFileSync(outcomesPath(), 'utf8').trim().split('\n').map(l => JSON.parse(l)), [entry], 'kept locally too');
+    assert.equal(mail.takeUnread('claude-root').length, 1, 'the parent still hears about it');
+  });
+  it('counts HELD for the work, a bare FAIL against it, and ignores a bare PASS or BLOCKED', () => {
+    run(); checker('PASS', 'HELD');
+    assert.deepEqual(received().map(e => e.success), [true]);
+    rmSync(sent, { force: true }); checker('FAIL: two claims unproven');
+    assert.deepEqual(received().map(e => e.success), [false]);
+    rmSync(sent, { force: true }); checker('PASS');
+    checker('BLOCKED: no staging access');
+    assert.deepEqual(received(), []);
+  });
+  it('a run without --checks produces no evidence', () => {
+    run({ id: 'c-test', role: 'checker' });
+    writeResult('c-test', 'FAIL: broken');
+    mail.settle('c-test');
+    assert.deepEqual(received(), []);
+  });
+  it('grades: parent only, a person in a terminal may grade anything, and grading again replaces', () => {
+    run();
+    assert.throws(() => grade({ mailbox: 'someone-else', host: 'codex' }, 'b-test', true), /only builder-x's parent/);
+    assert.equal(grade(ROOT, 'builder-x', false, 'missed the migration').routed, true);
+    assert.equal(grade(undefined, 'b-test', true).run.grade?.good, true);
+    const [first, second] = received();
+    assert.equal(first.id, second.id, 'same id, so the router replaces the first grade');
+    assert.equal(first.signal, 'grade'); assert.equal(first.success, false); assert.equal(first.note, 'missed the migration');
+    assert.equal(second.success, true);
+  });
+  it('keeps the outcome locally when the router is missing', () => {
+    writeFileSync(config, JSON.stringify({ router: { command: join(HOME, 'no-such-router') } }));
+    run();
+    assert.equal(grade(ROOT, 'b-test', true).routed, false);
+    assert.equal(readFileSync(outcomesPath(), 'utf8').trim().split('\n').length, 1);
+  });
+  it('asks a --checks checker for the as-found line', () => {
+    const text = bootstrap({ id: 'c-1', name: 'checker-y', role: 'checker', keep: false, parent: ROOT, checks: 'b-test' });
+    assert.match(text, /checking the work of run b-test/);
+    assert.match(text, /As found: HELD/);
+    assert.doesNotMatch(bootstrap({ id: 'c-1', name: 'checker-y', role: 'checker', keep: false, parent: ROOT }), /As found/);
+  });
+});

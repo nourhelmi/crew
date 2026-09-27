@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { agentStatus, prompt } from './herdr.ts';
+import { reviewed } from './outcome.ts';
 import { readResult } from './result.ts';
 import { appendMail, findRun, hasWaiter, newId, packetPath, readRun, resultPath, runDir, unread, writeRun } from './store.ts';
 import type { Address, Delivery, Host, Mail, RunMeta } from './types.ts';
@@ -120,6 +121,8 @@ export function settle(id: string): Delivery | undefined {
     settled: { hash: status.hash, at: new Date().toISOString(), status: status.line },
   };
   writeRun(fresh);
+  // Routing evidence is best effort; settling must reach the parent regardless.
+  try { reviewed(fresh, status); } catch { /* recorded nowhere, reported anyway */ }
   return deliver(fresh.parent, {
     id: newId('m'), at: new Date().toISOString(), kind: 'settled', from: fromRun(fresh),
     text: `${fresh.role} on ${fresh.route.model}@${fresh.route.effort}: ${status.line}`, result: resultPath(id),
