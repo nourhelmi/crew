@@ -72,6 +72,7 @@ Then, in any repository:
 |---|---|---|
 | Lead a workstream | `/crew:advisor ship the billing migration` | `$advisor ship the billing migration` |
 | Run a standing team | `/crew:cos …` | `$cos …` |
+| Set up your models | `/crew:roster` | `$roster` |
 | Routing on or off | `/crew:router off` | `$router off` |
 
 The advisor decides what to do itself and what to delegate. Inside [herdr](https://herdr.dev) its
@@ -189,10 +190,38 @@ payload `{ role, task, harness: "native" }`, then reads `selected.model` and `se
 It uses [agent-router](https://github.com/nourhelmi/agent-router) by default, and any command that
 follows that contract works. If no router is installed or it fails, spawn uses the role defaults.
 
+### Your roster
+
+The roster is the list of models you can run, per role, in preference order, with what each one
+is for and what it costs you. It lives in `~/.config/crew/roster.json`, and `crew roster` shows it
+with each model's track record. The `roster` skill (`/crew:roster`, `$roster`) builds one with you:
+it asks what subscriptions you have and what you think of the models, drafts the entries, and tries
+them on your real tasks with `crew route` until the picks look right.
+
+```json
+{ "models": [
+  { "model": "codex/gpt-6-sol", "effort": "high", "roles": ["advisor", "builder"], "cost": 0.15,
+    "about": "the workhorse",
+    "use": "implementation whose approach is clear; lanes that execute a known plan",
+    "avoid": "open product or architecture decisions" },
+  { "model": "claude/claude-opus-5-5", "effort": "high", "roles": ["advisor", "builder"], "cost": 1,
+    "use": "lanes whose hard part is deciding what to build; greenfield UX",
+    "avoid": "work whose approach is already decided; review" }
+] }
+```
+
+- **`cost`** runs from 0 to 1 and is the share of your limits one assignment burns. A small plan
+  makes its models dearer. On near-ties the router picks the cheaper model.
+- **`use`** and **`avoid`** are what the router judges fit on. Always say what a model is worse at:
+  if every entry sounds good at everything, the router can't tell them apart.
+- **Without a router**, each spawn takes the first model per role. **With
+  [agent-router](https://github.com/nourhelmi/agent-router)**, run `agent-router roster use --file
+  ~/.config/crew/roster.json` (or `agent-router init --roster …`) and it routes from the same file.
+
 | Model id | Runs in |
 |---|---|
-| `anthropic/…`, `claude-bridge/…`, `claude-*`, `opus`, `sonnet` | **Claude Code** |
-| `openai/…`, `openai-codex/…`, `gpt-*` | **Codex** |
+| `claude/…`, `anthropic/…`, `claude-bridge/…`, `claude-*`, `opus`, `sonnet` | **Claude Code** |
+| `codex/…`, `openai/…`, `openai-codex/…`, `gpt-*` | **Codex** |
 
 Efforts a CLI lacks are clamped to the nearest one it has (Claude Code has no `minimal`).
 
@@ -235,6 +264,8 @@ part of normal review.
 }
 ```
 
+- **`defaults`** are the per-role models used when routing is off or fails. A role you leave out
+  falls back to your roster's first launchable model for it, then to the built-in default.
 - **`args`** are appended to every child of that host. Codex children otherwise inherit your Codex
   config (approvals and sandbox). crew never adds bypass flags; put them here if you want them.
 - **`capacity`** (opt-in, empty by default) caps live crew runs per host. Every session on a host

@@ -8,6 +8,7 @@ import { after, beforeEach, describe, it } from 'node:test';
 const HOME = mkdtempSync(join(tmpdir(), 'crew-test-'));
 process.env.CREW_HOME = HOME;
 process.env.CREW_CONFIG = join(HOME, 'no-config.json');
+process.env.CREW_ROSTER = join(HOME, 'no-roster.json');
 
 const { parseModel, route, clampEffort } = await import('../src/route.ts');
 const { parseResult } = await import('../src/result.ts');
@@ -699,5 +700,48 @@ describe('routing evidence', async () => {
     assert.match(text, /checking the work of run b-test/);
     assert.match(text, /As found: HELD/);
     assert.doesNotMatch(bootstrap({ id: 'c-1', name: 'checker-y', role: 'checker', keep: false, parent: ROOT }), /As found/);
+  });
+});
+
+describe('roster', async () => {
+  const { loadRoster, rosterDefaults, unrunnable } = await import('../src/roster.ts');
+  const file = join(HOME, 'roster.json');
+  const entry = (model: string, roles: string[], extra: Record<string, unknown> = {}) => ({ model, effort: 'high', roles, cost: 0.5, use: 'things', ...extra });
+  after(() => { process.env.CREW_ROSTER = join(HOME, 'no-roster.json'); rmSync(file, { force: true }); });
+
+  it('parses host ids alongside the older provider prefixes', () => {
+    assert.deepEqual(parseModel('codex/gpt-6-sol@high'), { host: 'codex', model: 'gpt-6-sol', effort: 'high' });
+    assert.equal(parseModel('claude/claude-sonnet-5').host, 'claude');
+    assert.match(unrunnable('devin/devin-2') ?? '', /no native CLI/);
+    assert.equal(unrunnable('codex/gpt-6-luna'), undefined);
+  });
+  it('validates entries and names the bad one', () => {
+    writeFileSync(file, JSON.stringify({ models: [entry('codex/gpt-6-sol', ['builder']), entry('sol', ['builder'])] }));
+    assert.throws(() => loadRoster(file), /models\[1\]: model must be "<host>\/<model id>"/);
+    writeFileSync(file, JSON.stringify({ models: [entry('codex/gpt-6-sol', ['maker'])] }));
+    assert.throws(() => loadRoster(file), /roles must be/);
+    writeFileSync(file, JSON.stringify({ models: [entry('codex/gpt-6-sol', ['builder'], { cost: 3 })] }));
+    assert.throws(() => loadRoster(file), /cost must be 0..1/);
+    assert.equal(loadRoster(join(HOME, 'absent.json')), undefined);
+  });
+  it('defaults each role to its first launchable, enabled model', () => {
+    const roster = [
+      entry('devin/devin-2', ['builder']), entry('codex/gpt-6-luna', ['checker'], { enabled: false }),
+      entry('codex/gpt-6-sol', ['advisor', 'builder', 'checker']), entry('claude/claude-sonnet-5', ['checker']),
+    ];
+    assert.deepEqual(rosterDefaults(roster as never), { advisor: 'codex/gpt-6-sol@high', builder: 'codex/gpt-6-sol@high', checker: 'codex/gpt-6-sol@high' });
+  });
+  it('explicit defaults beat the roster, and a broken roster never breaks config loading', () => {
+    process.env.CREW_ROSTER = file;
+    writeFileSync(file, JSON.stringify({ models: [entry('claude/claude-sonnet-5', ['checker'])] }));
+    writeFileSync(process.env.CREW_CONFIG!, JSON.stringify({ defaults: { builder: 'gpt-6-luna@max' } }));
+    try {
+      const { defaults } = store.loadConfig();
+      assert.equal(defaults.checker, 'claude/claude-sonnet-5@high');
+      assert.equal(defaults.builder, 'gpt-6-luna@max');
+      assert.equal(defaults.advisor, 'claude-opus-5-5@high', 'built-in when neither says');
+      writeFileSync(file, '{ not json');
+      assert.equal(store.loadConfig().defaults.checker, 'gpt-6-sol@xhigh');
+    } finally { rmSync(process.env.CREW_CONFIG!, { force: true }); }
   });
 });

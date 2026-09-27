@@ -6,7 +6,7 @@
   so CLI changes are live immediately. Skills, agent defs and hook files are copied into the plugin
   caches: bump `version` in `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json`, then run
   `node scripts/install.ts`.
-- Tests must never touch the user's real herdr, Claude or Codex state: use `CREW_HOME`/`CREW_CONFIG`
+- Tests must never touch the user's real herdr, Claude or Codex state: use `CREW_HOME`/`CREW_CONFIG`/`CREW_ROSTER`
   temp dirs and a stub `herdr` on `PATH` (see `test/crew.test.ts`).
 - State is plain files in `~/.crew`; every cross-process race is settled by an exclusive-create
   claim file (`runs/<id>/.settled-<hash>`, `.stalled`) or by merging into live metadata

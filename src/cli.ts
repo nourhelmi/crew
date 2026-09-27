@@ -8,6 +8,7 @@ import { isHookEvent, runHook } from './hook.ts';
 import { self } from './identity.ts';
 import { amend, format, resolve, send, takeUnread } from './mail.ts';
 import { grade } from './outcome.ts';
+import { loadRoster, rosterPath, unrunnable } from './roster.ts';
 import { isEffort, route } from './route.ts';
 import { liveOnHost, spawn } from './spawn.ts';
 import { checkouts, trustPaths, trustTargets } from './trust.ts';
@@ -38,6 +39,7 @@ const HELP = `crew: advisor crews on native Claude Code and Codex
                                Jev routing for this agent session, or (run in a plain terminal)
                                for every session launched from that shell; children inherit it.
                                --global edits the config; CREW_ROUTER=off|on in the env wins.
+  crew roster [--json]         Your models per role, in preference order, with cost and track record.
   crew trust [PATH... | --all] [--quiet]
                                Trust checkouts under the trust roots (default ~/Dev) in both CLIs.
   crew label <text>            Name this herdr pane (children are named role · name automatically).
@@ -232,6 +234,37 @@ async function main(argv: string[]): Promise<void> {
       }[setting.source];
       console.log(`router: ${setting.on ? 'on' : 'off'} (${scope})`);
       console.log(`  command: ${config.router.command} · defaults when off or failing: ${ROLES.map(role => `${role}=${config.defaults[role]}`).join(', ')}`);
+      return;
+    }
+    case 'roster': {
+      const path = rosterPath();
+      const entries = loadRoster(path);
+      if (!entries) {
+        console.log(`no roster at ${path}. Write one with the roster skill (/crew:roster in Claude Code, $roster in Codex).`);
+        return;
+      }
+      const router = (args: string[]): Record<string, any> | undefined => {
+        try { return JSON.parse(execFileSync(loadConfig().router.command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 20_000 })); }
+        catch { return undefined; }
+      };
+      const status = router(['status']);
+      const stats = router(['outcomes', 'stats'])?.candidates as { candidate: string; role: string; outcomes: number; successes: number }[] | undefined;
+      if (values.json) { console.log(JSON.stringify({ path, models: entries, router: status ? { rosterFile: status.rosterFile ?? null } : null, stats: stats ?? [] })); return; }
+      const reads = !status ? 'router not installed: spawns use the first model per role'
+        : status.rosterFile === path ? 'the router reads it'
+        : `the router uses its own catalog; switch with: ${loadConfig().router.command} roster use --file ${path}`;
+      console.log(`roster ${path} · ${reads}`);
+      for (const role of ROLES) {
+        const mine = entries.filter(e => e.roles.includes(role));
+        mine.forEach((e, index) => {
+          const id = `${e.model}@${e.effort}`;
+          const record = stats?.find(s => s.candidate === id && s.role === role);
+          const notes = [e.enabled === false ? 'off' : '', e.scope ? 'small/verify only' : '', record ? `track ${record.successes}/${record.outcomes}` : ''].filter(Boolean);
+          console.log(`  ${(index ? '' : role).padEnd(8)} ${id.padEnd(42)} cost ${e.cost.toFixed(2)}${notes.length ? `  ${notes.join(' · ')}` : ''}`);
+        });
+      }
+      const problems = [...new Set(entries.map(e => e.model))].flatMap(model => { const why = unrunnable(model); return why ? [`${model}: ${why}`] : []; });
+      for (const problem of problems) console.log(`  ! ${problem}`);
       return;
     }
     case 'trust': {

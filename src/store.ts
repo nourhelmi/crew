@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { loadRoster, rosterDefaults } from './roster.ts';
 import type { Config, Mail, RunMeta } from './types.ts';
 
 export const home = (): string => process.env.CREW_HOME || join(homedir(), '.crew');
@@ -17,8 +18,12 @@ const DEFAULT_CONFIG: Config = {
 
 export function loadConfig(): Config {
   const user = readJson<Partial<Config>>(configPath()) ?? {};
+  // Explicit defaults win, then your roster's first launchable model per role. A broken roster
+  // must not break hooks; `crew roster` reports it.
+  let fromRoster = {};
+  try { fromRoster = rosterDefaults(loadRoster()); } catch { /* reported by crew roster */ }
   return {
-    defaults: { ...DEFAULT_CONFIG.defaults, ...user.defaults },
+    defaults: { ...DEFAULT_CONFIG.defaults, ...fromRoster, ...user.defaults },
     router: { ...DEFAULT_CONFIG.router, ...user.router },
     args: { ...DEFAULT_CONFIG.args, ...user.args },
     trust: { roots: (user.trust?.roots ?? DEFAULT_CONFIG.trust.roots).map(root => root.replace(/^~(?=\/|$)/, homedir())) },

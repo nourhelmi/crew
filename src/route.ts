@@ -1,8 +1,10 @@
 import { execFile } from 'node:child_process';
 import { EFFORTS, type Config, type Effort, type Host, type Role, type Route } from './types.ts';
 
-/** Provider prefixes used by the router catalog and Pi, mapped to the native CLI that runs them. */
+/** Host names (roster ids) and the provider prefixes older catalogs use, mapped to the CLI that runs them. */
 const PREFIX = {
+  claude: 'claude',
+  codex: 'codex',
   'claude-bridge': 'claude',
   anthropic: 'claude',
   'openai-codex': 'codex',
