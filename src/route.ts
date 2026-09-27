@@ -5,6 +5,7 @@ import { EFFORTS, type Config, type Effort, type Host, type Role, type Route } f
 const PREFIX = {
   claude: 'claude',
   codex: 'codex',
+  opencode: 'opencode',
   'claude-bridge': 'claude',
   anthropic: 'claude',
   'openai-codex': 'codex',
@@ -20,6 +21,8 @@ const BARE: ReadonlyArray<readonly [RegExp, Host]> = [
 const SUPPORTED = {
   claude: ['low', 'medium', 'high', 'xhigh', 'max'],
   codex: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+  // OpenCode hands the effort to the provider as a model variant; the provider decides what it takes.
+  opencode: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
 } as const satisfies Record<Host, readonly Effort[]>;
 
 export class RouteError extends Error {}

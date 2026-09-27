@@ -2,7 +2,7 @@
 // Every file it edits is copied to ~/.crew/backups/<timestamp>/ first.
 // --trust-root opts into "never show a folder-trust dialog for checkouts under <dir>" (e.g. ~/Dev).
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -144,6 +144,25 @@ link(join(REPO, 'codex', 'agents', 'advisor-maker.toml'), join(HOME, '.codex', '
   say(codexInstalled.ok ? 'Codex plugin crew@crew installed' : `codex plugin add: ${codexInstalled.out.trim()}`);
 }
 
+// 5b. OpenCode, when installed: crew's plugin (its hooks), the skills, and a command per entry skill.
+{
+  const home = join(HOME, '.config', 'opencode');
+  if (existsSync(home) || run('opencode', ['--version']).ok) {
+    link(join(REPO, 'opencode', 'crew.js'), join(home, 'plugins', 'crew.js'));
+    for (const name of readdirSync(join(REPO, 'skills'))) link(join(REPO, 'skills', name), join(home, 'skills', name));
+    for (const name of ['advisor', 'cos', 'roster', 'router']) {
+      const description = readFileSync(join(REPO, 'skills', name, 'SKILL.md'), 'utf8').match(/^description:\s*(.+)$/m)?.[1] ?? name;
+      const body = `---\ndescription: ${description}\n---\n<!-- managed by crew scripts/install.ts -->\nLoad the crew \`${name}\` skill and follow it. Arguments: $ARGUMENTS\n`;
+      const path = join(home, 'commands', `${name}.md`);
+      if (!existsSync(path) || readFileSync(path, 'utf8') !== body) {
+        if (existsSync(path) && !readFileSync(path, 'utf8').includes('managed by crew')) { say(`left ${path} alone (not crew's)`); continue; }
+        mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, body); say(`wrote ${path}`);
+      }
+    }
+    say('OpenCode: crew plugin, skills and /advisor /cos /roster /router commands installed');
+  }
+}
+
 // 6. Config with the defaults spelled out; existing settings are kept, --trust-root adds roots.
 const CONFIG = join(HOME, '.config', 'crew', 'config.json');
 const requestedRoots = process.argv.flatMap((arg, i, all) => (arg === '--trust-root' && all[i + 1] ? [all[i + 1]!] : []))
@@ -153,7 +172,7 @@ const requestedRoots = process.argv.flatMap((arg, i, all) => (arg === '--trust-r
   const current = readJson<Stored>(CONFIG) ?? {
     defaults: { advisor: 'claude-opus-5-5@high', builder: 'gpt-6-sol@high', checker: 'gpt-6-sol@xhigh' },
     router: { enabled: true, command: 'agent-router', timeoutMs: 90000 },
-    args: { claude: ['--permission-mode', 'auto'], codex: [] },
+    args: { claude: ['--permission-mode', 'auto'], codex: [], opencode: [] },
   };
   const roots = [...new Set([...(current.trust?.roots ?? []), ...requestedRoots])];
   const next: Stored = { ...current, trust: { roots } };
@@ -208,4 +227,4 @@ else {
 }
 
 if (existsSync(BACKUP)) say(`backups in ${BACKUP}`);
-say('done. Restart Claude Code and Codex sessions to pick up plugins and hooks.');
+say('done. Restart Claude Code, Codex and OpenCode sessions to pick up plugins and hooks.');

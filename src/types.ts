@@ -1,4 +1,4 @@
-export const HOSTS = ['claude', 'codex'] as const;
+export const HOSTS = ['claude', 'codex', 'opencode'] as const;
 export type Host = (typeof HOSTS)[number];
 
 export const ROLES = ['advisor', 'builder', 'checker'] as const;
@@ -75,7 +75,7 @@ export interface Mail {
   pushed?: boolean;
 }
 
-export type Delivery = 'waiter' | 'codex-queue' | 'herdr-prompt' | 'queued';
+export type Delivery = 'waiter' | 'codex-queue' | 'opencode-plugin' | 'herdr-prompt' | 'queued';
 
 export interface Config {
   /** Role defaults when the Jev router is off or fails; `model@effort`. */

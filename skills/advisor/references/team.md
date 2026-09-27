@@ -35,7 +35,7 @@ going at its next turn end until it has read it.
 
 Retire members before closing a team; retirement waits for real descendant settlement.
 Sent or queued is not read or done, so never resend an ambiguous message as a new one.
-`crew msg` prints how it was delivered: `waiter`, `codex-queue`, `herdr-prompt` or
+`crew msg` prints how it was delivered: `waiter`, `codex-queue`, `opencode-plugin`, `herdr-prompt` or
 `queued`. `queued` means the recipient sees it at its next wait, inbox read or turn end.
 
 Root and CoS share one checkpoint at `~/.advisor/<repo-key>/workstreams/<slug>.md`. The

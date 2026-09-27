@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { basename } from 'node:path';
 import { readRun } from './store.ts';
-import type { Address, Host } from './types.ts';
+import { HOSTS, type Address, type Host } from './types.ts';
 
 type Env = Record<string, string | undefined>;
 
@@ -33,6 +33,7 @@ function hostAncestor(): { host: Host; pid: number } | undefined {
   for (const { pid, comm } of ancestry()) {
     if (basename(comm) === 'claude' || comm.includes('/claude/versions/')) return { host: 'claude', pid };
     if (basename(comm) === 'codex') return { host: 'codex', pid };
+    if (basename(comm) === 'opencode' || basename(comm) === '.opencode') return { host: 'opencode', pid };
   }
   return undefined;
 }
@@ -50,13 +51,17 @@ export function self(env: Env = process.env): Address {
       ...(run.herdr ? { herdrAgent: run.herdr.agent, ...(run.herdr.session ? { herdrSession: run.herdr.session } : {}) } : herdrTarget(env)),
     };
   }
+  // crew's OpenCode plugin sets this on every tool shell, so it always names the innermost session.
+  if (env.CREW_OPENCODE_SESSION) {
+    return { mailbox: sessionMailbox('opencode', env.CREW_OPENCODE_SESSION), host: 'opencode', ...herdrTarget(env) };
+  }
   // A Codex tool call always carries its own thread id; a CREW_MAILBOX beside it was inherited
   // from a Claude session that launched this Codex, so the thread id wins.
   if (env.CODEX_THREAD_ID) {
     return { mailbox: sessionMailbox('codex', env.CODEX_THREAD_ID), host: 'codex', threadId: env.CODEX_THREAD_ID, ...herdrTarget(env) };
   }
   if (env.CREW_MAILBOX) {
-    const host: Host = env.CREW_MAILBOX.startsWith('codex-') ? 'codex' : 'claude';
+    const host: Host = HOSTS.find(h => env.CREW_MAILBOX!.startsWith(`${h}-`)) ?? 'claude';
     return { mailbox: env.CREW_MAILBOX, host, ...herdrTarget(env) };
   }
   // Claude Code exports its session id to tool processes (CLI and desktop app alike).
@@ -65,7 +70,7 @@ export function self(env: Env = process.env): Address {
   }
   const ancestor = hostAncestor();
   if (ancestor) return { mailbox: `${ancestor.host}-pid-${ancestor.pid}`, host: ancestor.host, ...herdrTarget(env) };
-  throw new Error('crew: cannot tell which Claude Code or Codex session is calling; run crew from inside one');
+  throw new Error('crew: cannot tell which Claude Code, Codex or OpenCode session is calling; run crew from inside one');
 }
 
 /** Identity inside a hook, where the host hands us its session id on stdin. */

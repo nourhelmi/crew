@@ -23,5 +23,7 @@
   commands, so every Agent Skills host gets them (Claude `/crew:<name>`, Codex `$<name>`, OpenCode
   and others). Host-only frontmatter keys (e.g. Claude's `allowed-tools`) are fine; others ignore them.
 - Claude Code: `/advisor` is a built-in command, so the skill is `/crew:advisor`.
+- OpenCode has no hooks: `opencode/crew.js` maps its plugin events onto `crew hook …` and wakes its
+  own idle sessions from their crew inbox (the TUI serves no port, so nothing outside can push).
 - Routing evidence is only a reviewed verdict: a `--checks` checker's `As found:` line or the
   parent's `crew grade`. A run's own DONE never is. Tests point `router.command` at a fake router.

@@ -65,9 +65,18 @@ export function writableRoots(cwd: string): string[] {
   return roots;
 }
 
-/** Interactive CLI args for a host; the bootstrap prompt rides along as the first message. */
-export function argv(host: Host, r: Route, name: string, config: Config, firstPrompt: string, roots: string[] = []): string[] {
-  const base: Record<Host, string[]> = {
+/**
+ * CLI args for a host; the bootstrap prompt rides along as the first message. OpenCode's TUI
+ * takes it as --prompt, `opencode run` (outside herdr) as its message; its effort and file access
+ * travel in the environment (opencodeEnv).
+ */
+export function argv(host: Host, r: Route, name: string, config: Config, firstPrompt: string, roots: string[] = [], headless = false): string[] {
+  if (host === 'opencode') {
+    return headless
+      ? ['run', '--model', r.model, '--variant', r.effort, '--title', name, ...config.args.opencode, firstPrompt]
+      : ['--model', r.model, ...config.args.opencode, '--prompt', firstPrompt];
+  }
+  const base: Record<Exclude<Host, 'opencode'>, string[]> = {
     // Claude also needs read access to crew's skills, which live outside the child's cwd.
     claude: ['--model', r.model, '--effort', r.effort, '--name', name, ...[...roots, ROOT].flatMap(root => ['--add-dir', root])],
     // An "update available" dialog would hold a child at launch; the user updates from their own sessions.
@@ -81,9 +90,24 @@ export function argv(host: Host, r: Route, name: string, config: Config, firstPr
 function childEnv(extra: Record<string, string>): NodeJS.ProcessEnv {
   const env = { ...process.env, ...extra };
   for (const key of Object.keys(env)) {
-    if (key === 'CLAUDECODE' || key.startsWith('CLAUDE_CODE_') || key === 'CODEX_THREAD_ID' || key === 'CREW_MAILBOX') delete env[key];
+    if (key === 'CLAUDECODE' || key.startsWith('CLAUDE_CODE_') || key === 'CODEX_THREAD_ID' || key === 'CREW_MAILBOX' || key === 'CREW_OPENCODE_SESSION') delete env[key];
   }
   return env;
+}
+
+/**
+ * An OpenCode child's model and effort (as the build agent's variant), and the same access a Codex
+ * child gets through writable_roots: crew's state, crew's skills and the checkout's git dir. OpenCode
+ * asks before touching files outside the project, and a headless run has nobody to answer. Its
+ * "Update available" dialog would hold a child at launch, as Codex's did.
+ */
+export function opencodeEnv(r: Route, roots: string[]): Record<string, string> {
+  const outside = Object.fromEntries([...roots, ROOT].map(root => [`${root}/**`, 'allow']));
+  return { OPENCODE_CONFIG_CONTENT: JSON.stringify({
+    autoupdate: false,
+    agent: { build: { model: r.model, variant: r.effort } },
+    permission: { external_directory: outside },
+  }) };
 }
 
 /**
@@ -150,13 +174,14 @@ function launchClaudeBg(run: RunMeta, args: string[], extra: Record<string, stri
   return { launcher: 'bg', bgId };
 }
 
-function launchCodexExec(run: RunMeta, args: string[], extra: Record<string, string>): Launched {
+/** Headless run outside herdr: `codex exec`, or `opencode run` (whose args already start with `run`). */
+function launchExec(run: RunMeta, args: string[], extra: Record<string, string>): Launched {
   const log = openSync(join(runDir(run.id), 'exec.log'), 'a');
-  const child = spawnProcess('codex', ['exec', '--json', '-C', run.cwd, ...args], {
-    cwd: run.cwd, env: childEnv(extra), detached: true, stdio: ['ignore', log, log],
-  });
+  const [command, full] = run.route.host === 'opencode' ? ['opencode', [...args.slice(0, 1), '--dir', run.cwd, ...args.slice(1)]]
+    : ['codex', ['exec', '--json', '-C', run.cwd, ...args]];
+  const child = spawnProcess(command, full, { cwd: run.cwd, env: childEnv(extra), detached: true, stdio: ['ignore', log, log] });
   child.unref();
-  if (!child.pid) throw new Error('codex exec did not start');
+  if (!child.pid) throw new Error(`${command} did not start`);
   return { launcher: 'exec', pid: child.pid };
 }
 
@@ -207,7 +232,8 @@ export async function spawn(options: SpawnOptions): Promise<RunMeta> {
     cwd: options.cwd, keep: options.keep, parent, launcher: inHerdr() ? 'herdr' : placed.host === 'claude' ? 'bg' : 'exec',
     createdAt: new Date().toISOString(), state: 'running', ...(checks ? { checks } : {}),
   };
-  const args = argv(placed.host, placed, run.name, config, bootstrap(run), writableRoots(options.cwd));
+  const roots = writableRoots(options.cwd);
+  const args = argv(placed.host, placed, run.name, config, bootstrap(run), roots, run.launcher === 'exec');
   if (options.dryRun) return run;
 
   mkdirSync(runDir(id), { recursive: true });
@@ -217,13 +243,14 @@ export async function spawn(options: SpawnOptions): Promise<RunMeta> {
     CREW_RUN: id, ...(process.env.CREW_HOME ? { CREW_HOME: home() } : {}),
     // A session-level router choice follows the whole tree of children.
     ...(router.source !== 'config' ? { CREW_ROUTER: router.on ? 'on' : 'off' } : {}),
+    ...(placed.host === 'opencode' ? opencodeEnv(placed, roots) : {}),
   };
   if (run.launcher !== 'exec') trustPaths(trustTargets(options.cwd, config.trust.roots));
   let launched: Launched;
   try {
     launched = run.launcher === 'herdr' ? launchHerdr(run, args, extra)
       : run.launcher === 'bg' ? launchClaudeBg(run, args, extra)
-      : launchCodexExec(run, args, extra);
+      : launchExec(run, args, extra);
   } catch (error) {
     updateRun(id, current => ({ ...current, state: 'failed' }));
     throw error;

@@ -222,6 +222,7 @@ them on your real tasks with `crew route` until the picks look right.
 |---|---|
 | `claude/…`, `anthropic/…`, `claude-bridge/…`, `claude-*`, `opus`, `sonnet` | **Claude Code** |
 | `codex/…`, `openai/…`, `openai-codex/…`, `gpt-*` | **Codex** |
+| `opencode/<provider>/<model>`, e.g. `opencode/opencode-go/kimi-k3` | **OpenCode** (experimental) |
 
 Efforts a CLI lacks are clamped to the nearest one it has (Claude Code has no `minimal`).
 
@@ -363,6 +364,10 @@ turn-end hook, and a way to wake an idle session. Contributions welcome.
   `crew wait` or turn. Claude Code "channels" could push it, but they're a research preview.
 - A `codex exec` child can't take mail mid-run. Use herdr, or `--keep`, for anything you'll talk to.
 - Hooks are the fast path and the parent's sweep is the backstop. Disable both and nothing settles.
+- **OpenCode is experimental.** The installer adds crew's plugin (`opencode/crew.js`, standing in
+  for the hooks), the skills, and `/advisor` `/cos` `/roster` `/router` commands. It's unit-tested,
+  and the plugin loads in OpenCode 1.14, but no model turn has run through it end to end yet.
+  OpenCode's TUI serves no port, so the plugin wakes its own session when crew mail lands.
 - Claude children run with `--permission-mode auto` by default. A model without auto mode (Haiku,
   in testing) asks instead, and each prompt reaches the parent as a `waiting` notice.
 

@@ -745,3 +745,80 @@ describe('roster', async () => {
     } finally { rmSync(process.env.CREW_CONFIG!, { force: true }); }
   });
 });
+
+describe('opencode host', async () => {
+  const { self, hookSelf } = await import('../src/identity.ts');
+  const { opencodeEnv } = await import('../src/spawn.ts');
+  const { chmodSync } = await import('node:fs');
+  const route = { host: 'opencode' as const, model: 'opencode-go/kimi-k3', effort: 'max' as const, strategy: 'jev' as const };
+
+  it('routes opencode/<provider>/<model> to OpenCode and keeps the provider in the model', () => {
+    assert.deepEqual(parseModel('opencode/opencode-go/kimi-k3@max'), { host: 'opencode', model: 'opencode-go/kimi-k3', effort: 'max' });
+  });
+  it('launches the TUI with --prompt, or `opencode run` headless, with effort, file access and no update dialog in the env', () => {
+    const config = store.loadConfig();
+    assert.deepEqual(argv('opencode', route, 'b', config, 'GO'), ['--model', 'opencode-go/kimi-k3', '--prompt', 'GO']);
+    assert.deepEqual(argv('opencode', route, 'b', config, 'GO', [], true), ['run', '--model', 'opencode-go/kimi-k3', '--variant', 'max', '--title', 'b', 'GO']);
+    const content = JSON.parse(opencodeEnv(route, ['/tmp/crew', '/repo/.git']).OPENCODE_CONFIG_CONTENT!);
+    assert.equal(content.autoupdate, false);
+    assert.deepEqual(content.agent.build, { model: 'opencode-go/kimi-k3', variant: 'max' });
+    assert.deepEqual(Object.keys(content.permission.external_directory), ['/tmp/crew/**', '/repo/.git/**', `${ROOT_DIR}/**`]);
+    assert.ok(Object.values(content.permission.external_directory).every(v => v === 'allow'));
+  });
+  it('knows an OpenCode session from the env the plugin sets on its tool shells, ahead of inherited ones', () => {
+    assert.deepEqual(self({ CREW_OPENCODE_SESSION: 'ses_1', CODEX_THREAD_ID: 'inherited', CREW_MAILBOX: 'claude-x' }), { mailbox: 'opencode-ses_1', host: 'opencode' });
+    assert.equal(self({ CREW_MAILBOX: 'opencode-ses_2' }).host, 'opencode');
+    assert.equal(hookSelf('opencode', 'ses_3', {})?.mailbox, 'opencode-ses_3');
+    assert.equal(mail.resolve('opencode-ses_4', ROOT).host, 'opencode');
+  });
+  it("leaves the wake to the recipient's plugin", () => {
+    assert.equal(mail.send(ROOT, { mailbox: 'opencode-ses_p', host: 'opencode' }, 'hello'), 'opencode-plugin');
+    assert.equal(mail.takeUnread('opencode-ses_p').length, 1);
+  });
+  it('the plugin maps OpenCode events onto crew hooks, and wakes an idle session when mail lands', async () => {
+    const calls = join(HOME, 'crew-calls.jsonl');
+    const stub = join(HOME, 'crew-stub.sh');
+    writeFileSync(stub, `#!/bin/sh\nin=$(cat)\nprintf '%s\\n' "{\\"args\\":\\"$*\\",\\"in\\":$in}" >> '${calls}'\n`
+      + `case "$2" in stop) echo '{"decision":"block","reason":"write your result"}';; post-tool) echo '{"hookSpecificOutput":{"additionalContext":"[crew] 1 unread"}}';; esac\n`);
+    chmodSync(stub, 0o755);
+    Object.assign(process.env, { CREW_BIN: stub, CREW_RUN: 'b-test', CREW_OPENCODE_POLL_MS: '50' });
+    const prompts: { path: { id: string }; body: { parts: { text: string }[] } }[] = [];
+    try {
+      const { CrewPlugin } = await import('../opencode/crew.js' as string);
+      const plugin = await CrewPlugin({ client: { session: { promptAsync: async (b: never) => { prompts.push(b); } } } });
+      const env: Record<string, string> = {};
+      await plugin['shell.env']({ sessionID: 'ses_r', cwd: '/' }, { env });
+      assert.deepEqual(env, { CREW_OPENCODE_SESSION: 'ses_r' });
+      await plugin.event({ event: { type: 'session.created', properties: { info: { id: 'ses_r' } } } });
+      await plugin.event({ event: { type: 'session.created', properties: { info: { id: 'ses_sub', parentID: 'ses_r' } } } });
+      await plugin.event({ event: { type: 'session.idle', properties: { sessionID: 'ses_sub' } } });
+      await plugin.event({ event: { type: 'session.idle', properties: { sessionID: 'ses_r' } } });
+      await plugin.event({ event: { type: 'session.idle', properties: { sessionID: 'ses_r' } } });
+      const output = { title: 't', output: 'ran', metadata: {} };
+      await plugin['tool.execute.after']({ tool: 'bash', sessionID: 'ses_r', callID: 'c' }, output);
+      const seen = readFileSync(calls, 'utf8').trim().split('\n').map(l => JSON.parse(l));
+      assert.deepEqual(seen.map(c => c.args), ['hook session-start --host opencode', 'hook stop --host opencode', 'hook stop --host opencode', 'hook post-tool --host opencode']);
+      assert.deepEqual(seen[0].in, { session_id: 'ses_r' });
+      assert.deepEqual([seen[1].in.stop_hook_active, seen[2].in.stop_hook_active], [false, true], 'the turn after a block is marked');
+      assert.deepEqual(prompts.map(p => p.body.parts[0]!.text), ['write your result', 'write your result']);
+      assert.equal(output.output, 'ran\n\n[crew] 1 unread');
+
+      prompts.length = 0;
+      const tick = () => new Promise(ok => setTimeout(ok, 150));
+      await plugin.event({ event: { type: 'session.status', properties: { sessionID: 'ses_r', status: { type: 'busy' } } } });
+      mail.send(ROOT, { mailbox: 'b-test', host: 'opencode' }, 'while busy');
+      await tick();
+      assert.equal(prompts.length, 0, 'a busy session is not interrupted; its turn end surfaces the mail');
+      await plugin.event({ event: { type: 'session.status', properties: { sessionID: 'ses_r', status: { type: 'idle' } } } });
+      await tick();
+      assert.deepEqual(prompts.map(p => [p.path.id, p.body.parts[0]!.text]), [['ses_r', '[crew] new crew mail. Run: crew inbox']]);
+      await plugin.event({ event: { type: 'session.status', properties: { sessionID: 'ses_r', status: { type: 'idle' } } } });
+      await tick();
+      assert.equal(prompts.length, 1, 'the same unread mail wakes once');
+      mail.takeUnread('b-test');
+      mail.send(ROOT, { mailbox: 'b-test', host: 'opencode' }, 'next');
+      await tick();
+      assert.equal(prompts.length, 2, 'new mail wakes again');
+    } finally { for (const k of ['CREW_BIN', 'CREW_RUN', 'CREW_OPENCODE_POLL_MS']) delete process.env[k]; }
+  });
+});

@@ -11,7 +11,7 @@ export const configPath = (): string => process.env.CREW_CONFIG || join(homedir(
 const DEFAULT_CONFIG: Config = {
   defaults: { advisor: 'claude-opus-5-5@high', builder: 'gpt-6-sol@high', checker: 'gpt-6-sol@xhigh' },
   router: { enabled: true, command: 'agent-router', timeoutMs: 90_000 },
-  args: { claude: ['--permission-mode', 'auto'], codex: [] },
+  args: { claude: ['--permission-mode', 'auto'], codex: [], opencode: [] },
   trust: { roots: [] },
   capacity: {},
 };

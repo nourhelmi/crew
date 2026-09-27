@@ -16,7 +16,7 @@ export function runAddress(run: RunMeta): Address {
   };
 }
 
-/** `parent` | run id | run name | raw mailbox (`claude-<session>`, `codex-<thread>`). */
+/** `parent` | run id | run name | raw mailbox (`claude-<session>`, `codex-<thread>`, `opencode-<session>`). */
 export function resolve(ref: string, me: Address): Address {
   if (ref === 'parent') {
     const run = readRun(me.mailbox);
@@ -25,7 +25,7 @@ export function resolve(ref: string, me: Address): Address {
   }
   const run = findRun(ref);
   if (run) return runAddress(run);
-  const raw = ref.match(/^(claude|codex)-(.+)$/);
+  const raw = ref.match(/^(claude|codex|opencode)-(.+)$/);
   if (raw) {
     const host = raw[1] as Host;
     const id = raw[2]!;
@@ -58,8 +58,9 @@ export function codexQueue(threadId: string, text: string): boolean {
 
 /**
  * The inbox is the source of truth; pushes only wake the recipient.
- * Ladder: an armed `crew wait` sees it within a second; else push into a Codex
- * thread; else type a one-line pointer into an idle herdr agent; else it waits
+ * Ladder: an armed `crew wait` sees it within a second; else push into a Codex thread; an OpenCode
+ * session's own crew plugin watches its inbox and wakes it; else type a one-line pointer into an
+ * idle herdr agent; else it waits
  * for the recipient's next `crew wait`, `crew inbox` or Stop hook.
  */
 export function deliver(to: Address, mail: Mail): Delivery {
@@ -69,6 +70,7 @@ export function deliver(to: Address, mail: Mail): Delivery {
     appendMail(to.mailbox, { ...mail, pushed: true });
     return 'codex-queue';
   }
+  if (to.host === 'opencode') { appendMail(to.mailbox, mail); return 'opencode-plugin'; }
   if (to.herdrAgent) {
     const status = agentStatus(to.herdrAgent, to.herdrSession);
     if ((status === 'idle' || status === 'done') && prompt(to.herdrAgent, pointer(mail), to.herdrSession).ok) {

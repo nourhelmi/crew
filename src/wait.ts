@@ -126,6 +126,8 @@ export const KEEPALIVE = {
   // idle time before a nudge, and how many nudges in a row before one cold rewrite is cheaper
   codex: { afterMs: 25 * 60_000, max: 10 }, // write 1.25x vs read 0.1x per nudge: break-even ~12
   claude: { afterMs: 50 * 60_000, max: 16 }, // write 2x vs ~2 reads at 0.05x (Opus 5.5): ~20
+  // OpenCode's providers each cache differently (most automatically, for hours); no nudges.
+  opencode: { afterMs: 25 * 60_000, max: 0 },
 } as const satisfies Record<Host, { afterMs: number; max: number }>;
 
 export const KEEPALIVE_TEXT = '[crew] keepalive: your crew is still working and nothing needs you. '
@@ -149,6 +151,7 @@ export function transcriptPath(parent: Address, env: NodeJS.ProcessEnv = process
     }
     return undefined;
   };
+  if (parent.host === 'opencode') return undefined;
   if (parent.host === 'codex') {
     return find(join(env.CODEX_HOME ?? join(homedir(), '.codex'), 'sessions'), 3, name => name.endsWith(`-${sessionId}.jsonl`));
   }
