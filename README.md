@@ -172,7 +172,13 @@ config (approvals and sandbox). crew never adds bypass flags; put them in `args`
   spawns are serialized so they don't all split the same pane. Panes are named `role · name`
   for children and `advisor · <workstream>` for the root (`crew label <text>` to rename your own). Finished children close their own pane; failed or blocked ones stay open.
 - **Dialogs**: a child stuck on an approval, question or trust dialog wakes its parent with a
-  `waiting` notice that says where to answer it.
+  `waiting` notice that says where to answer it. Spawn starts one detached watcher per parent
+  that sweeps whenever no `crew wait` is armed (a Codex root just ends its turn), so dialogs,
+  stalls and missed settles still reach it; the watcher exits when no child is live.
+- **Codex daemon**: Codex TUIs share a background server that keeps the working directory of
+  whichever process started it; a deleted worktree there breaks every Codex session ("Cannot use
+  the background server"). Spawn starts it from your home directory first. To recover by hand:
+  `cd ~ && codex app-server daemon restart`.
 - **Kept teammates** that must end a turn mid-assignment write `IN PROGRESS: <next step>`.
   It settles nothing; the Stop hook sends them back to work once, and a second stop on it
   reaches the parent as a `waiting` notice.
@@ -180,6 +186,7 @@ config (approvals and sandbox). crew never adds bypass flags; put them in `args`
 Verified end to end on Claude Code 2.1.280 and Codex 0.157:
 
 - Claude↔Codex spawns in every direction, through herdr panes, `claude --bg` and `codex exec`
+- a Codex root in herdr: spawn, push wakes, a `waiting` notice from the watcher, settle
 - native background wake
 - `codex queue` waking an idle thread
 - a kept CoS teammate taking a second assignment by message
@@ -190,6 +197,8 @@ Verified end to end on Claude Code 2.1.280 and Codex 0.157:
   `crew wait` or turn. Claude Code "channels" could push it, but they're a research preview.
 - A `codex exec` child can't take mail mid-run. Use herdr, or `--keep`, for anything you'll talk to.
 - Hooks are the fast path; the parent's sweep is the backstop. If you disable both, nothing settles.
+- Claude children run with `--permission-mode auto` by default. A model without auto mode
+  (Haiku, in testing) falls back to asking, and each prompt reaches the parent as `waiting`.
 
 ## Development
 

@@ -1,10 +1,13 @@
+import { spawn as spawnProcess } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { agentStatus, closePane, type AgentStatus } from './herdr.ts';
 import { self } from './identity.ts';
 import { format, settle, stall, takeUnread, waiting } from './mail.ts';
 import { readResult } from './result.ts';
-import { bgSession } from './spawn.ts';
-import { alive, listRuns, markWaiter, readRun, resultPath, writeRun } from './store.ts';
+import { bgSession, ROOT } from './spawn.ts';
+import { alive, hasWaiter, listRuns, mailDir, markWaiter, readRun, resultPath, withLock, writeRun } from './store.ts';
 import type { Mail, RunMeta } from './types.ts';
 
 const LIVENESS_EVERY_MS = 5_000;
@@ -85,6 +88,36 @@ export async function wait(timeoutMs: number): Promise<Mail[]> {
   } finally {
     release();
   }
+}
+
+const watcherFile = (mailbox: string): string => join(mailDir(mailbox), 'watcher');
+
+/**
+ * A parent that isn't waiting (a Codex root ends its turn and relies on pushes; a Claude root
+ * between re-arms) still needs someone to notice a child stuck on a dialog, gone without a
+ * result, or settled without its hook. One detached watcher per parent sweeps while no
+ * `crew wait` is armed, and exits once the parent has no live children.
+ */
+export async function watch(mailbox: string, everyMs = LIVENESS_EVERY_MS, maxMs = 24 * 3_600_000): Promise<void> {
+  const deadline = Date.now() + maxMs;
+  let lastBg = 0;
+  while (Date.now() < deadline && liveChildren(mailbox).length) {
+    if (!hasWaiter(mailbox)) {
+      const checkBg = Date.now() - lastBg >= BG_EVERY_MS;
+      sweep(mailbox, checkBg);
+      if (checkBg) lastBg = Date.now();
+    }
+    await sleep(everyMs);
+  }
+}
+
+export function ensureWatcher(mailbox: string): void {
+  withLock(`watch-${mailbox}`, () => {
+    try { if (alive(Number(readFileSync(watcherFile(mailbox), 'utf8')))) return; } catch { /* none yet */ }
+    const child = spawnProcess(join(ROOT, 'bin', 'crew'), ['watch', mailbox], { detached: true, stdio: 'ignore' });
+    child.unref();
+    if (child.pid) writeFileSync(watcherFile(mailbox), String(child.pid));
+  });
 }
 
 export function liveChildren(mailbox: string): RunMeta[] {

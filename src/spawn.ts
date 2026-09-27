@@ -1,5 +1,6 @@
 import { execFileSync, spawn as spawnProcess } from 'node:child_process';
 import { mkdirSync, openSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { closePane, inHerdr, labelPane, splitAway, startAgent } from './herdr.ts';
@@ -79,6 +80,18 @@ function childEnv(extra: Record<string, string>): NodeJS.ProcessEnv {
   return env;
 }
 
+/**
+ * Codex TUIs share one background daemon, which keeps the working directory of whichever process
+ * started it. If that was a worktree that later goes away, every Codex session fails the daemon's
+ * feature check. So crew starts it first (a no-op when it runs) from home, with no agent env.
+ */
+function ensureCodexDaemon(): void {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (/^(CLAUDE|CREW_|CODEX_THREAD_ID$|HERDR_)/.test(key)) delete env[key];
+  try { execFileSync('codex', ['app-server', 'daemon', 'start'], { cwd: homedir(), env, stdio: 'ignore', timeout: 30_000 }); }
+  catch { /* best effort: the child can still run without the shared daemon */ }
+}
+
 /** What a launcher learned; merged into the live metadata, which the child's hooks may already have updated. */
 type Launched = Pick<RunMeta, 'launcher'> & Partial<Pick<RunMeta, 'herdr' | 'bgId' | 'pid'>>;
 
@@ -98,6 +111,7 @@ function launchHerdr(run: RunMeta, args: string[], extra: Record<string, string>
     updateRun(run.id, current => ({ ...current, herdr: { pane: created, agent: created, ...(session ? { session } : {}) } }));
     return created;
   });
+  if (run.route.host === 'codex') ensureCodexDaemon();
   try { startAgent(run.name, run.route.host, pane, args, session); }
   catch (error) {
     closePane(pane, session); // don't strand an empty shell pane beside the parent
@@ -202,5 +216,7 @@ export async function spawn(options: SpawnOptions): Promise<RunMeta> {
     throw error;
   }
   // A fast child can settle (and its hooks record ids) before launch returns: merge, never overwrite.
-  return updateRun(id, current => ({ ...current, ...launched })) ?? { ...run, ...launched };
+  const live = updateRun(id, current => ({ ...current, ...launched })) ?? { ...run, ...launched };
+  (await import('./wait.ts')).ensureWatcher(parent.mailbox);
+  return live;
 }

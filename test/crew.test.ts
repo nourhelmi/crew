@@ -352,6 +352,8 @@ describe('identity', async () => {
     assert.equal(self({ CREW_RUN: 'b-test', CLAUDE_CODE_SESSION_ID: 'x' }).mailbox, 'b-test');
     assert.equal(self({ CREW_MAILBOX: 'claude-abc' }).mailbox, 'claude-abc');
     assert.deepEqual(self({ CODEX_THREAD_ID: 't1' }), { mailbox: 'codex-t1', host: 'codex', threadId: 't1' });
+    // Codex launched from inside a Claude session inherits its CREW_MAILBOX; the thread id wins
+    assert.equal(self({ CODEX_THREAD_ID: 't2', CREW_MAILBOX: 'claude-abc' }).mailbox, 'codex-t2');
     assert.deepEqual(self({ CLAUDE_CODE_SESSION_ID: 's1', HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p2' }), { mailbox: 'claude-s1', host: 'claude', herdrAgent: 'w1:p2' });
   });
 });
@@ -558,5 +560,24 @@ esac
       startAgent('lane', 'codex', 'w1:p7', ['--model', 'm', 'GO']);
       assert.equal(s.calls('agent start').length, 3);
     } finally { s.done(); }
+  });
+});
+
+describe('watcher', async () => {
+  const { watch } = await import('../src/wait.ts');
+  it('sweeps for a parent that is not waiting, then exits with no live children', async () => {
+    run({ launcher: 'exec', pid: 999_999 }); // its process is gone
+    run({ id: 'b-done', name: 'builder-y' });
+    writeResult('b-done', 'DONE: shipped');
+    await watch('claude-root', 10, 5_000);
+    const kinds = mail.takeUnread('claude-root').map(m => `${m.from.name}:${m.kind}`).sort();
+    assert.deepEqual(kinds, ['builder-x:stalled', 'builder-y:settled']);
+    assert.equal(store.readRun('b-test')?.state, 'stalled');
+  });
+  it('leaves the sweep to an armed crew wait', async () => {
+    run({ launcher: 'exec', pid: 999_999 });
+    const release = store.markWaiter('claude-root');
+    try { await watch('claude-root', 10, 100); } finally { release(); }
+    assert.equal(store.readRun('b-test')?.state, 'running');
   });
 });

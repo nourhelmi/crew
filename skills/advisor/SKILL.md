@@ -40,9 +40,9 @@ missing tool. If delegation is unavailable, work directly where permitted.
   lose its output and the wake). It exits when any child settles, stalls or sits on an
   approval dialog, or when mail arrives, and its exit wakes you. Read the output, act, and
   re-arm it while children or teammates remain. Tell the user only what changed; ask a
-  pending question once, not on every wake. Codex: settlements and mail are pushed into
-  your thread (`codex queue`), so keep working or end your turn; run `crew wait` in the
-  foreground only when there is nothing else to do.
+  pending question once, not on every wake. Codex: settlements, mail and dialog notices are pushed
+  into your thread (`codex queue`, with a watcher sweeping for you), so keep working or end
+  your turn; run `crew wait` in the foreground only when there is nothing else to do.
 - **Handles.** `crew ls` lists your children; `crew read <run>` prints a result or the
   terminal tail; `crew msg <run|parent> "…"` sends a follow-up, answer or repair request;
   `crew inbox` reads your mail; `crew stop <run>` cancels. Children treat `crew msg` as

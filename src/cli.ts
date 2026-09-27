@@ -13,7 +13,7 @@ import { checkouts, trustPaths, trustTargets } from './trust.ts';
 import { routerSetting, setSessionRouter, setShellRouter } from './settings.ts';
 import { configPath, findRun, listRuns, loadConfig, readJson, resultPath, runDir, writeJson, writeRun } from './store.ts';
 import { HOSTS, ROLES, type Address, type Host, type Role, type RunMeta } from './types.ts';
-import { liveChildren, wait } from './wait.ts';
+import { liveChildren, wait, watch } from './wait.ts';
 
 const HELP = `crew: advisor crews on native Claude Code and Codex
 
@@ -240,6 +240,11 @@ async function main(argv: string[]): Promise<void> {
       if (!inHerdr()) { console.log('not in a herdr pane; nothing to label'); return; }
       const ok = labelPane(process.env.HERDR_PANE_ID!, text, process.env.HERDR_SESSION);
       console.log(ok ? `labelled ${process.env.HERDR_PANE_ID}: ${text}` : 'herdr refused the label');
+      return;
+    }
+    case 'watch': {
+      // Internal: started detached by spawn, one per parent mailbox.
+      await watch(positionals[0] ?? fail('crew: crew watch <mailbox>'));
       return;
     }
     case 'whoami': {

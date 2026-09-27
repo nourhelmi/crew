@@ -39,7 +39,7 @@ function hostAncestor(): { host: Host; pid: number } | undefined {
 
 /**
  * Who is calling crew. Precedence: a crew-spawned run, then the host session id
- * (Claude via the SessionStart env file, Codex via CODEX_THREAD_ID), then process ancestry.
+ * (Codex via CODEX_THREAD_ID, Claude via the SessionStart env file), then process ancestry.
  */
 export function self(env: Env = process.env): Address {
   const run = env.CREW_RUN ? readRun(env.CREW_RUN) : undefined;
@@ -50,12 +50,14 @@ export function self(env: Env = process.env): Address {
       ...(run.herdr ? { herdrAgent: run.herdr.agent, ...(run.herdr.session ? { herdrSession: run.herdr.session } : {}) } : herdrTarget(env)),
     };
   }
+  // A Codex tool call always carries its own thread id; a CREW_MAILBOX beside it was inherited
+  // from a Claude session that launched this Codex, so the thread id wins.
+  if (env.CODEX_THREAD_ID) {
+    return { mailbox: sessionMailbox('codex', env.CODEX_THREAD_ID), host: 'codex', threadId: env.CODEX_THREAD_ID, ...herdrTarget(env) };
+  }
   if (env.CREW_MAILBOX) {
     const host: Host = env.CREW_MAILBOX.startsWith('codex-') ? 'codex' : 'claude';
     return { mailbox: env.CREW_MAILBOX, host, ...herdrTarget(env) };
-  }
-  if (env.CODEX_THREAD_ID) {
-    return { mailbox: sessionMailbox('codex', env.CODEX_THREAD_ID), host: 'codex', threadId: env.CODEX_THREAD_ID, ...herdrTarget(env) };
   }
   // Claude Code exports its session id to tool processes (CLI and desktop app alike).
   if (env.CLAUDE_CODE_SESSION_ID) {
