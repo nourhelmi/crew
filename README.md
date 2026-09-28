@@ -294,6 +294,9 @@ part of normal review.
   subagents except the read-only `Explore` and `Plan`, and work goes through `crew spawn`, where it
   is routed, capped and graded. In the first sweep, Opus child advisors had run 60 native makers,
   every one on Opus. Codex children, whose native agents inherit Sol, are asked but not forced.
+  To keep Claude's native subagents off Opus everywhere, set `CLAUDE_CODE_SUBAGENT_MODEL=sonnet` and
+  `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` in the `env` of `~/.claude/settings.json`. The variable
+  alone misses `Explore` and `Plan`, which pin `inherit`.
 - **Dialogs:** a child stuck on an approval, question or trust dialog wakes its parent with a
   `waiting` notice that says where to answer it.
 - **Prompt cache:** a parent idle past its cache's life pays to rewrite its whole context on wake
