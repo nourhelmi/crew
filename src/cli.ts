@@ -15,7 +15,7 @@ import { checkouts, trustPaths, trustTargets } from './trust.ts';
 import { routerSetting, setSessionRouter, setShellRouter } from './settings.ts';
 import { configPath, findRun, listRuns, loadConfig, readJson, resultPath, runDir, writeJson, writeRun } from './store.ts';
 import { HOSTS, ROLES, type Address, type Host, type Role, type RunMeta } from './types.ts';
-import { liveChildren, wait, waitHint, watch } from './wait.ts';
+import { wait, waitHint, watch } from './wait.ts';
 
 const HELP = `crew: advisor crews on native Claude Code and Codex
 
@@ -146,7 +146,9 @@ async function main(argv: string[]): Promise<void> {
         console.log(mails.map(format).join('\n\n') + (hint ? `\n\n${hint}` : ''));
         return;
       }
-      console.log(`no crew mail within ${values.timeout ?? '30m'}; live children: ${liveChildren(me.mailbox).map(run => run.name).join(', ') || 'none'}. Re-arm with crew wait if you still expect some.`);
+      // For a Claude parent this timeout is also the prompt-cache heartbeat, so it must be re-armed in the background.
+      console.log(`no crew mail within ${values.timeout ?? '30m'} (this wake also keeps your prompt cache warm).`
+        + ` ${waitHint(me) ?? 'No live children, so nothing to re-arm.'}`);
       return;
     }
     case 'msg': {
