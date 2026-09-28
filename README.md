@@ -299,6 +299,13 @@ part of normal review.
   alone misses `Explore` and `Plan`, which pin `inherit`.
 - **Dialogs:** a child stuck on an approval, question or trust dialog wakes its parent with a
   `waiting` notice that says where to answer it.
+- **Background tasks:** in Claude Code, children show up as a background task only while the
+  parent holds `crew wait` as a background Bash command. `crew spawn` (and every `crew wait` that
+  returns with children still live) says so and names them whenever nothing is waiting.
+- **Compaction:** Claude Code and Codex keep a summary, not what a session read from files, so an
+  advisor loses its workflow (a `/crew:cos` session keeps only a pointer to it) and a child its
+  brief. On `SessionStart` with source `compact`, crew sends an advisor back to its skill and
+  checkpoint, and a child back to its brief and packet, before the next prompt.
 - **Prompt cache:** a parent idle past its cache's life pays to rewrite its whole context on wake
   (Claude Code keeps 1-hour entries; OpenAI's current models, 30 minutes). A read refreshes the
   timer, so a Claude root in `crew wait` stays warm through the wait's 30-minute timeout, and the

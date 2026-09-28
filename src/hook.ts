@@ -1,15 +1,21 @@
 import { spawn } from 'node:child_process';
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { herdrBin } from './herdr.ts';
 import { hookSelf, sessionMailbox } from './identity.ts';
 import { format, paused, settle, stall, takeUnread } from './mail.ts';
 import { contract, progressLine, readResult } from './result.ts';
-import { home, mailDir, readRun, resultPath, unread, updateRun } from './store.ts';
+import { bootstrap, ROOT } from './spawn.ts';
+import { briefPath, home, mailDir, packetPath, readRun, resultPath, unread, updateRun } from './store.ts';
+import { waitHint } from './wait.ts';
 import type { Host } from './types.ts';
 
 export interface HookInput {
   session_id?: string;
+  /** SessionStart: startup, resume, clear, compact or fork (both hosts). */
+  source?: string;
+  cwd?: string;
   stop_hook_active?: boolean;
   agent_type?: string;
   agent_id?: string;
@@ -37,7 +43,54 @@ function sessionStart(host: Host, input: HookInput, env: NodeJS.ProcessEnv): Hoo
     appendFileSync(env.CLAUDE_ENV_FILE,
       `export CREW_MAILBOX=${sessionMailbox('claude', sessionId)}\nexport CLAUDE_SESSION_ID=${sessionId}\n`);
   }
+  const context = input.source === 'compact' ? afterCompaction(host, sessionId, input.cwd, env) : undefined;
+  return context ? { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: context } } : undefined;
+}
+
+/** The advisor skill's pointer for a root advisor session (`sessions/<host>-<id>.md` under a state root). */
+function advisorSession(host: Host, sessionId: string, env: NodeJS.ProcessEnv): { workstream: string; mode: string } | undefined {
+  if (host === 'opencode') return undefined;
+  const key = `${host === 'claude' ? 'claude-code' : host}-${sessionId}.md`;
+  const base = join(homedir(), '.advisor');
+  let roots: string[] = [];
+  try { roots = env.ADVISOR_STATE_DIR ? [env.ADVISOR_STATE_DIR] : readdirSync(base).map(dir => join(base, dir)); }
+  catch { return undefined; }
+  for (const root of roots) {
+    let text: string;
+    try { text = readFileSync(join(root, 'sessions', key), 'utf8'); } catch { continue; }
+    const workstream = text.match(/^- Workstream: `([^`]+)`$/m)?.[1];
+    if (workstream) return { workstream, mode: text.match(/^- Advisor mode: `(advisor|cos)`$/m)?.[1] ?? 'advisor' };
+  }
   return undefined;
+}
+
+/**
+ * Compaction keeps a summary and, at most, a truncated copy of skills invoked by name, marked
+ * "for context only". What a session read from files is gone: the advisor workflow (a CoS entry
+ * only points at it) and a crew child's brief. So send the session back to them before it acts.
+ */
+function afterCompaction(host: Host, sessionId: string, cwd: string | undefined, env: NodeJS.ProcessEnv): string | undefined {
+  const me = hookSelf(host, sessionId, env);
+  const children = me ? waitHint(me) : undefined;
+  const run = env.CREW_RUN ? readRun(env.CREW_RUN) : undefined;
+  if (run) {
+    const brief = existsSync(briefPath(run.id)) ? `re-read your brief (${briefPath(run.id)})` : `your brief: ${bootstrap(run)} Re-read it`;
+    return `[crew] Your context was just compacted. You are crew ${run.role} "${run.name}" (run ${run.id}); ${brief}`
+      + ` and your packet (${packetPath(run.id)}) before your next step.${children ? ` ${children}` : ''}`;
+  }
+  const advisor = advisorSession(host, sessionId, env);
+  if (!advisor) return undefined;
+  const skill = join(ROOT, 'skills', 'advisor');
+  const read = [join(skill, 'SKILL.md'), ...(advisor.mode === 'cos' ? [join(skill, 'references', 'team.md')] : [])];
+  const checkpoint = `${host === 'claude' ? `CLAUDE_SESSION_ID=${sessionId} ` : ''}node ${join(skill, 'scripts', 'advisor-state-cli.mjs')} read`
+    + (cwd ? ` --cwd ${JSON.stringify(cwd)}` : '');
+  return [
+    `[crew] Your context was just compacted. This session leads the advisor workstream \`${advisor.workstream}\``
+      + `${advisor.mode === 'cos' ? ' in CoS mode' : ''}, and compaction kept at most a pointer to that workflow, not the workflow.`,
+    `Before your next step, re-read ${read.join(' and ')}, then recover your checkpoint: ${checkpoint}`,
+    'Keep handling follow-up requests as the advisor, the way that workflow says: it decides what you do yourself and what goes to crew spawn.',
+    ...(children ? [children] : []),
+  ].join(' ');
 }
 
 /**

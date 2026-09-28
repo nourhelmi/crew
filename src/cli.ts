@@ -15,7 +15,7 @@ import { checkouts, trustPaths, trustTargets } from './trust.ts';
 import { routerSetting, setSessionRouter, setShellRouter } from './settings.ts';
 import { configPath, findRun, listRuns, loadConfig, readJson, resultPath, runDir, writeJson, writeRun } from './store.ts';
 import { HOSTS, ROLES, type Address, type Host, type Role, type RunMeta } from './types.ts';
-import { liveChildren, wait, watch } from './wait.ts';
+import { liveChildren, wait, waitHint, watch } from './wait.ts';
 
 const HELP = `crew: advisor crews on native Claude Code and Codex
 
@@ -133,14 +133,19 @@ async function main(argv: string[]): Promise<void> {
       if (cap && run.route.strategy === 'pinned' && live > cap.max) {
         console.log(`  note: ${live} live ${run.route.host} runs, over the cap of ${cap.max}; they share one rate limit`);
       }
-      if (!values['dry-run']) console.log(`  result: ${resultPath(run.id)}\n  wake: crew wait${run.parent.host === 'claude' ? ' (as a background command)' : ''}`);
+      if (!values['dry-run']) console.log(`  result: ${resultPath(run.id)}\n  ${waitHint(run.parent) ?? 'wake: crew wait'}`);
       return;
     }
     case 'wait': {
       const timeoutMs = duration(values.timeout, 30 * 60_000);
       const mails = await wait(timeoutMs);
-      if (mails.length) { console.log(mails.map(format).join('\n\n')); return; }
       const me = self();
+      if (mails.length) {
+        // Checked after the wait has released: whatever still runs needs a fresh background wait.
+        const hint = waitHint(me);
+        console.log(mails.map(format).join('\n\n') + (hint ? `\n\n${hint}` : ''));
+        return;
+      }
       console.log(`no crew mail within ${values.timeout ?? '30m'}; live children: ${liveChildren(me.mailbox).map(run => run.name).join(', ') || 'none'}. Re-arm with crew wait if you still expect some.`);
       return;
     }

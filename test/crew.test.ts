@@ -216,6 +216,28 @@ describe('hooks', () => {
     runHook('session-start', 'codex', '{"session_id":"t-9"}', env({ CREW_RUN: 'b-test' }));
     assert.equal(store.readRun('b-test')?.threadId, 't-9');
   });
+  it('after compaction, sends an advisor back to its workflow and a crew child to its brief', () => {
+    const state = mkdtempSync(join(tmpdir(), 'crew-advisor-'));
+    mkdirSync(join(state, 'sessions'));
+    writeFileSync(join(state, 'sessions', 'claude-code-s-7.md'), '# Advisor Session s-7\n\n- Workstream: `test-sweep`\n- Advisor mode: `cos`\n');
+    const start = (host: 'claude' | 'codex', id: string, source: string, extra: Record<string, string> = {}) =>
+      runHook('session-start', host, JSON.stringify({ session_id: id, source, cwd: '/repo' }), env({ ADVISOR_STATE_DIR: state, ...extra }));
+    const out = start('claude', 's-7', 'compact');
+    assert.match(out, /"hookEventName":"SessionStart"/);
+    assert.match(out, /workstream `test-sweep` in CoS mode/);
+    assert.match(out, /skills\/advisor\/SKILL\.md and \S+references\/team\.md/);
+    assert.match(out, /CLAUDE_SESSION_ID=s-7 node \S+advisor-state-cli\.mjs read --cwd \\"\/repo\\"/);
+    assert.doesNotMatch(out, /nothing is waiting/);
+    run({ id: 'b-kid', name: 'kid', parent: { mailbox: 'claude-s-7', host: 'claude' } });
+    assert.match(start('claude', 's-7', 'compact'), /nothing is waiting on kid\./);
+    assert.equal(start('claude', 's-7', 'startup'), '');
+    assert.equal(start('claude', 's-other', 'compact'), '');
+    assert.equal(start('codex', 's-7', 'compact'), '', 'the pointer is per host');
+    run();
+    assert.match(start('codex', 't-9', 'compact', { CREW_RUN: 'b-test' }), /your brief: You are crew builder/);
+    writeFileSync(store.briefPath('b-test'), 'brief\n');
+    assert.match(start('codex', 't-9', 'compact', { CREW_RUN: 'b-test' }), /runs\/b-test\/brief\.md\).*runs\/b-test\/packet\.md/);
+  });
   it('closes a finished herdr child pane after its turn, via the recorded session', async () => {
     const bin = mkdtempSync(join(tmpdir(), 'crew-stub-'));
     const log = join(bin, 'calls');
@@ -598,6 +620,21 @@ esac
       startAgent('lane', 'codex', 'w1:p7', ['--model', 'm', 'GO']);
       assert.equal(s.calls('agent start').length, 3);
     } finally { s.done(); }
+  });
+});
+
+describe('waking the parent', async () => {
+  const { waitHint } = await import('../src/wait.ts');
+  it('tells a Claude parent to hold crew wait in the background, naming its live children', () => {
+    assert.equal(waitHint(ROOT), undefined, 'no live children, nothing to say');
+    run();
+    run({ id: 'b-two', name: 'builder-z' });
+    assert.match(waitHint(ROOT) ?? '', /nothing is waiting on builder-x, builder-z\. .*run_in_background, description "crew: builder-x, builder-z"/);
+    const release = store.markWaiter(ROOT.mailbox);
+    try { assert.equal(waitHint(ROOT), 'wake: your background crew wait covers builder-x, builder-z'); }
+    finally { release(); }
+    run({ parent: { mailbox: 'codex-t', host: 'codex' } });
+    assert.equal(waitHint({ mailbox: 'codex-t', host: 'codex' }), 'wake: crew wait (live: builder-x)');
   });
 });
 

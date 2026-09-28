@@ -14,6 +14,8 @@
 - Herdr: always pass the run's recorded session (`--session`) and address agents by pane id.
   herdr types the launch line into a shell that may still be loading its rc files, where the tty
   keeps only 1024 bytes of a line: instructions go in `runs/<id>/brief.md`, never in argv.
+- Compaction drops file reads. Anything a session must keep following lives in a file that the
+  SessionStart `compact` branch (`afterCompaction` in `src/hook.ts`) points back to.
 - Mail: the inbox is the only content channel. Pushes (`codex queue`, herdr prompts) are one-line
   pointers, one per unread batch, so nothing stale is replayed turn by turn. Children treat plain
   mail as advice; scope changes go through `crew amend`, which appends to the packet.

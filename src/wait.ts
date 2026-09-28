@@ -189,6 +189,20 @@ export function ensureWatcher(mailbox: string): void {
   });
 }
 
+/**
+ * How a parent hears about its live children. A Claude parent must hold `crew wait` as a
+ * background Bash command: that is what lists the work as a background task and wakes the session.
+ * Codex and OpenCode parents are woken by pushes, so a plain reminder is enough there.
+ */
+export function waitHint(parent: Address): string | undefined {
+  const names = liveChildren(parent.mailbox).map(run => run.name);
+  if (!names.length) return undefined;
+  if (parent.host !== 'claude') return `wake: crew wait (live: ${names.join(', ')})`;
+  if (hasWaiter(parent.mailbox)) return `wake: your background crew wait covers ${names.join(', ')}`;
+  return `wake: nothing is waiting on ${names.join(', ')}. Start \`crew wait\` now as a background Bash command`
+    + ` (run_in_background, description "crew: ${names.join(', ')}"): it lists them as a background task and wakes you when one settles.`;
+}
+
 export function liveChildren(mailbox: string): RunMeta[] {
   return listRuns().filter(run => run.parent.mailbox === mailbox && run.state === 'running');
 }
