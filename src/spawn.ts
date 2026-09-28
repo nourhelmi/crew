@@ -9,7 +9,7 @@ import { clampEffort, parseModel, route } from './route.ts';
 import { routerSetting } from './settings.ts';
 import { trustPaths, trustTargets } from './trust.ts';
 import { RESULT_HEADINGS } from './result.ts';
-import { findRun, home, listRuns, loadConfig, newId, packetPath, resultPath, runDir, updateRun, withLock, writeRun } from './store.ts';
+import { briefPath, findRun, home, listRuns, loadConfig, newId, packetPath, resultPath, runDir, updateRun, withLock, writeRun } from './store.ts';
 import type { Config, Effort, Host, Role, Route, RunMeta } from './types.ts';
 
 export const ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), '..');
@@ -29,6 +29,14 @@ export interface SpawnOptions {
 }
 
 const NAME = /^[a-z][a-z0-9_-]{0,31}$/;
+
+/**
+ * The first message a child gets: who it is and where its brief (`bootstrap`) is. The brief lives in
+ * a file to keep the launch line short, since herdr types that line into a shell (see startAgent).
+ */
+export function firstPrompt(run: Pick<RunMeta, 'id' | 'name' | 'role'>): string {
+  return `You are crew ${run.role} "${run.name}" (run ${run.id}). Read your brief first and follow it: ${briefPath(run.id)}`;
+}
 
 export function bootstrap(run: Pick<RunMeta, 'id' | 'name' | 'role' | 'keep' | 'parent' | 'checks'>): string {
   const parent = run.parent.name ?? run.parent.mailbox;
@@ -233,11 +241,12 @@ export async function spawn(options: SpawnOptions): Promise<RunMeta> {
     createdAt: new Date().toISOString(), state: 'running', ...(checks ? { checks } : {}),
   };
   const roots = writableRoots(options.cwd);
-  const args = argv(placed.host, placed, run.name, config, bootstrap(run), roots, run.launcher === 'exec');
+  const args = argv(placed.host, placed, run.name, config, firstPrompt(run), roots, run.launcher === 'exec');
   if (options.dryRun) return run;
 
   mkdirSync(runDir(id), { recursive: true });
   writeFileSync(packetPath(id), options.task.endsWith('\n') ? options.task : `${options.task}\n`, { mode: 0o600 });
+  writeFileSync(briefPath(id), `${bootstrap(run)}\n`, { mode: 0o600 });
   writeRun(run);
   const extra: Record<string, string> = {
     CREW_RUN: id, ...(process.env.CREW_HOME ? { CREW_HOME: home() } : {}),

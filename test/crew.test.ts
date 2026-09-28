@@ -15,7 +15,8 @@ const { parseResult } = await import('../src/result.ts');
 const store = await import('../src/store.ts');
 const mail = await import('../src/mail.ts');
 const { runHook } = await import('../src/hook.ts');
-const { argv, bootstrap, writableRoots, ROOT: ROOT_DIR } = await import('../src/spawn.ts');
+const { argv, bootstrap, firstPrompt, writableRoots, ROOT: ROOT_DIR } = await import('../src/spawn.ts');
+const { startAgent, typedLine, TTY_LINE_MAX } = await import('../src/herdr.ts');
 type RunMeta = import('../src/types.ts').RunMeta;
 
 after(() => rmSync(HOME, { recursive: true, force: true }));
@@ -317,6 +318,19 @@ describe('launch shape', () => {
     assert.match(text, /never placeholders/);
     assert.doesNotMatch(text, /IN PROGRESS: <next step>/);
     assert.match(bootstrap({ id: 'a-1', name: 'lead', role: 'advisor', keep: true, parent: ROOT }), /IN PROGRESS: <next step>/);
+  });
+  it('keeps the typed launch line inside what a loading shell holds', () => {
+    // A shell still sourcing its rc files is in canonical tty mode and drops a line's tail past 1024 bytes.
+    const run = { id: 'b-6annp2636', name: 'a-long-builder-name-for-testing', role: 'builder' as const };
+    assert.match(firstPrompt(run), /runs\/b-6annp2636\/brief\.md$/);
+    const roots = [HOME, '/Users/someone/Dev/company/monorepo-with-a-long-name/.git'];
+    for (const host of ['claude', 'codex', 'opencode'] as const) {
+      const r = { host, model: host === 'opencode' ? 'opencode/opencode-go/kimi-k3' : 'some-model', effort: 'xhigh' as const, strategy: 'jev' as const };
+      const line = typedLine(host, argv(host, r, run.name, store.loadConfig(), firstPrompt(run), roots));
+      assert.ok(Buffer.byteLength(line) < TTY_LINE_MAX / 2, `${host}: ${line.length} bytes`);
+    }
+    assert.equal(typedLine('codex', ['-c', 'a="b"', "it's"]), `codex -c 'a="b"' 'it'\\''s'`);
+    assert.throws(() => startAgent('b', 'codex', 'w1:p1', ['x'.repeat(TTY_LINE_MAX)]), /launch line is \d+ bytes/);
   });
 });
 

@@ -71,11 +71,24 @@ export function splitAway(caller: string, stack: readonly string[], cwd: string,
   throw new Error(`herdr pane split failed: ${attempt.ok ? lastError : attempt.error}`);
 }
 
+/** Longest line a tty in canonical mode keeps (MAX_CANON on macOS); the rest is silently dropped. */
+export const TTY_LINE_MAX = 1024;
+
+/** The command line herdr types for an agent, quoted the way a POSIX shell reads it back. */
+export function typedLine(kind: string, argv: readonly string[]): string {
+  return [kind, ...argv].map(arg => /^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", `'\\''`)}'`).join(' ');
+}
+
 /**
- * Start an agent whose first prompt rides in argv. herdr's readiness check waits for an idle agent,
- * which a working one never is, so give it a few seconds and then only require that herdr sees it.
+ * Start an agent whose first prompt rides in argv. herdr types the command into the pane's shell,
+ * and a shell still loading its rc files keeps only TTY_LINE_MAX bytes of it: a longer line loses
+ * its tail (and its closing quote), so refuse one up front rather than time out at a quote prompt.
+ * herdr's readiness check waits for an idle agent, which a working one never is, so give it a few
+ * seconds and then only require that herdr sees it.
  */
 export function startAgent(name: string, kind: string, pane: string, argv: string[], session?: string): void {
+  const length = Buffer.byteLength(typedLine(kind, argv));
+  if (length >= TTY_LINE_MAX) throw new Error(`crew: the ${kind} launch line is ${length} bytes; a loading shell keeps under ${TTY_LINE_MAX}`);
   const start = (): Result => herdr(['agent', 'start', name, '--kind', kind, '--pane', pane, '--timeout', '8000', '--', ...argv], 15_000, session);
   let started = start();
   // A fresh split's shell may still be loading its rc files; herdr refuses (nothing typed) until it's up.

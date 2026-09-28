@@ -54,6 +54,8 @@ export const newId = (prefix: string): string =>
 export const runDir = (id: string): string => join(home(), 'runs', id);
 export const resultPath = (id: string): string => join(runDir(id), 'result.md');
 export const packetPath = (id: string): string => join(runDir(id), 'packet.md');
+/** The child's standing instructions from crew (bootstrap), kept apart from the parent's packet. */
+export const briefPath = (id: string): string => join(runDir(id), 'brief.md');
 
 export const readRun = (id: string): RunMeta | undefined => readJson<RunMeta>(join(runDir(id), 'meta.json'));
 export const writeRun = (meta: RunMeta): void => writeJson(join(runDir(meta.id), 'meta.json'), meta);
