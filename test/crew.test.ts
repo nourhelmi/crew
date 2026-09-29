@@ -194,6 +194,16 @@ describe('settlement', () => {
     assert.equal(store.readRun('b-test')?.state, 'done');
     assert.match(mail.takeUnread('claude-root').map(m => m.text).join(), /CI green/);
   });
+  it('settles a settled run again when it rewrites DONE without a sweep catching IN PROGRESS', () => {
+    run();
+    writeResult('b-test', 'DONE: amendments 1-3');
+    mail.settle('b-test');
+    mail.takeUnread('claude-root');
+    writeResult('b-test', 'DONE: amendments 1-5, CI green');
+    assert.equal(runHook('stop', 'claude', '{"session_id":"t"}', { CREW_HOME: HOME, CREW_RUN: 'b-test' }), '');
+    assert.equal(store.readRun('b-test')?.state, 'done');
+    assert.deepEqual(mail.takeUnread('claude-root').map(m => [m.kind, m.text.replace(/^.*: /, '')]), [['settled', 'amendments 1-5, CI green']]);
+  });
   it('leaves kept teammates and unsettled drafts alone', () => {
     run({ keep: true, state: 'done', settled: { hash: 'h', at: new Date().toISOString(), status: 'DONE' } });
     writeResult('b-test', 'IN PROGRESS: next');

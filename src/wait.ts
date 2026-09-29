@@ -33,8 +33,8 @@ function sweep(mailbox: string, checkBg: boolean): void {
   for (const listed of listRuns()) {
     if (listed.parent.mailbox !== mailbox) continue;
     const run = reopen(listed);
-    if (run.state === 'running' || run.state === 'stalled' || run.state === 'blocked') {
-      // Parent-side settlement covers a child whose Stop hook never ran.
+    if (run.state !== 'stopped') {
+      // Parent-side settlement covers a child whose Stop hook never ran, and a settled child's newer result.
       const hasResult = Boolean(readResult(resultPath(run.id)));
       if (hasResult) settle(run.id);
       if (run.state === 'running') {

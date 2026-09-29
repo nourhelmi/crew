@@ -105,8 +105,9 @@ function stop(host: Host, input: HookInput, env: NodeJS.ProcessEnv): HookOutput 
   const reasons: string[] = [];
   const found = readRun(me.mailbox);
   const run = found && reopen(found);
-  // A blocked child often continues once its parent answers, so its next result settles too.
-  if (run && (run.state === 'running' || run.state === 'stalled' || run.state === 'blocked')) {
+  // A blocked child often continues once its parent answers, and a settled one can take an
+  // amendment after its DONE, so its next result settles too. Only a stopped run is over.
+  if (run && run.state !== 'stopped') {
     // A draft saying IN PROGRESS is still working (often waiting on its own background task):
     // nudged once, then reported as paused, never as stalled.
     const progress = progressLine(resultPath(run.id));
