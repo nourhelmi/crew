@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { basename } from 'node:path';
 import { readRun } from './store.ts';
-import { HOSTS, type Address, type Host } from './types.ts';
+import { HOSTS, type Address, type Host, type RunMeta } from './types.ts';
 
 type Env = Record<string, string | undefined>;
 
@@ -39,18 +39,30 @@ function hostAncestor(): { host: Host; pid: number } | undefined {
 }
 
 /**
+ * The crew run this session is, if any. CREW_RUN alone is not proof: a long-lived host service
+ * (Claude Code's `--bg` daemon) keeps the environment of whichever process started it and hands it
+ * to every later session. So once a run has recorded its session, only that session is the run.
+ */
+export function ownRun(env: Env, sessionId?: string): RunMeta | undefined {
+  const run = env.CREW_RUN ? readRun(env.CREW_RUN) : undefined;
+  if (!run) return undefined;
+  const mine = sessionId ?? env.CLAUDE_CODE_SESSION_ID ?? env.CODEX_THREAD_ID;
+  return run.sessionId && mine && run.sessionId !== mine ? undefined : run;
+}
+
+const runAddress = (run: RunMeta, env: Env): Address => ({
+  mailbox: run.id, host: run.route.host, name: run.name,
+  ...(run.threadId ? { threadId: run.threadId } : {}),
+  ...(run.herdr ? { herdrAgent: run.herdr.agent, ...(run.herdr.session ? { herdrSession: run.herdr.session } : {}) } : herdrTarget(env)),
+});
+
+/**
  * Who is calling crew. Precedence: a crew-spawned run, then the host session id
  * (Codex via CODEX_THREAD_ID, Claude via the SessionStart env file), then process ancestry.
  */
 export function self(env: Env = process.env): Address {
-  const run = env.CREW_RUN ? readRun(env.CREW_RUN) : undefined;
-  if (run) {
-    return {
-      mailbox: run.id, host: run.route.host, name: run.name,
-      ...(run.threadId ? { threadId: run.threadId } : {}),
-      ...(run.herdr ? { herdrAgent: run.herdr.agent, ...(run.herdr.session ? { herdrSession: run.herdr.session } : {}) } : herdrTarget(env)),
-    };
-  }
+  const run = ownRun(env);
+  if (run) return runAddress(run, env);
   // crew's OpenCode plugin sets this on every tool shell, so it always names the innermost session.
   if (env.CREW_OPENCODE_SESSION) {
     return { mailbox: sessionMailbox('opencode', env.CREW_OPENCODE_SESSION), host: 'opencode', ...herdrTarget(env) };
@@ -75,7 +87,8 @@ export function self(env: Env = process.env): Address {
 
 /** Identity inside a hook, where the host hands us its session id on stdin. */
 export function hookSelf(host: Host, sessionId: string | undefined, env: Env = process.env): Address | undefined {
-  if (env.CREW_RUN && readRun(env.CREW_RUN)) return self(env);
+  const run = ownRun(env, sessionId);
+  if (run) return runAddress(run, env);
   if (!sessionId) return undefined;
   return { mailbox: sessionMailbox(host, sessionId), host, ...(host === 'codex' ? { threadId: sessionId } : {}), ...herdrTarget(env) };
 }

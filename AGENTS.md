@@ -14,6 +14,10 @@
 - Herdr: always pass the run's recorded session (`--session`) and address agents by pane id.
   herdr types the launch line into a shell that may still be loading its rc files, where the tty
   keeps only 1024 bytes of a line: instructions go in `runs/<id>/brief.md`, never in argv.
+- Host services outlive the call that starts them and hand their environment to every later session
+  (Claude Code's `--bg` daemon; Codex's app server). A Claude bg child's crew env goes in `--settings`,
+  never the `claude --bg` process env, and `CREW_RUN` is trusted only via `ownRun`: a run belongs to
+  the first session that claims it.
 - Compaction drops file reads. Anything a session must keep following lives in a file that the
   SessionStart `compact` branch (`afterCompaction` in `src/hook.ts`) points back to.
 - Mail: the inbox is the only content channel. Pushes (`codex queue`, herdr prompts) are one-line

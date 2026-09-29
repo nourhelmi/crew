@@ -213,6 +213,7 @@ describe('hooks', () => {
     runHook('session-start', 'claude', '{"session_id":"s-1"}', env({ CREW_RUN: 'b-test', CLAUDE_ENV_FILE: envFile }));
     assert.equal(store.readRun('b-test')?.sessionId, 's-1');
     assert.match(readFileSync(envFile, 'utf8'), /CREW_MAILBOX=claude-s-1/);
+    run(); // a fresh, unclaimed run for the Codex session
     runHook('session-start', 'codex', '{"session_id":"t-9"}', env({ CREW_RUN: 'b-test' }));
     assert.equal(store.readRun('b-test')?.threadId, 't-9');
   });
@@ -907,5 +908,35 @@ describe('native subagents in crew runs', () => {
     run({ role: 'advisor' });
     assert.equal(runHook('pre-agent', 'claude', agent('Explore'), { CREW_HOME: HOME, CREW_RUN: 'b-test' }), '');
     assert.equal(runHook('pre-agent', 'claude', agent('general-purpose'), { CREW_HOME: HOME }), '');
+  });
+});
+
+describe('an inherited CREW_RUN', async () => {
+  const { ownRun, self } = await import('../src/identity.ts');
+  const { bgInvocation } = await import('../src/spawn.ts');
+  const env = (extra: Record<string, string> = {}) => ({ CREW_HOME: HOME, CREW_RUN: 'b-test', ...extra });
+  const hookIn = (session: string, extra: object = {}) => JSON.stringify({ session_id: session, ...extra });
+  it('binds a run to the first session that claims it; any other session carrying it is not that run', () => {
+    run();
+    runHook('session-start', 'claude', hookIn('s-own'), env());
+    runHook('session-start', 'claude', hookIn('s-other'), env());
+    assert.equal(store.readRun('b-test')?.sessionId, 's-own', 'a later session must not take the run over');
+    assert.equal(ownRun(env(), 's-own')?.id, 'b-test');
+    assert.equal(ownRun(env(), 's-other'), undefined);
+    assert.equal(self(env({ CLAUDE_CODE_SESSION_ID: 's-other' })).mailbox, 'claude-s-other');
+    assert.equal(self(env({ CLAUDE_CODE_SESSION_ID: 's-own' })).mailbox, 'b-test');
+    const agent = (session: string) => runHook('pre-agent', 'claude', hookIn(session, { tool_name: 'Agent', tool_input: { subagent_type: 'general-purpose' } }), env());
+    assert.match(agent('s-own'), /"permissionDecision":"deny"/);
+    assert.equal(agent('s-other'), '', 'a user session that merely inherited CREW_RUN keeps its subagents');
+  });
+  it('starts claude --bg with no session, run or herdr variables, and the run\'s env in --settings', () => {
+    const saved = { ...process.env };
+    Object.assign(process.env, { CREW_RUN: 'b-parent', HERDR_PANE_ID: 'w1:p1', CLAUDE_CODE_SESSION_ID: 's-parent', CODEX_THREAD_ID: 't-1', KEEP_ME: '1' });
+    try {
+      const call = bgInvocation(['--model', 'x', 'GO'], { CREW_RUN: 'b-child' });
+      assert.deepEqual(call.argv, ['--bg', '--settings', '{"env":{"CREW_RUN":"b-child"}}', '--model', 'x', 'GO']);
+      assert.deepEqual(Object.keys(call.env).filter(k => /^(CREW_|HERDR_|CLAUDE_CODE_)|^CODEX_THREAD_ID$/.test(k)), []);
+      assert.equal(call.env.KEEP_ME, '1');
+    } finally { for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]; Object.assign(process.env, saved); }
   });
 });

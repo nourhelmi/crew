@@ -175,8 +175,22 @@ export function bgSession(name: string): { id: string; status?: string } | undef
   return typeof id === 'string' ? { id, ...(typeof status === 'string' ? { status } : {}) } : undefined;
 }
 
+/**
+ * `claude --bg` hands the session to Claude Code's shared background service, which keeps the
+ * environment of whichever process started it and gives it to every later session: one crew spawn
+ * that started it once made every later bg session, crew's or the user's, claim that run. So the
+ * child's crew env travels in --settings (the session applies it itself, over anything inherited),
+ * and the call carries no session, run or herdr variables for a service it might start.
+ */
+export function bgInvocation(args: string[], extra: Record<string, string>): { argv: string[]; env: NodeJS.ProcessEnv } {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (/^(CLAUDECODE$|CLAUDE_CODE_|CREW_|CODEX_THREAD_ID$|HERDR_)/.test(key)) delete env[key];
+  return { argv: ['--bg', '--settings', JSON.stringify({ env: extra }), ...args], env };
+}
+
 function launchClaudeBg(run: RunMeta, args: string[], extra: Record<string, string>): Launched {
-  const out = execFileSync('claude', ['--bg', ...args], { cwd: run.cwd, env: childEnv(extra), encoding: 'utf8', timeout: 60_000 });
+  const call = bgInvocation(args, extra);
+  const out = execFileSync('claude', call.argv, { cwd: run.cwd, env: call.env, encoding: 'utf8', timeout: 60_000 });
   const bgId = bgSession(run.name)?.id ?? out.trim().split(/\s+/).at(-1);
   if (!bgId) throw new Error(`claude --bg printed no session id: ${out.trim().slice(0, 200)}`);
   return { launcher: 'bg', bgId };

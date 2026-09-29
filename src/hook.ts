@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, write
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { herdrBin } from './herdr.ts';
-import { hookSelf, sessionMailbox } from './identity.ts';
+import { hookSelf, ownRun, sessionMailbox } from './identity.ts';
 import { format, paused, settle, stall, takeUnread } from './mail.ts';
 import { contract, progressLine, readResult } from './result.ts';
 import { bootstrap, ROOT } from './spawn.ts';
@@ -36,8 +36,10 @@ const makerResult = (host: Host, agentId: string): string => join(home(), 'runs'
 function sessionStart(host: Host, input: HookInput, env: NodeJS.ProcessEnv): HookOutput {
   const sessionId = input.session_id;
   if (!sessionId) return undefined;
+  // The first session claims its run; a later one carrying the same CREW_RUN inherited it (ownRun).
   if (env.CREW_RUN && readRun(env.CREW_RUN)) {
-    updateRun(env.CREW_RUN, run => ({ ...run, sessionId, ...(host === 'codex' ? { threadId: sessionId } : {}) }));
+    updateRun(env.CREW_RUN, run => run.sessionId && run.sessionId !== sessionId ? run
+      : { ...run, sessionId, ...(host === 'codex' ? { threadId: sessionId } : {}) });
   }
   if (host === 'claude' && env.CLAUDE_ENV_FILE) {
     appendFileSync(env.CLAUDE_ENV_FILE,
@@ -72,7 +74,7 @@ function advisorSession(host: Host, sessionId: string, env: NodeJS.ProcessEnv): 
 function afterCompaction(host: Host, sessionId: string, cwd: string | undefined, env: NodeJS.ProcessEnv): string | undefined {
   const me = hookSelf(host, sessionId, env);
   const children = me ? waitHint(me) : undefined;
-  const run = env.CREW_RUN ? readRun(env.CREW_RUN) : undefined;
+  const run = ownRun(env, sessionId);
   if (run) {
     const brief = existsSync(briefPath(run.id)) ? `re-read your brief (${briefPath(run.id)})` : `your brief: ${bootstrap(run)} Re-read it`;
     return `[crew] Your context was just compacted. You are crew ${run.role} "${run.name}" (run ${run.id}); ${brief}`
@@ -147,7 +149,7 @@ function closeFinishedPane(id: string): void {
  * queued input between turns). The plugin's shell guard skips non-crew sessions before node starts.
  */
 function postTool(host: Host, input: HookInput, env: NodeJS.ProcessEnv): HookOutput {
-  if (!env.CREW_RUN) return undefined;
+  if (!ownRun(env, input.session_id)) return undefined;
   const me = hookSelf(host, input.session_id, env);
   if (!me) return undefined;
   const { mails } = unread(me.mailbox);
@@ -172,7 +174,7 @@ const LOOKUP_AGENTS = new Set(['Explore', 'Plan', 'claude-code-guide']);
  * 60 native makers, all on Opus). Read-only lookups may stay native.
  */
 function preAgent(_host: Host, input: HookInput, env: NodeJS.ProcessEnv): HookOutput {
-  if (!env.CREW_RUN || !readRun(env.CREW_RUN)) return undefined;
+  if (!ownRun(env, input.session_id)) return undefined;
   const type = input.tool_input?.subagent_type ?? 'general-purpose';
   if (LOOKUP_AGENTS.has(type)) return undefined;
   return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny',
