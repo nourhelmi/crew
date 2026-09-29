@@ -588,6 +588,7 @@ describe('wakes', async () => {
     const bin = mkdtempSync(join(tmpdir(), 'crew-wake-'));
     const log = join(bin, 'calls');
     const starts = join(bin, 'starts');
+    writeFileSync(join(bin, 'codex'), `#!/bin/sh\necho "$@" >> '${log}'\n`, { mode: 0o755 });
     writeFileSync(join(bin, 'herdr'), `#!/bin/sh
 echo "$@" >> '${log}'
 case "$*" in
@@ -599,7 +600,7 @@ esac
     delete process.env.HERDR_BIN_PATH;
     process.env.PATH = `${bin}:${path}`;
     return {
-      calls: (verb: string) => readFileSync(log, 'utf8').trim().split('\n').filter(line => line.startsWith(verb)),
+      calls: (verb: string) => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : []).filter(line => line.startsWith(verb)),
       done: () => { process.env.PATH = path; if (herdrBin) process.env.HERDR_BIN_PATH = herdrBin; rmSync(bin, { recursive: true, force: true }); },
     };
   };
@@ -613,6 +614,20 @@ esac
       assert.deepEqual(s.calls('agent prompt'), ['agent prompt w1:p1 [crew] new message from lane. Run: crew inbox']);
       assert.deepEqual(mail.takeUnread('claude-busy').map(m => m.text), ['one', 'two', 'three']);
       assert.equal(deliver(idle, letter('four')), 'herdr-prompt');
+    } finally { s.done(); }
+  });
+  it('queues a Codex pointer for a root thread only, never for a run its hooks already reach', () => {
+    const s = stub();
+    try {
+      const root = { mailbox: 'codex-01a0root', host: 'codex' as const, threadId: '01a0root' };
+      assert.equal(deliver(root, letter('settled')), 'codex-queue');
+      assert.deepEqual(s.calls('queue'), ['queue --thread 01a0root --message [crew] new message from lane. Run: crew inbox']);
+      const child = mail.runAddress(run({ threadId: '01a0child', sessionId: '01a0child' }));
+      assert.equal(deliver(child, letter('amend')), 'queued');
+      assert.equal(mail.runAddress(run({ id: 'b-done', state: 'done', threadId: '01a0done' })).threadId, '01a0done');
+      assert.equal(deliver(mail.runAddress(store.readRun('b-done')!), letter('late')), 'queued');
+      assert.equal(s.calls('queue').length, 1, 'no pointer queued into a run thread');
+      assert.deepEqual(mail.takeUnread('b-test').map(m => m.text), ['amend']);
     } finally { s.done(); }
   });
   it('retries agent start while a fresh pane is still loading its shell', () => {

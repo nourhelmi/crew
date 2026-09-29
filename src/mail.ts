@@ -58,15 +58,20 @@ export function codexQueue(threadId: string, text: string): boolean {
 
 /**
  * The inbox is the source of truth; pushes only wake the recipient.
- * Ladder: an armed `crew wait` sees it within a second; else push into a Codex thread; an OpenCode
- * session's own crew plugin watches its inbox and wakes it; else type a one-line pointer into an
- * idle herdr agent; else it waits
- * for the recipient's next `crew wait`, `crew inbox` or Stop hook.
+ * Ladder: an armed `crew wait` sees it within a second; else push into a root Codex thread; an
+ * OpenCode session's own crew plugin watches its inbox and wakes it; else type a one-line pointer
+ * into an idle herdr agent; else it waits for the recipient's next `crew wait`, `crew inbox` or
+ * Stop hook.
+ *
+ * Never `codex queue` a run: its hooks already announce mail after each tool call and hand it over
+ * before the turn can end. A queued pointer drains only at a turn end, or whenever someone opens
+ * the thread in the Codex app, so for a run it fires after the work is over, as a fresh turn in a
+ * finished thread that finds an empty inbox. `codex exec` never drains it at all.
  */
 export function deliver(to: Address, mail: Mail): Delivery {
   if (hasWaiter(to.mailbox)) { appendMail(to.mailbox, mail); return 'waiter'; }
   if (wakePending(to.mailbox)) { appendMail(to.mailbox, mail); return 'queued'; }
-  if (to.host === 'codex' && to.threadId && codexQueue(to.threadId, pointer(mail))) {
+  if (to.host === 'codex' && to.threadId && !readRun(to.mailbox) && codexQueue(to.threadId, pointer(mail))) {
     appendMail(to.mailbox, { ...mail, pushed: true });
     return 'codex-queue';
   }
