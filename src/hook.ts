@@ -1,14 +1,12 @@
-import { spawn } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { herdrBin } from './herdr.ts';
 import { hookSelf, ownRun, sessionMailbox } from './identity.ts';
 import { format, paused, reopen, settle, stall, takeUnread } from './mail.ts';
 import { contract, progressLine, readResult } from './result.ts';
 import { bootstrap, ROOT } from './spawn.ts';
 import { briefPath, home, mailDir, packetPath, readRun, resultPath, unread, updateRun } from './store.ts';
-import { waitHint } from './wait.ts';
+import { ensureWatcher, waitHint } from './wait.ts';
 import type { Host } from './types.ts';
 
 export interface HookInput {
@@ -132,17 +130,11 @@ function stop(host: Host, input: HookInput, env: NodeJS.ProcessEnv): HookOutput 
   return undefined;
 }
 
-/**
- * A finished, non-kept herdr child closes its own pane once its turn has ended; failed,
- * blocked and kept ones stay open for inspection. Detached, so the host's hook returns first.
- */
+/** Closure is acknowledged only after a successful host lookup and pane close. */
 function closeFinishedPane(id: string): void {
   const run = readRun(id);
   if (!run || run.keep || run.state !== 'done' || !run.herdr || run.herdr.closed) return;
-  const herdrArgs = [...(run.herdr.session ? ['--session', run.herdr.session] : []), 'pane', 'close', run.herdr.pane];
-  const quoted = herdrArgs.map(arg => `'${arg.replace(/'/g, `'\\''`)}'`).join(' ');
-  spawn('sh', ['-c', `sleep 2; '${herdrBin()}' ${quoted}`], { detached: true, stdio: 'ignore' }).unref();
-  updateRun(id, current => current.herdr ? { ...current, herdr: { ...current.herdr, closed: true } } : current);
+  ensureWatcher(run.parent.mailbox);
 }
 
 /**

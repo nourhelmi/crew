@@ -52,7 +52,15 @@ export interface RunMeta {
   /** Learned from the child's SessionStart hook. */
   sessionId?: string;
   threadId?: string;
-  settled?: { hash: string; at: string; status: string };
+  /** The original launch inputs, excluding credentials; resumes retain model, access and routing. */
+  launch?: { args: string[]; env: Record<string, string> };
+  /** Competing resume requests target the same turn generation. */
+  turn?: number;
+  /** Last mail batch for which a headless turn actually launched; failed turns need new mail or explicit resume. */
+  resumedMail?: string;
+  settled?: { hash: string; at: string; status: string; notice?: Mail; notified?: boolean };
+  /** An amendment requires a fresh result, even after the child consumes its inbox. */
+  amendment?: { number: number; resultHash?: string };
   /** Set while herdr reports the child blocked on a dialog. */
   waitingSince?: string;
   /** Checker only: the run whose work it reviews; its verdict becomes routing evidence for that run. */
@@ -75,7 +83,7 @@ export interface Mail {
   pushed?: boolean;
 }
 
-export type Delivery = 'waiter' | 'codex-queue' | 'opencode-plugin' | 'herdr-prompt' | 'queued';
+export type Delivery = 'waiter' | 'codex-queue' | 'opencode-plugin' | 'herdr-prompt' | 'headless-resume' | 'queued';
 
 export interface Config {
   /** Role defaults when the Jev router is off or fails; `model@effort`. */

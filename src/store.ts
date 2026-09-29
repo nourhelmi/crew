@@ -61,11 +61,13 @@ export const readRun = (id: string): RunMeta | undefined => readJson<RunMeta>(jo
 export const writeRun = (meta: RunMeta): void => writeJson(join(runDir(meta.id), 'meta.json'), meta);
 
 export function updateRun(id: string, patch: (meta: RunMeta) => RunMeta | undefined): RunMeta | undefined {
-  const meta = readRun(id);
-  if (!meta) return undefined;
-  const next = patch(meta);
-  if (next) writeRun(next);
-  return next ?? meta;
+  return withLock(`run-${id}`, () => {
+    const meta = readRun(id);
+    if (!meta) return undefined;
+    const next = patch(meta);
+    if (next) writeRun(next);
+    return next ?? meta;
+  });
 }
 
 export function listRuns(): RunMeta[] {
@@ -109,7 +111,15 @@ export function unread(mailbox: string): { mails: Mail[]; commit: () => void } {
   const complete = chunk.lastIndexOf(0x0a) + 1; // ignore a line still being written
   const mails = chunk.subarray(0, complete).toString('utf8').split('\n').filter(Boolean)
     .flatMap(line => { try { return [JSON.parse(line) as Mail]; } catch { return []; } });
-  return { mails, commit: () => { if (complete) writeFileSync(cursorFile, String(start + complete)); } };
+  return { mails, commit: () => {
+    if (!complete) return;
+    withLock(`cursor-${mailbox}`, () => {
+      let current = 0;
+      try { current = Number(readFileSync(cursorFile, 'utf8')) || 0; } catch { /* first read */ }
+      if (current > statSync(join(dir, 'inbox.jsonl')).size) current = 0; // inbox was truncated/replaced
+      writeFileSync(cursorFile, String(Math.max(current, start + complete)));
+    });
+  } };
 }
 
 // ---- locks -----------------------------------------------------------------
@@ -133,6 +143,24 @@ export function withLock<T>(name: string, work: () => T, waitMs = 30_000, staleM
   }
   try { return work(); }
   finally { try { rmdirSync(dir); } catch { /* already broken as stale */ } }
+}
+
+/** A launch must keep its mutex through Node's asynchronous spawn/error event. */
+export async function withLockAsync<T>(name: string, work: () => Promise<T>): Promise<T> {
+  const dir = join(home(), 'locks', name.replace(/[^a-zA-Z0-9._-]/g, '_'));
+  mkdirSync(dirname(dir), { recursive: true });
+  const deadline = Date.now() + 90_000;
+  for (;;) {
+    try { mkdirSync(dir); break; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      if (Date.now() - (mtime(dir) ?? Date.now()) > 120_000) { try { rmdirSync(dir); } catch { /* another breaker */ } continue; }
+      if (Date.now() > deadline) throw new Error(`crew: timed out waiting for lock ${name}`);
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
+  try { return await work(); }
+  finally { try { rmdirSync(dir); } catch { /* already removed */ } }
 }
 
 // ---- waiter presence -------------------------------------------------------

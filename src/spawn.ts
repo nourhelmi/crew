@@ -1,5 +1,5 @@
 import { execFileSync, spawn as spawnProcess } from 'node:child_process';
-import { mkdirSync, openSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,7 +47,7 @@ export function bootstrap(run: Pick<RunMeta, 'id' | 'name' | 'role' | 'keep' | '
     'when you finish, the first line under Status must be DONE, PASS, FAIL or BLOCKED: <reason>',
     '(a draft written while you work says IN PROGRESS: BLOCKED and FAIL report to your parent, so they are never placeholders).',
     run.keep
-      ? 'You are a kept teammate: after each result, stay available. New assignments arrive as crew messages; rewrite result.md for each one.'
+      ? 'You are a kept teammate: after each result, stay available. New assignments arrive as packet amendments; rewrite result.md for each one.'
         + ' Mid-assignment, keep going; if a turn must end before done-when is met, set Status to IN PROGRESS: <next step> (it wakes nobody).'
       : 'Finish by writing the result; your parent is woken automatically.',
     'Ask your parent with: crew msg parent "...". Read new mail with: crew inbox.',
@@ -95,11 +95,19 @@ export function argv(host: Host, r: Route, name: string, config: Config, firstPr
 }
 
 /** Env for children launched from this process; drop host markers so nested CLIs start clean. */
+const HOST_CONTEXT = new Set(['CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_SESSION_ID', 'CODEX_THREAD_ID', 'CREW_MAILBOX', 'CREW_OPENCODE_SESSION']);
+
 function childEnv(extra: Record<string, string>): NodeJS.ProcessEnv {
   const env = { ...process.env, ...extra };
-  for (const key of Object.keys(env)) {
-    if (key === 'CLAUDECODE' || key.startsWith('CLAUDE_CODE_') || key === 'CODEX_THREAD_ID' || key === 'CREW_MAILBOX' || key === 'CREW_OPENCODE_SESSION') delete env[key];
-  }
+  for (const key of HOST_CONTEXT) delete env[key];
+  return env;
+}
+
+/** Host homes must follow the run, even when another caller's watcher performs the lookup. */
+export function hostEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const key of ['HOME', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR']) if (extra[key]) env[key] = extra[key];
+  for (const key of Object.keys(env)) if (HOST_CONTEXT.has(key) || /^(CREW_|HERDR_)/.test(key)) delete env[key];
   return env;
 }
 
@@ -131,7 +139,7 @@ function ensureCodexDaemon(): void {
 }
 
 /** What a launcher learned; merged into the live metadata, which the child's hooks may already have updated. */
-type Launched = Pick<RunMeta, 'launcher'> & Partial<Pick<RunMeta, 'herdr' | 'bgId' | 'pid'>>;
+type Launched = Pick<RunMeta, 'launcher'> & Partial<Pick<RunMeta, 'herdr' | 'bgId' | 'pid' | 'sessionId'>>;
 
 /** The caller's open child panes in its herdr session, newest first. */
 export function childPanes(parentMailbox: string, session: string | undefined, except?: string): string[] {
@@ -162,17 +170,26 @@ function launchHerdr(run: RunMeta, args: string[], extra: Record<string, string>
   return { launcher: 'herdr', herdr: { pane, agent: pane, ...(session ? { session } : {}) } };
 }
 
-/** Background sessions are looked up by the name we gave them; `claude --bg` output is for humans. */
-export function bgSession(name: string): { id: string; status?: string } | undefined {
+/** Immutable host identity only. A failed/invalid listing is unknown, never proof of absence. */
+export function bgSession(id: string, extra: Record<string, string> = {}): { id: string; sessionId?: string; status?: string } | 'unknown' | undefined {
   let listed: unknown;
-  try { listed = JSON.parse(execFileSync('claude', ['agents', '--json', '--all'], { encoding: 'utf8', timeout: 30_000 })); }
-  catch { return undefined; }
-  const rows = Array.isArray(listed) ? listed as Record<string, unknown>[] : [];
-  const row = rows.findLast(entry => entry.name === name);
-  const id = row?.id ?? row?.sessionId;
-  // Background rows report `state` (e.g. "done" when idle), interactive rows `status`.
-  const status = row?.state ?? row?.status;
-  return typeof id === 'string' ? { id, ...(typeof status === 'string' ? { status } : {}) } : undefined;
+  try { listed = JSON.parse(execFileSync('claude', ['agents', '--json', '--all'], { env: hostEnv(extra), encoding: 'utf8', timeout: 5_000 })); }
+  catch { return 'unknown'; }
+  if (!Array.isArray(listed) || listed.some(entry => !entry || typeof entry !== 'object' || (typeof entry.id !== 'string' && typeof entry.sessionId !== 'string'))) return 'unknown';
+  const row = listed.find(entry => entry.id === id || entry.sessionId === id);
+  if (!row) return undefined;
+  const identity = row.id ?? row.sessionId;
+  const status = row.state ?? row.status;
+  return typeof identity === 'string' ? { id: identity, ...(typeof row.sessionId === 'string' ? { sessionId: row.sessionId } : {}), ...(typeof status === 'string' ? { status } : {}) } : 'unknown';
+}
+
+/** Completed rows keep their "done" verdict after stop; the active-only list proves exit. */
+export function bgActive(id: string, extra: Record<string, string> = {}): boolean | 'unknown' {
+  try {
+    const listed: unknown = JSON.parse(execFileSync('claude', ['agents', '--json'], { env: hostEnv(extra), encoding: 'utf8', timeout: 5_000 }));
+    if (!Array.isArray(listed) || listed.some(entry => !entry || typeof entry !== 'object' || (typeof entry.id !== 'string' && typeof entry.sessionId !== 'string'))) return 'unknown';
+    return listed.some(row => row.id === id || row.sessionId === id);
+  } catch { return 'unknown'; }
 }
 
 /**
@@ -183,28 +200,60 @@ export function bgSession(name: string): { id: string; status?: string } | undef
  * and the call carries no session, run or herdr variables for a service it might start.
  */
 export function bgInvocation(args: string[], extra: Record<string, string>): { argv: string[]; env: NodeJS.ProcessEnv } {
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) if (/^(CLAUDECODE$|CLAUDE_CODE_|CREW_|CODEX_THREAD_ID$|HERDR_)/.test(key)) delete env[key];
+  const env = hostEnv(extra);
   return { argv: ['--bg', '--settings', JSON.stringify({ env: extra }), ...args], env };
 }
 
-function launchClaudeBg(run: RunMeta, args: string[], extra: Record<string, string>): Launched {
-  const call = bgInvocation(args, extra);
+export function launchClaudeBg(run: RunMeta, args: string[], extra: Record<string, string>, resuming = false): Launched {
+  if (resuming && !run.sessionId) throw new Error(`crew: ${run.name} has no recorded Claude session id`);
+  if (resuming) {
+    // A "done" background row still owns a live TUI. Stop that idle worker first; otherwise
+    // --resume makes a copy. No new options may accompany resume: Claude restores saved ones.
+    execFileSync('claude', ['stop', run.bgId ?? run.sessionId!], { env: hostEnv(extra), stdio: 'ignore', timeout: 20_000 });
+    const deadline = Date.now() + 10_000;
+    let active = bgActive(run.bgId ?? run.sessionId!, extra);
+    while (active !== false && Date.now() < deadline) {
+      execFileSync('sleep', ['0.2']);
+      active = bgActive(run.bgId ?? run.sessionId!, extra);
+    }
+    if (active !== false) {
+      throw new Error(`crew: ${run.name}'s background worker has not confirmed its stop; resume deferred`);
+    }
+  }
+  const call = resuming ? { argv: ['--bg', '--resume', run.sessionId!, '--', args.at(-1)!], env: hostEnv(extra) }
+    : bgInvocation(args, extra);
   const out = execFileSync('claude', call.argv, { cwd: run.cwd, env: call.env, encoding: 'utf8', timeout: 60_000 });
-  const bgId = bgSession(run.name)?.id ?? out.trim().split(/\s+/).at(-1);
-  if (!bgId) throw new Error(`claude --bg printed no session id: ${out.trim().slice(0, 200)}`);
-  return { launcher: 'bg', bgId };
+  writeFileSync(join(runDir(run.id), 'bg-launch.log'), out, { flag: 'a', mode: 0o600 });
+  // Claude owns the UUID and ignores --session-id in --bg mode. Its launch receipt has a
+  // specific short-id field; never guess the final stdout word or select a reused name.
+  const receipt = out.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').match(/^backgrounded · ([0-9a-f]{8})\b/m);
+  if (!receipt) throw new Error(`crew: Claude background launch returned no valid receipt (see ${join(runDir(run.id), 'bg-launch.log')})`);
+  const bgId = receipt[1]!;
+  const session = bgSession(bgId, extra);
+  if (resuming && ((run.bgId && bgId !== run.bgId) || (session && session !== 'unknown' && session.sessionId && session.sessionId !== run.sessionId))) {
+    try { execFileSync('claude', ['stop', bgId], { env: hostEnv(extra), stdio: 'ignore', timeout: 20_000 }); } catch { /* best effort cleanup of the unexpected copy */ }
+    throw new Error(`crew: Claude copied ${run.name} instead of resuming its recorded session; stopped the copy`);
+  }
+  return { launcher: 'bg', bgId, ...(session && session !== 'unknown' && session.sessionId ? { sessionId: session.sessionId } : {}) };
 }
 
 /** Headless run outside herdr: `codex exec`, or `opencode run` (whose args already start with `run`). */
-function launchExec(run: RunMeta, args: string[], extra: Record<string, string>): Launched {
+export async function launchExec(run: RunMeta, args: string[], extra: Record<string, string>, resuming = false): Promise<Launched> {
   const log = openSync(join(runDir(run.id), 'exec.log'), 'a');
+  if (resuming) {
+    if (!run.sessionId) throw new Error(`crew: ${run.name} has no recorded host session id`);
+    args = run.route.host === 'opencode' ? [...args.slice(0, -1), '--session', run.sessionId, args.at(-1)!]
+      : [...args.slice(0, -1), 'resume', run.sessionId, args.at(-1)!];
+  }
   const [command, full] = run.route.host === 'opencode' ? ['opencode', [...args.slice(0, 1), '--dir', run.cwd, ...args.slice(1)]]
     : ['codex', ['exec', '--json', '-C', run.cwd, ...args]];
-  const child = spawnProcess(command, full, { cwd: run.cwd, env: childEnv(extra), detached: true, stdio: ['ignore', log, log] });
-  child.unref();
-  if (!child.pid) throw new Error(`${command} did not start`);
-  return { launcher: 'exec', pid: child.pid };
+  try {
+    const child = spawnProcess(command, full, { cwd: run.cwd, env: childEnv(extra), detached: true, stdio: ['ignore', log, log] });
+    await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
+    child.unref();
+    if (!child.pid) throw new Error(`${command} did not start`);
+    return { launcher: 'exec', pid: child.pid };
+  } finally { closeSync(log); }
 }
 
 /** Live crew runs per host: they share one subscription, so their burn rate adds up. */
@@ -247,39 +296,55 @@ export async function spawn(options: SpawnOptions): Promise<RunMeta> {
     ...(options.model ? { model: options.model } : {}), ...(options.effort ? { effort: options.effort } : {}),
   }, { ...config, router: { ...config.router, enabled: router.on } });
   if (!router.on && chosen.strategy === 'default') chosen.reason = `router off (${router.source})`;
-  const placed = withinCapacity(chosen, config, options.effort);
+  let placed = withinCapacity(chosen, config, options.effort);
   const id = newId(options.role.slice(0, 1));
   const run: RunMeta = {
     id, name: options.name ?? `${options.role}-${id.slice(-4)}`, role: options.role, route: placed,
     cwd: options.cwd, keep: options.keep, parent, launcher: inHerdr() ? 'herdr' : placed.host === 'claude' ? 'bg' : 'exec',
     createdAt: new Date().toISOString(), state: 'running', ...(checks ? { checks } : {}),
   };
-  const roots = writableRoots(options.cwd);
-  const args = argv(placed.host, placed, run.name, config, firstPrompt(run), roots, run.launcher === 'exec');
   if (options.dryRun) return run;
 
-  mkdirSync(runDir(id), { recursive: true });
-  writeFileSync(packetPath(id), options.task.endsWith('\n') ? options.task : `${options.task}\n`, { mode: 0o600 });
-  writeFileSync(briefPath(id), `${bootstrap(run)}\n`, { mode: 0o600 });
-  writeRun(run);
+  // Routing awaits an external process; reserve the name and capacity from fresh state afterwards.
+  withLock('spawn', () => {
+    if (listRuns().some(current => current.name === run.name && current.state === 'running')) {
+      throw new Error(`crew: a live run is already named "${run.name}"`);
+    }
+    placed = withinCapacity(chosen, config, options.effort);
+    run.route = placed;
+    run.launcher = inHerdr() ? 'herdr' : placed.host === 'claude' ? 'bg' : 'exec';
+    mkdirSync(runDir(id), { recursive: true });
+    writeFileSync(packetPath(id), options.task.endsWith('\n') ? options.task : `${options.task}\n`, { mode: 0o600 });
+    writeFileSync(briefPath(id), `${bootstrap(run)}\n`, { mode: 0o600 });
+    writeRun(run);
+  });
+  const roots = writableRoots(options.cwd);
+  const args = argv(placed.host, placed, run.name, config, firstPrompt(run), roots, run.launcher === 'exec');
   const extra: Record<string, string> = {
-    CREW_RUN: id, ...(process.env.CREW_HOME ? { CREW_HOME: home() } : {}),
+    CREW_RUN: id, CREW_NODE: process.execPath, HOME: homedir(),
+    ...(process.env.CODEX_HOME ? { CODEX_HOME: process.env.CODEX_HOME } : {}),
+    ...(process.env.CLAUDE_CONFIG_DIR ? { CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR } : {}), ...(process.env.CREW_HOME ? { CREW_HOME: home() } : {}),
+    ...(process.env.CREW_CONFIG ? { CREW_CONFIG: process.env.CREW_CONFIG } : {}),
+    ...(process.env.CREW_ROSTER ? { CREW_ROSTER: process.env.CREW_ROSTER } : {}),
     // A session-level router choice follows the whole tree of children.
     ...(router.source !== 'config' ? { CREW_ROUTER: router.on ? 'on' : 'off' } : {}),
     ...(placed.host === 'opencode' ? opencodeEnv(placed, roots) : {}),
   };
+  updateRun(id, current => ({ ...current, launch: { args, env: extra }, ...(run.sessionId ? { sessionId: run.sessionId } : {}) }));
   if (run.launcher !== 'exec') trustPaths(trustTargets(options.cwd, config.trust.roots));
   let launched: Launched;
   try {
     launched = run.launcher === 'herdr' ? launchHerdr(run, args, extra)
       : run.launcher === 'bg' ? launchClaudeBg(run, args, extra)
-      : launchExec(run, args, extra);
+      : await launchExec(run, args, extra);
   } catch (error) {
     updateRun(id, current => ({ ...current, state: 'failed' }));
     throw error;
   }
   // A fast child can settle (and its hooks record ids) before launch returns: merge, never overwrite.
-  const live = updateRun(id, current => ({ ...current, ...launched })) ?? { ...run, ...launched };
+  const live = updateRun(id, current => ({ ...current, ...launched,
+    ...(current.herdr ? { herdr: { ...launched.herdr, ...current.herdr } } : {}),
+  })) ?? { ...run, ...launched };
   (await import('./wait.ts')).ensureWatcher(parent.mailbox);
   return live;
 }

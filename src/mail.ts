@@ -3,9 +3,10 @@ import { createHash } from 'node:crypto';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { agentStatus, prompt } from './herdr.ts';
+import { requestResume } from './resume.ts';
 import { reviewed } from './outcome.ts';
 import { progressLine, readResult } from './result.ts';
-import { appendMail, findRun, hasWaiter, newId, packetPath, readRun, resultPath, runDir, unread, updateRun, writeRun } from './store.ts';
+import { appendMail, findRun, hasWaiter, mailDir, newId, packetPath, readJson, readRun, resultPath, runDir, unread, updateRun, withLock, writeJson } from './store.ts';
 import type { Address, Delivery, Host, Mail, RunMeta } from './types.ts';
 
 export function runAddress(run: RunMeta): Address {
@@ -46,7 +47,9 @@ function pointer(mail: Mail): string {
 /** A wake pushed this recently and still unread covers later mail too: one push per batch. */
 const WAKE_COVERS_MS = 10 * 60_000;
 function wakePending(mailbox: string): boolean {
-  return unread(mailbox).mails.some(mail => mail.pushed && Date.now() - Date.parse(mail.at) < WAKE_COVERS_MS);
+  const wake = readJson<{ id: string; at: number }>(join(mailDir(mailbox), 'wake.json'));
+  return unread(mailbox).mails.some(mail => (mail.pushed && Date.now() - Date.parse(mail.at) < WAKE_COVERS_MS)
+    || (mail.id === wake?.id && Date.now() - wake.at < WAKE_COVERS_MS));
 }
 
 export function codexQueue(threadId: string, text: string): boolean {
@@ -69,21 +72,36 @@ export function codexQueue(threadId: string, text: string): boolean {
  * finished thread that finds an empty inbox. `codex exec` never drains it at all.
  */
 export function deliver(to: Address, mail: Mail): Delivery {
-  if (hasWaiter(to.mailbox)) { appendMail(to.mailbox, mail); return 'waiter'; }
-  if (wakePending(to.mailbox)) { appendMail(to.mailbox, mail); return 'queued'; }
+  return withLock(`delivery-${to.mailbox}`, () => {
+    const covered = wakePending(to.mailbox);
+    // Persist before any wake: an idle recipient can read its inbox immediately.
+    const file = join(mailDir(to.mailbox), 'inbox.jsonl');
+    let existing = false;
+    try { existing = readFileSync(file, 'utf8').split('\n').some(line => { try { return JSON.parse(line).id === mail.id; } catch { return false; } }); } catch { /* first delivery */ }
+    if (!existing) appendMail(to.mailbox, mail);
+    if (hasWaiter(to.mailbox)) return 'waiter';
+    if (covered) return 'queued';
+    const delivery = push(to, mail);
+    if (delivery === 'codex-queue' || delivery === 'herdr-prompt' || delivery === 'headless-resume') {
+      writeJson(join(mailDir(to.mailbox), 'wake.json'), { id: mail.id, at: Date.now() });
+    }
+    return delivery;
+  });
+}
+
+function push(to: Address, mail: Mail): Delivery {
+  const run = readRun(to.mailbox);
+  if (run && run.launcher !== 'herdr') return requestResume(run) ? 'headless-resume' : 'queued';
   if (to.host === 'codex' && to.threadId && !readRun(to.mailbox) && codexQueue(to.threadId, pointer(mail))) {
-    appendMail(to.mailbox, { ...mail, pushed: true });
     return 'codex-queue';
   }
-  if (to.host === 'opencode') { appendMail(to.mailbox, mail); return 'opencode-plugin'; }
+  if (to.host === 'opencode') return 'opencode-plugin';
   if (to.herdrAgent) {
     const status = agentStatus(to.herdrAgent, to.herdrSession);
     if ((status === 'idle' || status === 'done') && prompt(to.herdrAgent, pointer(mail), to.herdrSession).ok) {
-      appendMail(to.mailbox, { ...mail, pushed: true });
       return 'herdr-prompt';
     }
   }
-  appendMail(to.mailbox, mail);
   return 'queued';
 }
 
@@ -103,9 +121,17 @@ export function amend(from: Address, runRef: string, text: string): { run: RunMe
   if (!run) throw new Error(`crew: no run matches "${runRef}" (see crew ls)`);
   if (run.parent.mailbox !== from.mailbox) throw new Error(`crew: only ${run.name}'s parent can amend its packet; send advice with crew msg`);
   const packet = packetPath(run.id);
-  const number = (readFileSync(packet, 'utf8').match(/^## Amendment \d+/gm)?.length ?? 0) + 1;
-  appendFileSync(packet, `\n## Amendment ${number} (${new Date().toISOString()})\n\n${text.trim()}\n`);
-  return { run, number, delivery: send(from, runAddress(run), `Amendment ${number} (appended to ${packet}):\n${text.trim()}`, 'amendment') };
+  let number = 0;
+  let delivery: Delivery = 'queued';
+  const amended = updateRun(run.id, current => {
+    if (current.state === 'stopped') throw new Error(`crew: ${current.name} is stopped; spawn a new run for new work`);
+    number = (readFileSync(packet, 'utf8').match(/^## Amendment \d+/gm)?.length ?? 0) + 1;
+    const hash = readResult(resultPath(run.id))?.hash;
+    appendFileSync(packet, `\n## Amendment ${number} (${new Date().toISOString()})\n\n${text.trim()}\n`);
+    return { ...current, state: 'running', amendment: { number, ...(hash ? { resultHash: hash } : {}) } };
+  }) ?? run;
+  delivery = send(from, runAddress(amended), `Amendment ${number} (appended to ${packet}):\n${text.trim()}`, 'amendment');
+  return { run: amended, number, delivery };
 }
 
 const fromRun = (run: RunMeta): Mail['from'] => ({ mailbox: run.id, name: run.name, host: run.route.host });
@@ -116,26 +142,60 @@ function claim(id: string, event: string): boolean {
   catch { return false; }
 }
 
+/** A committed completion notice survives later drafts, amendments and explicit stops. */
+function flushSettlement(id: string): Delivery | undefined {
+  const run = readRun(id);
+  if (!run?.settled?.notice || run.settled.notified) return undefined;
+  const delivery = deliver(run.parent, run.settled.notice);
+  const acknowledged = { ...run.settled, notified: true };
+  writeJson(join(runDir(id), `.settled-${run.settled.hash}`), acknowledged);
+  updateRun(id, current => current.settled?.hash === run.settled!.hash ? { ...current, settled: acknowledged } : undefined);
+  return delivery;
+}
+
 /** Tell the parent about a (new) terminal result. Idempotent per result content. */
 export function settle(id: string): Delivery | undefined {
+  const pendingDelivery = flushSettlement(id);
   const status = readResult(resultPath(id));
-  if (!status) return undefined;
-  // A terminal status written before the child read an amendment predates part of its packet.
-  if (unread(id).mails.some(mail => mail.kind === 'amendment')) return undefined;
-  const run = readRun(id);
-  if (!run || run.settled?.hash === status.hash || !claim(id, `settled-${status.hash}`)) return undefined;
-  const fresh: RunMeta = {
-    ...run,
-    state: run.keep ? run.state : status.verdict,
-    settled: { hash: status.hash, at: new Date().toISOString(), status: status.line },
-  };
-  writeRun(fresh);
-  // Routing evidence is best effort; settling must reach the parent regardless.
-  try { reviewed(fresh, status); } catch { /* recorded nowhere, reported anyway */ }
-  return deliver(fresh.parent, {
-    id: newId('m'), at: new Date().toISOString(), kind: 'settled', from: fromRun(fresh),
-    text: `${fresh.role} on ${fresh.route.model}@${fresh.route.effort}: ${status.line}`, result: resultPath(id),
+  if (!status) return pendingDelivery;
+  let fresh: RunMeta | undefined;
+  let isNew = false;
+  const event = join(runDir(id), `.settled-${status.hash}`);
+  updateRun(id, run => {
+    if (run.state === 'stopped') return undefined;
+    if (run.settled?.hash === status.hash) {
+      if (run.settled.notice && !run.settled.notified) fresh = run;
+      return undefined;
+    }
+    if (readResult(resultPath(id))?.hash !== status.hash || run.amendment?.resultHash === status.hash
+      || unread(id).mails.some(mail => mail.kind === 'amendment')) return undefined;
+    let settled: NonNullable<RunMeta['settled']>;
+    try {
+      const at = new Date().toISOString();
+      settled = { hash: status.hash, at, status: status.line, notice: {
+        id: `settled-${id}-${status.hash}`, at, kind: 'settled', from: fromRun(run),
+        text: `${run.role} on ${run.route.model}@${run.route.effort}: ${status.line}`, result: resultPath(id),
+      } };
+      // The claim IS the outbox: if the process dies before metadata, the next sweep replays it.
+      writeFileSync(event, JSON.stringify(settled), { flag: 'wx', mode: 0o600 });
+      isNew = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      try { settled = readJson<NonNullable<RunMeta['settled']>>(event)!; } catch { return undefined; } // legacy empty claim
+      if (!settled?.notice || settled.notified) return undefined;
+    }
+    fresh = { ...run, state: run.keep ? 'running' : status.verdict, settled };
+    return fresh;
   });
+  if (!fresh?.settled?.notice) return pendingDelivery;
+  const delivery = deliver(fresh.parent, fresh.settled.notice);
+  // Append-once delivery survives a crash after inbox append but before either acknowledgement.
+  const acknowledged = { ...fresh.settled, notified: true };
+  writeJson(event, acknowledged);
+  updateRun(id, current => current.settled?.hash === status.hash ? { ...current, settled: acknowledged } : undefined);
+  // No external router command may stand between the durable notice and its parent.
+  if (isNew) { try { reviewed(fresh, status); } catch { /* routing evidence is best effort */ } }
+  return delivery;
 }
 
 /**
@@ -147,7 +207,8 @@ export function reopen(run: RunMeta): RunMeta {
   if (!run.settled || run.keep || !['done', 'failed', 'blocked'].includes(run.state)) return run;
   const line = progressLine(resultPath(run.id));
   if (!line) return run;
-  const fresh = updateRun(run.id, current => current.state === run.state ? { ...current, state: 'running' } : current) ?? run;
+  const fresh = updateRun(run.id, current => current.state === run.state && current.settled?.hash === run.settled?.hash
+    && progressLine(resultPath(run.id)) ? { ...current, state: 'running' } : undefined) ?? run;
   if (fresh.state === 'running' && claim(run.id, `reopened-${run.settled.hash}`)) {
     deliver(fresh.parent, {
       id: newId('m'), at: new Date().toISOString(), kind: 'reopened', from: fromRun(fresh),
@@ -169,10 +230,13 @@ export function paused(id: string, line: string): Delivery | undefined {
 
 /** A child that disappeared without a terminal result. Reported once. */
 export function stall(id: string, why: string): Delivery | undefined {
-  const run = readRun(id);
-  if (!run || run.state !== 'running' || !claim(id, 'stalled')) return undefined;
-  const fresh: RunMeta = { ...run, state: 'stalled' };
-  writeRun(fresh);
+  let fresh: RunMeta | undefined;
+  updateRun(id, run => {
+    if (run.state !== 'running' || !claim(id, 'stalled')) return undefined;
+    fresh = { ...run, state: 'stalled' };
+    return fresh;
+  });
+  if (!fresh) return undefined;
   return deliver(fresh.parent, {
     id: newId('m'), at: new Date().toISOString(), kind: 'stalled', from: fromRun(fresh),
     text: readResult(resultPath(id)) ? `${why} (last result: ${resultPath(id)})` : `${why}; no terminal result at ${resultPath(id)}`,
@@ -181,11 +245,14 @@ export function stall(id: string, why: string): Delivery | undefined {
 
 /** A child stuck on an approval/question dialog in its pane. Reported once per episode. */
 export function waiting(id: string, blocked: boolean): Delivery | undefined {
-  const run = readRun(id);
-  if (!run || Boolean(run.waitingSince) === blocked) return undefined;
-  const { waitingSince: _, ...rest } = run;
-  writeRun(blocked ? { ...rest, waitingSince: new Date().toISOString() } : rest);
-  if (!blocked) return undefined;
+  let run: RunMeta | undefined;
+  updateRun(id, current => {
+    if (current.state !== 'running' || Boolean(current.waitingSince) === blocked) return undefined;
+    run = current;
+    const { waitingSince: _, ...rest } = current;
+    return blocked ? { ...rest, waitingSince: new Date().toISOString() } : rest;
+  });
+  if (!run || !blocked) return undefined;
   return deliver(run.parent, {
     id: newId('m'), at: new Date().toISOString(), kind: 'waiting', from: fromRun(run),
     text: run.bgId
@@ -194,11 +261,13 @@ export function waiting(id: string, blocked: boolean): Delivery | undefined {
   });
 }
 
-/** Unread mail minus what a push already showed in full. */
+/** Consume a batch once, even if a Stop hook and crew wait read concurrently. */
 export function takeUnread(mailbox: string): Mail[] {
-  const { mails, commit } = unread(mailbox);
-  commit();
-  return mails;
+  return withLock(`consume-${mailbox}`, () => {
+    const { mails, commit } = unread(mailbox);
+    commit();
+    return mails;
+  });
 }
 
 export function format(mail: Mail): string {

@@ -7,15 +7,25 @@ export const inHerdr = (env = process.env): boolean => env.HERDR_ENV === '1' && 
 /** herdr panes export their binary; hooks started by GUI apps may lack ~/.local/bin on PATH. */
 export const herdrBin = (): string => process.env.HERDR_BIN_PATH || 'herdr';
 
-type Result = { ok: true; json: unknown } | { ok: false; error: string };
+type Result = { ok: true; json: unknown } | { ok: false; error: string; code?: string };
 
 /** `session` pins the call to one herdr session; without it herdr uses the caller's environment. */
 export function herdr(args: string[], timeoutMs = 15_000, session?: string): Result {
   try {
     const out = execFileSync(herdrBin(), session ? ['--session', session, ...args] : args, { encoding: 'utf8', timeout: timeoutMs, stdio: ['ignore', 'pipe', 'pipe'] });
-    try { return { ok: true, json: JSON.parse(out) }; } catch { return { ok: true, json: out }; }
+    try {
+      const json = JSON.parse(out);
+      if (json?.error?.code) return { ok: false, error: json.error.message ?? json.error.code, code: json.error.code };
+      return { ok: true, json };
+    } catch { return { ok: true, json: out }; }
   } catch (error) {
     const e = error as { stderr?: string; stdout?: string; message: string };
+    for (const raw of [e.stdout, e.stderr]) {
+      try {
+        const json = JSON.parse(raw?.trim() ?? '');
+        if (json?.error?.code) return { ok: false, error: json.error.message ?? json.error.code, code: json.error.code };
+      } catch { /* transport errors are not proof that an agent is missing */ }
+    }
     return { ok: false, error: (e.stderr || e.stdout || e.message).trim().split('\n').slice(-3).join(' ') };
   }
 }
@@ -98,7 +108,8 @@ export function startAgent(name: string, kind: string, pane: string, argv: strin
   }
   if (started.ok) return;
   for (let waited = 0; waited < 20_000; waited += 1_000) {
-    if (agentStatus(pane, session)) return;
+    const status = agentStatus(pane, session);
+    if (status && status !== 'unknown') return;
     execFileSync('sleep', ['1']);
   }
   throw new Error(`herdr agent start failed: ${started.error}`);
@@ -108,10 +119,10 @@ export function prompt(target: string, text: string, session?: string): Result {
   return herdr(['agent', 'prompt', target, text], 10_000, session);
 }
 
-/** undefined means the agent is gone (exited, released or replaced). */
+/** undefined means confirmed absence; unknown means the lookup/status is unavailable. */
 export function agentStatus(target: string, session?: string): AgentStatus | undefined {
   const got = herdr(['agent', 'get', target], 5_000, session);
-  if (!got.ok) return undefined;
+  if (!got.ok) return ['not_found', 'agent_not_found', 'pane_not_found'].includes(got.code ?? '') ? undefined : 'unknown';
   const status = (find(got.json, 'agent_status') ?? find(got.json, 'status'))?.toLowerCase();
   return status === 'idle' || status === 'working' || status === 'blocked' || status === 'done' ? status : 'unknown';
 }
@@ -121,6 +132,7 @@ export function labelPane(pane: string, label: string, session?: string): boolea
   return herdr(['pane', 'rename', pane, label], 5_000, session).ok;
 }
 
-export function closePane(pane: string, session?: string): void {
-  herdr(['pane', 'close', pane], 5_000, session);
+export function closePane(pane: string, session?: string): boolean {
+  const closed = herdr(['pane', 'close', pane], 5_000, session);
+  return closed.ok || ['not_found', 'pane_not_found'].includes(closed.code ?? '');
 }

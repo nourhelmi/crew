@@ -7,13 +7,14 @@ import { closePane, herdr, inHerdr, labelPane } from './herdr.ts';
 import { isHookEvent, runHook } from './hook.ts';
 import { self } from './identity.ts';
 import { amend, format, resolve, send, takeUnread } from './mail.ts';
+import { resume } from './resume.ts';
 import { grade } from './outcome.ts';
 import { loadRoster, rosterPath, routerView, unrunnable } from './roster.ts';
 import { isEffort, route } from './route.ts';
-import { liveOnHost, spawn } from './spawn.ts';
+import { bgActive, hostEnv, liveOnHost, spawn } from './spawn.ts';
 import { checkouts, trustPaths, trustTargets } from './trust.ts';
 import { routerSetting, setSessionRouter, setShellRouter } from './settings.ts';
-import { configPath, findRun, listRuns, loadConfig, readJson, resultPath, runDir, writeJson, writeRun } from './store.ts';
+import { configPath, findRun, listRuns, loadConfig, readJson, resultPath, runDir, updateRun, writeJson } from './store.ts';
 import { HOSTS, ROLES, type Address, type Host, type Role, type RunMeta } from './types.ts';
 import { wait, waitHint, watch } from './wait.ts';
 
@@ -33,6 +34,7 @@ const HELP = `crew: advisor crews on native Claude Code and Codex
   crew inbox                   Print unread mail.
   crew ls [--all]              Your children (or everything).
   crew read <run>              Result, or the tail of its terminal/log.
+  crew resume <run>            Resume an exited headless session with its recorded launch settings.
   crew stop <run>              Stop a run and close its pane.
   crew route --role R --task T Show where a task would go, without launching.
   crew router [status|on|off|reset] [--global]
@@ -85,7 +87,7 @@ function tail(run: RunMeta): string {
     if (read.ok) return typeof read.json === 'string' ? read.json : JSON.stringify(read.json);
   }
   if (run.bgId) {
-    try { return execFileSync('claude', ['logs', run.bgId], { encoding: 'utf8', timeout: 20_000 }).split('\n').slice(-40).join('\n'); }
+    try { return execFileSync('claude', ['logs', run.bgId], { env: hostEnv(run.launch?.env), encoding: 'utf8', timeout: 20_000 }).split('\n').slice(-40).join('\n'); }
     catch { /* fall through */ }
   }
   try { return readFileSync(`${runDir(run.id)}/exec.log`, 'utf8').split('\n').slice(-40).join('\n'); }
@@ -93,10 +95,21 @@ function tail(run: RunMeta): string {
 }
 
 function stopRun(run: RunMeta): void {
-  if (run.herdr && !run.herdr.closed) closePane(run.herdr.pane, run.herdr.session);
-  if (run.bgId) { try { execFileSync('claude', ['stop', run.bgId], { stdio: 'ignore', timeout: 20_000 }); } catch { /* already gone */ } }
-  if (run.pid) { try { process.kill(run.pid, 'SIGTERM'); } catch { /* already gone */ } }
-  writeRun({ ...run, state: run.state === 'running' ? 'stopped' : run.state, ...(run.herdr ? { herdr: { ...run.herdr, closed: true } } : {}) });
+  const current = updateRun(run.id, live => ({ ...live, state: 'stopped' })) ?? run;
+  if (current.herdr && !current.herdr.closed) {
+    if (!closePane(current.herdr.pane, current.herdr.session)) throw new Error(`crew: ${current.name} is marked stopped, but its pane close failed; retry crew stop`);
+    updateRun(current.id, live => live.herdr ? { ...live, herdr: { ...live.herdr, closed: true } } : undefined);
+  }
+  if (current.bgId) {
+    try { execFileSync('claude', ['stop', current.bgId], { env: hostEnv(current.launch?.env), stdio: 'ignore', timeout: 20_000 }); }
+    catch {
+      if (bgActive(current.bgId, current.launch?.env) !== false) throw new Error(`crew: ${current.name} is marked stopped, but its background stop failed; retry crew stop`);
+    }
+  }
+  if (current.pid) {
+    try { process.kill(-current.pid, 'SIGTERM'); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+  }
 }
 
 async function main(argv: string[]): Promise<void> {
@@ -198,6 +211,13 @@ async function main(argv: string[]): Promise<void> {
       try { result = readFileSync(resultPath(run.id), 'utf8'); } catch { /* none yet */ }
       console.log(result ?? `no result yet (${run.state}); recent output:\n${tail(run)}`);
       return;
+    }
+    case 'resume': {
+      const run = findRun(positionals[0] ?? '');
+      if (!run) fail('crew: crew resume <run> (see crew ls)');
+      const launched = await resume(run.id, !values.quiet);
+      if (!values.quiet) console.log(`${run.name}: ${launched ? 'resumed' : 'already active or host unavailable'}`);
+      break;
     }
     case 'stop': {
       const run = findRun(positionals[0] ?? fail('crew: crew stop <run>')) ?? fail('crew: no such run');
@@ -323,5 +343,5 @@ async function main(argv: string[]): Promise<void> {
 delete process.env.CREW_NO_DELEGATE;
 // Hooks fired by GUI apps get a thin PATH. crew's tools live in ~/.local/bin (claude, herdr)
 // and next to this node (codex, agent-router: npm globals that need node on PATH).
-process.env.PATH = [join(homedir(), '.local', 'bin'), dirname(process.execPath), process.env.PATH ?? ''].join(delimiter);
+process.env.PATH = [process.env.PATH ?? '', join(homedir(), '.local', 'bin'), dirname(process.execPath)].join(delimiter);
 main(process.argv.slice(2)).catch(error => fail((error as Error).message));

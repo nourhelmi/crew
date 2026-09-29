@@ -10,11 +10,10 @@ if [ -n "$live" ] && [ "$live" != "$self" ] && [ -x "$live" ] && [ -z "${CREW_NO
 fi
 
 # Hooks run from GUI-launched hosts where nvm's node may be missing from PATH.
-node_bin=$(command -v node 2>/dev/null)
-case "$($node_bin -p 'process.versions.node.split(".")[0] >= 24' 2>/dev/null)" in
-  true) ;;
-  *) node_bin=$(ls -d "$HOME"/.nvm/versions/node/v2[4-9]*/bin/node 2>/dev/null | sort -V | tail -1) ;;
-esac
+node_bin=${CREW_NODE:-$(command -v node 2>/dev/null)}
+if ! "$node_bin" -e 'process.exit(Number(Number(process.versions.node.split(".")[0]) < 24))' >/dev/null 2>&1; then
+  node_bin=$(ls -d "$HOME"/.nvm/versions/node/v2[4-9]*/bin/node 2>/dev/null | sort -V | tail -1)
+fi
 [ -x "$node_bin" ] || { echo "crew: node >= 24 not found" >&2; exit 127; }
 
 exec "$node_bin" --disable-warning=ExperimentalWarning "$root/src/cli.ts" "$@"

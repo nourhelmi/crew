@@ -46,7 +46,7 @@ function hostAncestor(): { host: Host; pid: number } | undefined {
 export function ownRun(env: Env, sessionId?: string): RunMeta | undefined {
   const run = env.CREW_RUN ? readRun(env.CREW_RUN) : undefined;
   if (!run) return undefined;
-  const mine = sessionId ?? env.CLAUDE_CODE_SESSION_ID ?? env.CODEX_THREAD_ID;
+  const mine = sessionId ?? env.CREW_OPENCODE_SESSION ?? env.CODEX_THREAD_ID ?? env.CLAUDE_CODE_SESSION_ID ?? env.CLAUDE_SESSION_ID;
   return run.sessionId && mine && run.sessionId !== mine ? undefined : run;
 }
 

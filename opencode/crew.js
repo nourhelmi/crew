@@ -51,7 +51,15 @@ export const CrewPlugin = async ({ client }) => {
     return client.session.promptAsync ? client.session.promptAsync(body) : client.session.prompt(body);
   };
   const track = id => {
-    if (!sessions.has(id)) sessions.set(id, { mailbox: run || `opencode-${id}`, idle: true, woke: 0 });
+    let mailbox = `opencode-${id}`;
+    if (run) {
+      try {
+        const meta = JSON.parse(readFileSync(join(HOME, 'runs', run, 'meta.json'), 'utf8'));
+        if (!meta.sessionId || meta.sessionId === id) mailbox = run;
+      } catch { /* a missing/inherited run is not this session */ }
+    }
+    if (!sessions.has(id)) sessions.set(id, { mailbox, idle: true, woke: 0 });
+    else sessions.get(id).mailbox = mailbox;
     return sessions.get(id);
   };
 
@@ -60,7 +68,7 @@ export const CrewPlugin = async ({ client }) => {
       const unread = s.idle ? unreadBytes(s.mailbox) : 0;
       if (!unread || unread === s.woke) continue;
       s.woke = unread; s.idle = false;
-      await prompt(id, WAKE).catch(() => { s.idle = true; });
+      await prompt(id, WAKE).catch(() => { s.idle = true; s.woke = 0; });
     }
   };
   const timer = setInterval(() => { wakeIdle().catch(() => {}); }, POLL_MS);

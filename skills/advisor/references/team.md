@@ -28,15 +28,20 @@ reaches the root; it can reach a sibling by name.
 
 Keep `crew wait` armed while teammates are alive (in Claude Code, as a background
 command). That is how their reports and messages wake you. Teammates wake the same way:
-an idle Codex teammate gets a one-line pointer queued into its thread, and an idle Claude
-teammate in herdr gets one typed into its pane, one per unread batch; a busy teammate is
+a headless teammate resumes its recorded session to read its inbox, and an idle
+teammate in herdr gets a one-line pointer typed into its pane, one per unread batch; a busy teammate is
 told about unread mail after its next tool call. Any session with unread mail is kept
 going at its next turn end until it has read it.
 
 Retire members before closing a team; retirement waits for real descendant settlement.
 Sent or queued is not read or done, so never resend an ambiguous message as a new one.
-`crew msg` prints how it was delivered: `waiter`, `codex-queue`, `opencode-plugin`, `herdr-prompt` or
-`queued`. `queued` means the recipient sees it at its next wait, inbox read or turn end.
+`crew msg` prints how it was delivered: `waiter`, `codex-queue`, `opencode-plugin`, `herdr-prompt`, `headless-resume` or
+`queued`. `headless-resume` means a resume request was scheduled; it does not prove the mail was read.
+`crew resume <run>` explicitly resumes an exited headless session with its recorded model and access.
+A fresh maker can also continue from files: give `crew spawn --packet` a continuation packet
+naming the checkpoint, previous packet/result, verified state and remaining done-when. Retire
+the previous writer before handing off the checkout. Verify the evidence rather than assuming
+its prior conversation was complete. A stopped run stays stopped; assign new work with a fresh spawn. `queued` means the recipient sees it at its next wait, inbox read or turn end.
 
 Root and CoS share one checkpoint at `~/.advisor/<repo-key>/workstreams/<slug>.md`. The
 root updates it; helpers report locators. `crew ls` is a projection, not a second

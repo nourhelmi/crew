@@ -9,6 +9,8 @@ const HOME = mkdtempSync(join(tmpdir(), 'crew-test-'));
 process.env.CREW_HOME = HOME;
 process.env.CREW_CONFIG = join(HOME, 'no-config.json');
 process.env.CREW_ROSTER = join(HOME, 'no-roster.json');
+process.env.CODEX_HOME = join(HOME, 'codex-home');
+process.env.CLAUDE_CONFIG_DIR = join(HOME, 'claude-home');
 
 const { parseModel, route, clampEffort } = await import('../src/route.ts');
 const { parseResult } = await import('../src/result.ts');
@@ -290,7 +292,7 @@ describe('hooks', () => {
   it('closes a finished herdr child pane after its turn, via the recorded session', async () => {
     const bin = mkdtempSync(join(tmpdir(), 'crew-stub-'));
     const log = join(bin, 'calls');
-    writeFileSync(join(bin, 'herdr'), `#!/bin/sh\necho "$@" >> '${log}'\n`, { mode: 0o755 });
+    writeFileSync(join(bin, 'herdr'), `#!/bin/sh\necho "$@" >> '${log}'\necho '{"agent_status":"done"}'\n`, { mode: 0o755 });
     const path = process.env.PATH;
     const herdrBinPath = process.env.HERDR_BIN_PATH;
     delete process.env.HERDR_BIN_PATH;
@@ -299,11 +301,14 @@ describe('hooks', () => {
       run({ launcher: 'herdr', herdr: { pane: 'w1:p9', agent: 'w1:p9', session: 'stub' } });
       writeResult('b-test', 'DONE');
       assert.equal(stop(false, { CREW_RUN: 'b-test', PATH: process.env.PATH! }), '');
+      assert.notEqual(store.readRun('b-test')?.herdr?.closed, true, 'scheduling a close is not a successful close');
+      await (await import('../src/wait.ts')).watch('claude-root', 20, 100);
       assert.equal(store.readRun('b-test')?.herdr?.closed, true);
       const calls = async (): Promise<string> => { try { return readFileSync(log, 'utf8'); } catch { return ''; } };
       for (let waited = 0; waited < 8_000 && !(await calls()); waited += 200) await new Promise(done => setTimeout(done, 200));
       assert.match(await calls(), /--session stub pane close w1:p9/);
     } finally {
+      try { process.kill(-Number(readFileSync(join(store.mailDir('claude-root'), 'watcher'), 'utf8')), 'SIGTERM'); } catch { /* ended */ }
       process.env.PATH = path;
       if (herdrBinPath) process.env.HERDR_BIN_PATH = herdrBinPath;
       rmSync(bin, { recursive: true, force: true });
@@ -636,7 +641,7 @@ describe('wakes', async () => {
     const bin = mkdtempSync(join(tmpdir(), 'crew-wake-'));
     const log = join(bin, 'calls');
     const starts = join(bin, 'starts');
-    writeFileSync(join(bin, 'codex'), `#!/bin/sh\necho "$@" >> '${log}'\n`, { mode: 0o755 });
+    writeFileSync(join(bin, 'codex'), `#!/bin/sh\necho "$@" >> '${log}'\necho '{"agent_status":"done"}'\n`, { mode: 0o755 });
     writeFileSync(join(bin, 'herdr'), `#!/bin/sh
 echo "$@" >> '${log}'
 case "$*" in
@@ -910,6 +915,7 @@ describe('opencode host', async () => {
     assert.equal(mail.takeUnread('opencode-ses_p').length, 1);
   });
   it('the plugin maps OpenCode events onto crew hooks, and wakes an idle session when mail lands', async () => {
+    run({ sessionId: 'ses_r' });
     const calls = join(HOME, 'crew-calls.jsonl');
     const stub = join(HOME, 'crew-stub.sh');
     writeFileSync(stub, `#!/bin/sh\nin=$(cat)\nprintf '%s\\n' "{\\"args\\":\\"$*\\",\\"in\\":$in}" >> '${calls}'\n`

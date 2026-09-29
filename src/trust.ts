@@ -11,7 +11,10 @@ import { readJson, writeJson } from './store.ts';
  */
 
 export interface TrustFiles { claude: string; codex: string }
-export const TRUST_FILES: TrustFiles = { claude: join(homedir(), '.claude.json'), codex: join(homedir(), '.codex', 'config.toml') };
+export const trustFiles = (env: NodeJS.ProcessEnv = process.env): TrustFiles => ({
+  claude: env.CLAUDE_CONFIG_DIR ? join(env.CLAUDE_CONFIG_DIR, '.claude.json') : join(homedir(), '.claude.json'),
+  codex: join(env.CODEX_HOME ?? join(homedir(), '.codex'), 'config.toml'),
+});
 
 const within = (path: string, root: string): boolean => path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
 const real = (path: string): string => { try { return realpathSync(path); } catch { return resolvePath(path); } };
@@ -77,7 +80,7 @@ export function codexTrust(text: string, paths: string[]): string {
 
 export interface TrustResult { claude: string[]; codex: string[] }
 
-export function trustPaths(paths: string[], files: TrustFiles = TRUST_FILES): TrustResult {
+export function trustPaths(paths: string[], files: TrustFiles = trustFiles()): TrustResult {
   const unique = [...new Set(paths.map(real))];
   const result: TrustResult = { claude: [], codex: [] };
 
@@ -121,7 +124,7 @@ export function checkouts(root: string, maxDepth = 6): string[] {
 export const underRoots = (path: string, roots: string[]): boolean => roots.some(root => within(real(path), real(root)));
 
 /** What to trust so an agent started in `cwd` gets no dialog, or [] if crew should not decide. */
-export function trustTargets(cwd: string, roots: string[], files: TrustFiles = TRUST_FILES): string[] {
+export function trustTargets(cwd: string, roots: string[], files: TrustFiles = trustFiles()): string[] {
   const top = git(cwd, '--show-toplevel');
   const targets = [...new Set([top, cwd].filter((path): path is string => Boolean(path)).map(real))];
   if (underRoots(cwd, roots)) return targets;

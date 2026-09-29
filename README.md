@@ -142,9 +142,24 @@ Five primitives, each built on something the hosts already do:
 | When the parent is… | …it wakes because |
 |---|---|
 | a Claude Code session | its background `crew wait` exits, and Claude Code re-invokes the session |
-| a Codex session | `codex queue` starts a turn in its thread with a one-line pointer |
+| a root Codex session | `codex queue` starts a turn in its thread with a one-line pointer |
+| an idle headless Crew run | resumes the recorded Codex, Claude background or OpenCode session to read its inbox |
 | an idle agent in a herdr pane | the same pointer is typed into the pane |
 | busy mid-turn | a PostToolUse hook announces unread mail after its next tool call |
+
+Retained headless teammates resume the same recorded host session for later mail and packet
+amendments. Busy workers read through their hooks; concurrent resume requests serialize.
+`crew resume <run>` explicitly restarts an exited headless session using its original model,
+arguments and Crew environment. It requires recorded launch/session data. A stopped run
+stays stopped; use a fresh spawn for new work. To continue through a fresh maker, write a
+continuation packet naming the advisor checkpoint, previous packet/result paths, verified
+state and remaining done-when, then run `crew spawn --role builder --packet continuation.md`.
+Each spawn owns a new result and run ID; prior evidence remains attached to its original run.
+The checkpoint carries continuity; the advisor still verifies the maker's evidence.
+
+A failed host lookup is unknown, so the watcher retries without reporting a false exit or
+closing a pane. Claude background sessions are addressed by immutable ID. Settlement claims
+contain a durable parent notice, recovered after a crash with append-once inbox delivery.
 
 ## The team
 

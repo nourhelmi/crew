@@ -6,9 +6,10 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { agentStatus, closePane, prompt, type AgentStatus } from './herdr.ts';
 import { self } from './identity.ts';
 import { codexQueue, format, reopen, settle, stall, takeUnread, waiting } from './mail.ts';
+import { requestResume, resuming } from './resume.ts';
 import { readResult } from './result.ts';
-import { bgSession, ROOT } from './spawn.ts';
-import { alive, hasWaiter, listRuns, mailDir, markWaiter, mtime, readRun, resultPath, withLock, writeRun } from './store.ts';
+import { bgActive, bgSession, ROOT } from './spawn.ts';
+import { alive, hasWaiter, listRuns, mailDir, markWaiter, mtime, readRun, resultPath, unread, updateRun, withLock } from './store.ts';
 import type { Address, Host, Mail, RunMeta } from './types.ts';
 
 const LIVENESS_EVERY_MS = 5_000;
@@ -22,7 +23,9 @@ function gone(run: RunMeta, herdrStatus: AgentStatus | undefined, bg: Bg | 'unch
   if (run.launcher === 'herdr') return herdrStatus ? undefined : 'its herdr agent exited';
   if (run.launcher === 'exec') return alive(run.pid) ? undefined : 'codex exec exited';
   if (run.launcher === 'bg' && bg !== 'unchecked') {
+    if (bg === 'unknown') return undefined;
     if (!bg) return 'its background session is gone';
+    if (['done', 'idle', 'completed'].includes(bg.status ?? '') && bgActive(bg.id, run.launch?.env) === false) return 'its background turn ended';
     // "done" only means idle; a turn that ended without a result is the Stop hook's call.
     return /exit|stop|fail|dead|kill/i.test(bg.status ?? '') ? `its background session is ${bg.status}` : undefined;
   }
@@ -35,17 +38,22 @@ function sweep(mailbox: string, checkBg: boolean): void {
     const run = reopen(listed);
     if (run.state !== 'stopped') {
       // Parent-side settlement covers a child whose Stop hook never ran, and a settled child's newer result.
-      const hasResult = Boolean(readResult(resultPath(run.id)));
+      const result = readResult(resultPath(run.id));
+      const hasResult = Boolean(result && result.hash !== run.amendment?.resultHash
+        && !unread(run.id).mails.some(mail => mail.kind === 'amendment'));
       if (hasResult) settle(run.id);
-      if (run.state === 'running') {
+      if (run.state === 'running' && !resuming(run.id)) {
         const herdrStatus = run.herdr && !run.herdr.closed ? agentStatus(run.herdr.agent, run.herdr.session) : undefined;
-        const bg: Bg | 'unchecked' = run.launcher === 'bg' && checkBg ? bgSession(run.name) : 'unchecked';
+        const bg: Bg | 'unchecked' = run.launcher === 'bg' && checkBg ? bgSession(run.bgId ?? run.sessionId ?? '', run.launch?.env) : 'unchecked';
         // An approval, question or folder-trust dialog needs a human or the parent.
-        if (run.launcher === 'herdr') waiting(run.id, herdrStatus === 'blocked');
-        if (bg !== 'unchecked') waiting(run.id, bg?.status === 'blocked');
-        if (!hasResult || run.keep) {
+        if (run.launcher === 'herdr' && herdrStatus !== 'unknown') waiting(run.id, herdrStatus === 'blocked');
+        if (bg !== 'unchecked' && bg !== 'unknown') waiting(run.id, bg?.status === 'blocked');
+        if (unread(run.id).mails.length && run.launcher !== 'herdr') requestResume(readRun(run.id) ?? run);
+        if (!hasResult || unread(run.id).mails.length || (run.keep && run.launcher === 'herdr')) {
           const why = gone(run, herdrStatus, bg);
-          if (why) stall(run.id, why);
+          const lastMail = unread(run.id).mails.at(-1)?.id;
+          const needsLaunch = run.launcher !== 'herdr' && run.sessionId && run.launch && lastMail && lastMail !== run.resumedMail;
+          if (why && !needsLaunch) stall(run.id, why);
         }
       }
     }
@@ -53,9 +61,10 @@ function sweep(mailbox: string, checkBg: boolean): void {
     // Tidy finished, non-kept herdr panes once the agent has gone quiet; failures stay open for inspection.
     if (fresh?.state === 'done' && !fresh.keep && fresh.herdr && !fresh.herdr.closed) {
       const status = agentStatus(fresh.herdr.agent, fresh.herdr.session);
-      if (status === 'working' || status === 'blocked') continue;
-      if (status) closePane(fresh.herdr.pane, fresh.herdr.session);
-      writeRun({ ...fresh, herdr: { ...fresh.herdr, closed: true } });
+      if (status === 'working' || status === 'blocked' || status === 'unknown') continue;
+      if (status && !closePane(fresh.herdr.pane, fresh.herdr.session)) continue;
+      updateRun(fresh.id, current => current.state === 'done' && current.herdr
+        ? { ...current, herdr: { ...current.herdr, closed: true } } : undefined);
     }
   }
 }
@@ -167,16 +176,17 @@ function keepWarm(mailbox: string): () => void {
   let transcript: string | undefined;
   let looked = 0;
   let nudges = 0;
+  let nudgedAt = 0;
   let seen = size();
   return () => {
     if (size() !== seen) { seen = size(); nudges = 0; } // real news: the next quiet stretch starts fresh
     if (!transcript && Date.now() - looked > 60_000) { looked = Date.now(); transcript = transcriptPath(parent); }
     const last = transcript ? mtime(transcript) : undefined;
-    if (last === undefined || !keepaliveDue(parent.host, Date.now() - last, nudges)) return;
+    if (last === undefined || !keepaliveDue(parent.host, Date.now() - Math.max(last, nudgedAt), nudges)) return;
     const pushed = parent.host === 'codex' && parent.threadId ? codexQueue(parent.threadId, KEEPALIVE_TEXT)
       : parent.herdrAgent && agentStatus(parent.herdrAgent, parent.herdrSession) === 'idle'
         ? prompt(parent.herdrAgent, KEEPALIVE_TEXT, parent.herdrSession).ok : false;
-    if (pushed) nudges++;
+    if (pushed) { nudges++; nudgedAt = Date.now(); }
   };
 }
 
@@ -211,6 +221,9 @@ export function liveChildren(mailbox: string): RunMeta[] {
 /** Children the watcher keeps sweeping: running ones, and blocked ones still alive to answer. */
 function watched(mailbox: string): RunMeta[] {
   return listRuns().filter(run => run.parent.mailbox === mailbox && (run.state === 'running'
+    || (run.state !== 'stopped' && run.launch && run.sessionId && unread(run.id).mails.at(-1)?.id !== run.resumedMail && unread(run.id).mails.length)
+    || (run.settled?.notice && !run.settled.notified)
+    || (run.state === 'done' && !run.keep && run.herdr && !run.herdr.closed)
     || (run.state === 'blocked' && (run.launcher === 'exec' ? alive(run.pid)
       : run.launcher === 'herdr' ? Boolean(run.herdr && !run.herdr.closed && agentStatus(run.herdr.agent, run.herdr.session))
       : false))));
