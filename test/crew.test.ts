@@ -165,6 +165,44 @@ describe('settlement', () => {
     assert.equal(store.readRun('b-test')?.state, 'done');
     assert.deepEqual(mail.takeUnread('claude-root').map(m => m.text.replace(/^.*: /, '')), ['which currency table?', 'used the ISO table']);
   });
+  it('holds a DONE written while an amendment is still unread, then settles once the child reads it', () => {
+    run();
+    writeFileSync(store.packetPath('b-test'), 'Build the retry path.\n');
+    mail.amend(ROOT, 'b-test', 'Also keep the filter when retrying.');
+    writeResult('b-test', 'DONE: amendments 1-3');
+    assert.equal(mail.settle('b-test'), undefined);
+    assert.equal(store.readRun('b-test')?.state, 'running');
+    assert.deepEqual(mail.takeUnread('claude-root'), []);
+    assert.equal(mail.takeUnread('b-test').length, 1); // the child's crew inbox
+    assert.equal(mail.settle('b-test'), 'queued');
+    assert.equal(store.readRun('b-test')?.state, 'done');
+  });
+  it('reopens a settled run whose result goes back to IN PROGRESS, telling the parent once', () => {
+    run();
+    writeResult('b-test', 'DONE: implemented');
+    mail.settle('b-test');
+    mail.takeUnread('claude-root');
+    assert.equal(mail.reopen(store.readRun('b-test')!).state, 'done', 'a terminal result stays settled');
+    writeResult('b-test', 'IN PROGRESS: amendment 4 pushed; waiting on CI');
+    assert.equal(mail.reopen(store.readRun('b-test')!).state, 'running');
+    assert.equal(store.readRun('b-test')?.state, 'running');
+    const [notice] = mail.takeUnread('claude-root');
+    assert.equal(notice?.kind, 'reopened');
+    assert.match(notice?.text ?? '', /working again after settling DONE: implemented: IN PROGRESS: amendment 4/);
+    writeResult('b-test', 'DONE: CI green');
+    assert.equal(mail.settle('b-test'), 'queued');
+    assert.equal(store.readRun('b-test')?.state, 'done');
+    assert.match(mail.takeUnread('claude-root').map(m => m.text).join(), /CI green/);
+  });
+  it('leaves kept teammates and unsettled drafts alone', () => {
+    run({ keep: true, state: 'done', settled: { hash: 'h', at: new Date().toISOString(), status: 'DONE' } });
+    writeResult('b-test', 'IN PROGRESS: next');
+    assert.equal(mail.reopen(store.readRun('b-test')!).state, 'done');
+    run({ id: 'b-two', name: 'builder-z', state: 'stopped', settled: { hash: 'h', at: new Date().toISOString(), status: 'DONE' } });
+    writeResult('b-two', 'IN PROGRESS: next');
+    assert.equal(mail.reopen(store.readRun('b-two')!).state, 'stopped', 'a stopped run stays stopped');
+    assert.deepEqual(mail.takeUnread('claude-root'), []);
+  });
   it('reports a dialog-blocked child once per episode', () => {
     run({ launcher: 'herdr', herdr: { pane: 'w1:p2', agent: 'builder-x' } });
     assert.equal(mail.waiting('b-test', true), 'queued');

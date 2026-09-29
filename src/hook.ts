@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { herdrBin } from './herdr.ts';
 import { hookSelf, ownRun, sessionMailbox } from './identity.ts';
-import { format, paused, settle, stall, takeUnread } from './mail.ts';
+import { format, paused, reopen, settle, stall, takeUnread } from './mail.ts';
 import { contract, progressLine, readResult } from './result.ts';
 import { bootstrap, ROOT } from './spawn.ts';
 import { briefPath, home, mailDir, packetPath, readRun, resultPath, unread, updateRun } from './store.ts';
@@ -103,7 +103,8 @@ function stop(host: Host, input: HookInput, env: NodeJS.ProcessEnv): HookOutput 
   const me = hookSelf(host, input.session_id, env);
   if (!me) return undefined;
   const reasons: string[] = [];
-  const run = readRun(me.mailbox);
+  const found = readRun(me.mailbox);
+  const run = found && reopen(found);
   // A blocked child often continues once its parent answers, so its next result settles too.
   if (run && (run.state === 'running' || run.state === 'stalled' || run.state === 'blocked')) {
     // A draft saying IN PROGRESS is still working (often waiting on its own background task):

@@ -4,8 +4,8 @@ import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { agentStatus, prompt } from './herdr.ts';
 import { reviewed } from './outcome.ts';
-import { readResult } from './result.ts';
-import { appendMail, findRun, hasWaiter, newId, packetPath, readRun, resultPath, runDir, unread, writeRun } from './store.ts';
+import { progressLine, readResult } from './result.ts';
+import { appendMail, findRun, hasWaiter, newId, packetPath, readRun, resultPath, runDir, unread, updateRun, writeRun } from './store.ts';
 import type { Address, Delivery, Host, Mail, RunMeta } from './types.ts';
 
 export function runAddress(run: RunMeta): Address {
@@ -120,6 +120,8 @@ function claim(id: string, event: string): boolean {
 export function settle(id: string): Delivery | undefined {
   const status = readResult(resultPath(id));
   if (!status) return undefined;
+  // A terminal status written before the child read an amendment predates part of its packet.
+  if (unread(id).mails.some(mail => mail.kind === 'amendment')) return undefined;
   const run = readRun(id);
   if (!run || run.settled?.hash === status.hash || !claim(id, `settled-${status.hash}`)) return undefined;
   const fresh: RunMeta = {
@@ -134,6 +136,25 @@ export function settle(id: string): Delivery | undefined {
     id: newId('m'), at: new Date().toISOString(), kind: 'settled', from: fromRun(fresh),
     text: `${fresh.role} on ${fresh.route.model}@${fresh.route.effort}: ${status.line}`, result: resultPath(id),
   });
+}
+
+/**
+ * A settled run whose result is back to IN PROGRESS took more work after settling (usually an
+ * amendment). It is running again, so waits, Stop-hook nudges and capacity cover it; its parent
+ * hears once per settled result. Returns the run as it now stands.
+ */
+export function reopen(run: RunMeta): RunMeta {
+  if (!run.settled || run.keep || !['done', 'failed', 'blocked'].includes(run.state)) return run;
+  const line = progressLine(resultPath(run.id));
+  if (!line) return run;
+  const fresh = updateRun(run.id, current => current.state === run.state ? { ...current, state: 'running' } : current) ?? run;
+  if (fresh.state === 'running' && claim(run.id, `reopened-${run.settled.hash}`)) {
+    deliver(fresh.parent, {
+      id: newId('m'), at: new Date().toISOString(), kind: 'reopened', from: fromRun(fresh),
+      text: `is working again after settling ${run.settled.status}: ${line}`,
+    });
+  }
+  return fresh;
 }
 
 /** A kept teammate ended a turn mid-assignment twice in a row. Reported once per status line. */

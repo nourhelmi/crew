@@ -25,6 +25,9 @@
   mail as advice; scope changes go through `crew amend`, which appends to the packet.
   `codex queue` wakes root Codex threads only: it drains at a turn end or when the Codex app opens
   the thread, so queued for a run it replays after the work is over. Runs hear mail via their hooks.
+- Settlement follows the packet, not the first DONE: a terminal status settles only once the child
+  has read every amendment, and a settled run whose result returns to IN PROGRESS is reopened
+  (`reopen` in `src/mail.ts`), so waits, nudges and capacity cover it again.
 - Hooks run in every Claude/Codex session on the machine: per-tool-call hooks must exit in the
   shell guard (`$CREW_RUN` unset) before starting node.
 - Codex: hook trust is keyed on the command string, so hook commands must stay version-stable

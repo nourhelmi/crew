@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { agentStatus, closePane, prompt, type AgentStatus } from './herdr.ts';
 import { self } from './identity.ts';
-import { codexQueue, format, settle, stall, takeUnread, waiting } from './mail.ts';
+import { codexQueue, format, reopen, settle, stall, takeUnread, waiting } from './mail.ts';
 import { readResult } from './result.ts';
 import { bgSession, ROOT } from './spawn.ts';
 import { alive, hasWaiter, listRuns, mailDir, markWaiter, mtime, readRun, resultPath, withLock, writeRun } from './store.ts';
@@ -30,8 +30,9 @@ function gone(run: RunMeta, herdrStatus: AgentStatus | undefined, bg: Bg | 'unch
 }
 
 function sweep(mailbox: string, checkBg: boolean): void {
-  for (const run of listRuns()) {
-    if (run.parent.mailbox !== mailbox) continue;
+  for (const listed of listRuns()) {
+    if (listed.parent.mailbox !== mailbox) continue;
+    const run = reopen(listed);
     if (run.state === 'running' || run.state === 'stalled' || run.state === 'blocked') {
       // Parent-side settlement covers a child whose Stop hook never ran.
       const hasResult = Boolean(readResult(resultPath(run.id)));

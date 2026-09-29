@@ -61,7 +61,7 @@ export interface RunMeta {
   grade?: { good: boolean; at: string; note?: string };
 }
 
-export type MailKind = 'message' | 'amendment' | 'settled' | 'stalled' | 'waiting';
+export type MailKind = 'message' | 'amendment' | 'settled' | 'reopened' | 'stalled' | 'waiting';
 
 export interface Mail {
   id: string;
