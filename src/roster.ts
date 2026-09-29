@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -62,3 +63,28 @@ export function unrunnable(model: string): string | undefined {
   catch (error) { return (error as Error).message; }
 }
 const runnable = (model: string): boolean => !unrunnable(model);
+
+/** What the router makes of the roster: missing, rejecting it (and why), or reading some roster file. */
+export type RouterView = { state: 'missing' } | { state: 'error'; message: string } | { state: 'ok'; rosterFile?: string };
+
+/**
+ * Ask the router. A router that rejects its config sends every spawn to the role defaults with only
+ * a one-line reason, so `crew roster` must say so, in the router's own words, rather than "missing".
+ * `roster check` validates this file even when the router's config points somewhere else.
+ */
+export function routerView(command: string, path: string): RouterView {
+  const call = (args: string[]): Record<string, any> => JSON.parse(execFileSync(command, args,
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 20_000 }));
+  try {
+    const status = call(['status']);
+    call(['roster', 'check', '--file', path]);
+    return { state: 'ok', ...(typeof status.rosterFile === 'string' ? { rosterFile: status.rosterFile } : {}) };
+  } catch (error) {
+    const e = error as NodeJS.ErrnoException & { stdout?: string; stderr?: string };
+    if (e.code === 'ENOENT') return { state: 'missing' };
+    const said = `${e.stderr ?? ''}\n${e.stdout ?? ''}`.trim();
+    let message = said.split('\n').pop() || e.message;
+    for (const line of said.split('\n')) { try { message = JSON.parse(line).message ?? message; } catch { /* not JSON */ } }
+    return { state: 'error', message };
+  }
+}

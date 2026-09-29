@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, beforeEach, describe, it } from 'node:test';
@@ -691,7 +691,6 @@ describe('prompt-cache keepalive', async () => {
 
 describe('routing evidence', async () => {
   const { grade, outcomesPath } = await import('../src/outcome.ts');
-  const { chmodSync } = await import('node:fs');
   const sent = join(HOME, 'router-received.jsonl');
   const fake = join(HOME, 'fake-router.sh');
   const config = process.env.CREW_CONFIG!;
@@ -792,6 +791,15 @@ describe('roster', async () => {
       entry('codex/gpt-6-sol', ['advisor', 'builder', 'checker']), entry('claude/claude-sonnet-5', ['checker']),
     ];
     assert.deepEqual(rosterDefaults(roster as never), { advisor: 'codex/gpt-6-sol@high', builder: 'codex/gpt-6-sol@high', checker: 'codex/gpt-6-sol@high' });
+  });
+  it('tells a missing router from one that rejects the roster, in the router\'s words', async () => {
+    const { routerView } = await import('../src/roster.ts');
+    const script = (name: string, body: string) => { const p = join(HOME, name); writeFileSync(p, `#!/bin/sh\n${body}\n`); chmodSync(p, 0o755); return p; };
+    assert.deepEqual(routerView(join(HOME, 'no-such-router'), file), { state: 'missing' });
+    const rejects = script('router-rejects.sh', `echo '{"code":"AGENT_ROUTER_INVALID_INPUT","message":"roster models[3] (claude/x) about must be text of 1-200 characters (it is 207)"}' >&2; exit 1`);
+    assert.deepEqual(routerView(rejects, file), { state: 'error', message: 'roster models[3] (claude/x) about must be text of 1-200 characters (it is 207)' });
+    const reads = script('router-ok.sh', `[ "$1" = status ] && echo '{"rosterFile":"${file}"}' || echo '{}'`);
+    assert.deepEqual(routerView(reads, file), { state: 'ok', rosterFile: file });
   });
   it('explicit defaults beat the roster, and a broken roster never breaks config loading', () => {
     process.env.CREW_ROSTER = file;

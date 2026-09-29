@@ -8,7 +8,7 @@ import { isHookEvent, runHook } from './hook.ts';
 import { self } from './identity.ts';
 import { amend, format, resolve, send, takeUnread } from './mail.ts';
 import { grade } from './outcome.ts';
-import { loadRoster, rosterPath, unrunnable } from './roster.ts';
+import { loadRoster, rosterPath, routerView, unrunnable } from './roster.ts';
 import { isEffort, route } from './route.ts';
 import { liveOnHost, spawn } from './spawn.ts';
 import { checkouts, trustPaths, trustTargets } from './trust.ts';
@@ -250,17 +250,20 @@ async function main(argv: string[]): Promise<void> {
         console.log(`no roster at ${path}. Write one with the roster skill (/crew:roster in Claude Code, $roster in Codex).`);
         return;
       }
-      const router = (args: string[]): Record<string, any> | undefined => {
-        try { return JSON.parse(execFileSync(loadConfig().router.command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 20_000 })); }
-        catch { return undefined; }
-      };
-      const status = router(['status']);
-      const stats = router(['outcomes', 'stats'])?.candidates as { candidate: string; role: string; outcomes: number; successes: number }[] | undefined;
-      if (values.json) { console.log(JSON.stringify({ path, models: entries, router: status ? { rosterFile: status.rosterFile ?? null } : null, stats: stats ?? [] })); return; }
-      const reads = !status ? 'router not installed: spawns use the first model per role'
-        : status.rosterFile === path ? 'the router reads it'
-        : `the router uses its own catalog; switch with: ${loadConfig().router.command} roster use --file ${path}`;
+      const command = loadConfig().router.command;
+      const view = routerView(command, path);
+      let stats: { candidate: string; role: string; outcomes: number; successes: number }[] | undefined;
+      if (view.state === 'ok') {
+        try { stats = JSON.parse(execFileSync(command, ['outcomes', 'stats'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 20_000 })).candidates; }
+        catch { /* no track records yet */ }
+      }
+      if (values.json) { console.log(JSON.stringify({ path, models: entries, router: view, stats: stats ?? [] })); return; }
+      const reads = view.state === 'missing' ? 'router not installed: spawns use the first model per role'
+        : view.state === 'error' ? 'THE ROUTER REJECTS IT: every spawn falls back to the first model per role'
+        : view.rosterFile === path ? 'the router reads it'
+        : `the router uses its own catalog; switch with: ${command} roster use --file ${path}`;
       console.log(`roster ${path} · ${reads}`);
+      if (view.state === 'error') console.log(`  ! router: ${view.message}`);
       for (const role of ROLES) {
         const mine = entries.filter(e => e.roles.includes(role));
         mine.forEach((e, index) => {
