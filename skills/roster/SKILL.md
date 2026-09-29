@@ -25,11 +25,11 @@ anything below.
 ## 3. Draft each entry
 
 ```json
-{ "model": "codex/gpt-6-sol", "effort": "high", "roles": ["advisor", "builder"], "cost": 0.15,
+{ "model": "codex/gpt-6.1-sol", "effort": "high", "roles": ["advisor", "builder"], "cost": 0.15,
   "about": "the workhorse", "use": "…", "avoid": "…" }
 ```
 
-- **model**: `<host>/<model id>` (`claude/claude-opus-5-5`, `codex/gpt-6-sol`,
+- **model**: `<host>/<model id>` (`claude/claude-opus-5-5`, `codex/gpt-6.1-sol`,
   `opencode/opencode-go/kimi-k3`). **effort**: one the model supports.
 - **roles**: `advisor`, `builder`, `checker`. Give a model only the roles it is good at.
 - **cost** from 0 to 1: the share of the user's limits one assignment burns. A bigger plan makes

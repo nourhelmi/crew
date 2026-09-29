@@ -38,7 +38,7 @@ export function clampEffort(host: Host, effort: Effort): Effort {
   return rank < EFFORTS.indexOf(allowed[0]!) ? allowed[0]! : allowed[allowed.length - 1]!;
 }
 
-/** `openai-codex/gpt-6-sol@xhigh` | `claude-opus-5-5` | `opus@high` -> host, native model id, effort. */
+/** `openai-codex/gpt-6.1-sol@xhigh` | `claude-opus-5-5` | `opus@high` -> host, native model id, effort. */
 export function parseModel(spec: string): { host: Host; model: string; effort?: Effort } {
   const [path = '', effortText] = spec.trim().split('@');
   const slash = path.indexOf('/');

@@ -200,7 +200,7 @@ them on your real tasks with `crew route` until the picks look right.
 
 ```json
 { "models": [
-  { "model": "codex/gpt-6-sol", "effort": "high", "roles": ["advisor", "builder"], "cost": 0.15,
+  { "model": "codex/gpt-6.1-sol", "effort": "high", "roles": ["advisor", "builder"], "cost": 0.15,
     "about": "the workhorse",
     "use": "implementation whose approach is clear; lanes that execute a known plan",
     "avoid": "open product or architecture decisions" },
@@ -257,11 +257,11 @@ part of normal review.
 
 ```json
 {
-  "defaults": { "advisor": "claude-opus-5-5@high", "builder": "gpt-6-sol@high", "checker": "gpt-6-sol@xhigh" },
+  "defaults": { "advisor": "claude-opus-5-5@high", "builder": "gpt-6.1-sol@high", "checker": "gpt-6.1-sol@xhigh" },
   "router":   { "enabled": true, "command": "agent-router", "timeoutMs": 90000 },
   "args":     { "claude": ["--permission-mode", "auto"], "codex": [] },
   "trust":    { "roots": [] },
-  "capacity": { "claude": { "max": 2, "overflow": "gpt-6-sol@high" } }
+  "capacity": { "claude": { "max": 2, "overflow": "gpt-6.1-sol@high" } }
 }
 ```
 

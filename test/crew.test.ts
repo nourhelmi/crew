@@ -27,7 +27,7 @@ const ROOT = { mailbox: 'claude-root', host: 'claude' as const, name: 'root' };
 function run(overrides: Partial<RunMeta> = {}): RunMeta {
   const meta: RunMeta = {
     id: 'b-test', name: 'builder-x', role: 'builder',
-    route: { host: 'codex', model: 'gpt-6-sol', effort: 'high', strategy: 'pinned' },
+    route: { host: 'codex', model: 'gpt-6.1-sol', effort: 'high', strategy: 'pinned' },
     cwd: '/tmp', keep: false, parent: ROOT, launcher: 'exec', createdAt: new Date().toISOString(), state: 'running',
     ...overrides,
   };
@@ -41,7 +41,7 @@ const writeResult = (id: string, status: string): void =>
 describe('parseModel', () => {
   it('derives the CLI from the provider prefix', () => {
     assert.deepEqual(parseModel('claude-bridge/claude-opus-5-5@high'), { host: 'claude', model: 'claude-opus-5-5', effort: 'high' });
-    assert.deepEqual(parseModel('openai-codex/gpt-6-sol'), { host: 'codex', model: 'gpt-6-sol' });
+    assert.deepEqual(parseModel('openai-codex/gpt-6.1-sol'), { host: 'codex', model: 'gpt-6.1-sol' });
   });
   it('recognises bare native model ids and aliases', () => {
     assert.equal(parseModel('gpt-6-luna@low').host, 'codex');
@@ -49,14 +49,14 @@ describe('parseModel', () => {
     assert.equal(parseModel('claude-sonnet-5').host, 'claude');
   });
   it('clamps efforts a CLI does not support', () => {
-    assert.equal(parseModel('openai-codex/gpt-6-sol@max').effort, 'max');
+    assert.equal(parseModel('openai-codex/gpt-6.1-sol@max').effort, 'max');
     assert.equal(clampEffort('claude', 'minimal'), 'low');
-    assert.equal(parseModel('gpt-6-sol@off').effort, 'minimal');
+    assert.equal(parseModel('gpt-6.1-sol@off').effort, 'minimal');
   });
   it('rejects models without a native CLI', () => {
     assert.throws(() => parseModel('cursor/grok-4.6@high'), /no native CLI/);
     assert.throws(() => parseModel('grok-4.6'), /cannot tell/);
-    assert.throws(() => parseModel('gpt-6-sol@ultra'), /unknown effort/);
+    assert.throws(() => parseModel('gpt-6.1-sol@ultra'), /unknown effort/);
   });
 });
 
@@ -68,7 +68,7 @@ describe('route', () => {
   });
   it('takes the Jev decision', async () => {
     const chosen = await route({ role: 'checker', task: 't' }, config,
-      async request => { assert.equal(request.harness, 'native'); return { selected: { model: 'openai-codex/gpt-6-sol', thinking: 'xhigh' }, strategy: 'jev' }; });
+      async request => { assert.equal(request.harness, 'native'); return { selected: { model: 'openai-codex/gpt-6.1-sol', thinking: 'xhigh' }, strategy: 'jev' }; });
     assert.equal(chosen.host, 'codex');
     assert.equal(chosen.effort, 'xhigh');
     assert.equal(chosen.strategy, 'jev');
@@ -306,8 +306,8 @@ describe('launch shape', () => {
     const claude = argv('claude', { host: 'claude', model: 'claude-opus-5-5', effort: 'high', strategy: 'jev' }, 'adv', config, 'GO');
     assert.deepEqual(claude.slice(0, 6), ['--model', 'claude-opus-5-5', '--effort', 'high', '--name', 'adv']);
     assert.deepEqual(claude.slice(-5), ['--add-dir', ROOT_DIR, '--permission-mode', 'auto', 'GO']);
-    const codex = argv('codex', { host: 'codex', model: 'gpt-6-sol', effort: 'xhigh', strategy: 'jev' }, 'b', config, 'GO');
-    assert.deepEqual(codex, ['--model', 'gpt-6-sol', '-c', 'model_reasoning_effort="xhigh"', '-c', 'check_for_update_on_startup=false', 'GO']);
+    const codex = argv('codex', { host: 'codex', model: 'gpt-6.1-sol', effort: 'xhigh', strategy: 'jev' }, 'b', config, 'GO');
+    assert.deepEqual(codex, ['--model', 'gpt-6.1-sol', '-c', 'model_reasoning_effort="xhigh"', '-c', 'check_for_update_on_startup=false', 'GO']);
   });
   it('grants sandboxed children crew state and the checkout\'s git dir', () => {
     const repo = mkdtempSync(join(tmpdir(), 'crew-repo-'));
@@ -321,7 +321,7 @@ describe('launch shape', () => {
       const roots = writableRoots(tree);
       assert.equal(roots.length, 2);
       assert.equal(realpathSync(roots[1]!), realpathSync(join(repo, '.git')));
-      const codex = argv('codex', { host: 'codex', model: 'gpt-6-sol', effort: 'high', strategy: 'jev' }, 'b', store.loadConfig(), 'GO', roots);
+      const codex = argv('codex', { host: 'codex', model: 'gpt-6.1-sol', effort: 'high', strategy: 'jev' }, 'b', store.loadConfig(), 'GO', roots);
       assert.equal(codex[6], '-c');
       assert.match(codex[7] ?? '', /^sandbox_workspace_write\.writable_roots=\[".*"\]$/);
       const claude = argv('claude', { host: 'claude', model: 'opus', effort: 'high', strategy: 'jev' }, 'a', store.loadConfig(), 'GO', roots);
@@ -364,7 +364,7 @@ describe('trust', async () => {
     const claude = join(dir, 'claude.json');
     const codex = join(dir, 'config.toml');
     writeFileSync(claude, JSON.stringify({ projects: { '/a': { hasTrustDialogAccepted: true, allowedTools: [] } }, other: 1 }));
-    writeFileSync(codex, 'model = "gpt-6-sol"\n\n[projects."/a"]\ntrust_level = "trusted"\n\n[projects."/b"]\ntrust_level = "untrusted"\n\n[projects."/c"]\nfoo = 1\n\n[mcp_servers.x]\ncommand = "x"\n');
+    writeFileSync(codex, 'model = "gpt-6.1-sol"\n\n[projects."/a"]\ntrust_level = "trusted"\n\n[projects."/b"]\ntrust_level = "untrusted"\n\n[projects."/c"]\nfoo = 1\n\n[mcp_servers.x]\ncommand = "x"\n');
     return { dir, claude, codex };
   };
 
@@ -564,19 +564,19 @@ describe('amendments', () => {
 
 describe('capacity', async () => {
   const { withinCapacity } = await import('../src/spawn.ts');
-  const config = { ...store.loadConfig(), capacity: { claude: { max: 2, overflow: 'gpt-6-sol@high' } } };
+  const config = { ...store.loadConfig(), capacity: { claude: { max: 2, overflow: 'gpt-6.1-sol@high' } } };
   const opus = { host: 'claude' as const, model: 'claude-opus-5-5', effort: 'high' as const, strategy: 'jev' as const };
 
   it('moves a routed spawn off a host at its cap', () => {
     assert.deepEqual(withinCapacity(opus, config, undefined, () => 1), opus);
     const moved = withinCapacity(opus, config, undefined, () => 2);
-    assert.deepEqual({ ...moved, reason: undefined }, { host: 'codex', model: 'gpt-6-sol', effort: 'high', strategy: 'overflow', reason: undefined });
+    assert.deepEqual({ ...moved, reason: undefined }, { host: 'codex', model: 'gpt-6.1-sol', effort: 'high', strategy: 'overflow', reason: undefined });
     assert.match(moved.reason ?? '', /claude has 2 live runs \(cap 2\)/);
     assert.equal(withinCapacity(opus, config, 'max', () => 3).effort, 'max');
   });
   it('leaves pins and uncapped hosts alone', () => {
     assert.deepEqual(withinCapacity({ ...opus, strategy: 'pinned' }, config, undefined, () => 9).host, 'claude');
-    const sol = { host: 'codex' as const, model: 'gpt-6-sol', effort: 'high' as const, strategy: 'jev' as const };
+    const sol = { host: 'codex' as const, model: 'gpt-6.1-sol', effort: 'high' as const, strategy: 'jev' as const };
     assert.deepEqual(withinCapacity(sol, config, undefined, () => 9), sol);
   });
 });
@@ -735,7 +735,7 @@ describe('routing evidence', async () => {
     run();
     assert.equal(checker('PASS: repaired the rounding bug', 'FIXED'), 'queued');
     const [entry] = received();
-    assert.equal(entry.model, 'gpt-6-sol'); assert.equal(entry.thinking, 'high'); assert.equal(entry.role, 'builder');
+    assert.equal(entry.model, 'gpt-6.1-sol'); assert.equal(entry.thinking, 'high'); assert.equal(entry.role, 'builder');
     assert.equal(entry.signal, 'review'); assert.equal(entry.success, false); assert.equal(entry.run, 'b-test');
     assert.match(entry.note, /checker-y: PASS/);
     assert.deepEqual(readFileSync(outcomesPath(), 'utf8').trim().split('\n').map(l => JSON.parse(l)), [entry], 'kept locally too');
@@ -787,26 +787,26 @@ describe('roster', async () => {
   after(() => { process.env.CREW_ROSTER = join(HOME, 'no-roster.json'); rmSync(file, { force: true }); });
 
   it('parses host ids alongside the older provider prefixes', () => {
-    assert.deepEqual(parseModel('codex/gpt-6-sol@high'), { host: 'codex', model: 'gpt-6-sol', effort: 'high' });
+    assert.deepEqual(parseModel('codex/gpt-6.1-sol@high'), { host: 'codex', model: 'gpt-6.1-sol', effort: 'high' });
     assert.equal(parseModel('claude/claude-sonnet-5').host, 'claude');
     assert.match(unrunnable('devin/devin-2') ?? '', /no native CLI/);
     assert.equal(unrunnable('codex/gpt-6-luna'), undefined);
   });
   it('validates entries and names the bad one', () => {
-    writeFileSync(file, JSON.stringify({ models: [entry('codex/gpt-6-sol', ['builder']), entry('sol', ['builder'])] }));
+    writeFileSync(file, JSON.stringify({ models: [entry('codex/gpt-6.1-sol', ['builder']), entry('sol', ['builder'])] }));
     assert.throws(() => loadRoster(file), /models\[1\]: model must be "<host>\/<model id>"/);
-    writeFileSync(file, JSON.stringify({ models: [entry('codex/gpt-6-sol', ['maker'])] }));
+    writeFileSync(file, JSON.stringify({ models: [entry('codex/gpt-6.1-sol', ['maker'])] }));
     assert.throws(() => loadRoster(file), /roles must be/);
-    writeFileSync(file, JSON.stringify({ models: [entry('codex/gpt-6-sol', ['builder'], { cost: 3 })] }));
+    writeFileSync(file, JSON.stringify({ models: [entry('codex/gpt-6.1-sol', ['builder'], { cost: 3 })] }));
     assert.throws(() => loadRoster(file), /cost must be 0..1/);
     assert.equal(loadRoster(join(HOME, 'absent.json')), undefined);
   });
   it('defaults each role to its first launchable, enabled model', () => {
     const roster = [
       entry('devin/devin-2', ['builder']), entry('codex/gpt-6-luna', ['checker'], { enabled: false }),
-      entry('codex/gpt-6-sol', ['advisor', 'builder', 'checker']), entry('claude/claude-sonnet-5', ['checker']),
+      entry('codex/gpt-6.1-sol', ['advisor', 'builder', 'checker']), entry('claude/claude-sonnet-5', ['checker']),
     ];
-    assert.deepEqual(rosterDefaults(roster as never), { advisor: 'codex/gpt-6-sol@high', builder: 'codex/gpt-6-sol@high', checker: 'codex/gpt-6-sol@high' });
+    assert.deepEqual(rosterDefaults(roster as never), { advisor: 'codex/gpt-6.1-sol@high', builder: 'codex/gpt-6.1-sol@high', checker: 'codex/gpt-6.1-sol@high' });
   });
   it('tells a missing router from one that rejects the roster, in the router\'s words', async () => {
     const { routerView } = await import('../src/roster.ts');
@@ -827,7 +827,7 @@ describe('roster', async () => {
       assert.equal(defaults.builder, 'gpt-6-luna@max');
       assert.equal(defaults.advisor, 'claude-opus-5-5@high', 'built-in when neither says');
       writeFileSync(file, '{ not json');
-      assert.equal(store.loadConfig().defaults.checker, 'gpt-6-sol@xhigh');
+      assert.equal(store.loadConfig().defaults.checker, 'gpt-6.1-sol@xhigh');
     } finally { rmSync(process.env.CREW_CONFIG!, { force: true }); }
   });
 });

@@ -170,7 +170,7 @@ const requestedRoots = process.argv.flatMap((arg, i, all) => (arg === '--trust-r
 {
   type Stored = { trust?: { roots?: string[] } } & Record<string, unknown>;
   const current = readJson<Stored>(CONFIG) ?? {
-    defaults: { advisor: 'claude-opus-5-5@high', builder: 'gpt-6-sol@high', checker: 'gpt-6-sol@xhigh' },
+    defaults: { advisor: 'claude-opus-5-5@high', builder: 'gpt-6.1-sol@high', checker: 'gpt-6.1-sol@xhigh' },
     router: { enabled: true, command: 'agent-router', timeoutMs: 90000 },
     args: { claude: ['--permission-mode', 'auto'], codex: [], opencode: [] },
   };
