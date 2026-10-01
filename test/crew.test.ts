@@ -7,6 +7,8 @@ import { after, beforeEach, describe, it } from 'node:test';
 
 const HOME = mkdtempSync(join(tmpdir(), 'crew-test-'));
 process.env.CREW_HOME = HOME;
+delete process.env.CREW_CODEX_SOCKET;
+delete process.env.CODEX_APP_SERVER_WS_URL;
 process.env.CREW_CONFIG = join(HOME, 'no-config.json');
 process.env.CREW_ROSTER = join(HOME, 'no-roster.json');
 process.env.CODEX_HOME = join(HOME, 'codex-home');

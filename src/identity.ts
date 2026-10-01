@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { basename } from 'node:path';
 import { readRun } from './store.ts';
+import { codexSocket } from './codex-mail.ts';
 import { HOSTS, type Address, type Host, type RunMeta } from './types.ts';
 
 type Env = Record<string, string | undefined>;
@@ -27,6 +28,19 @@ export function ancestry(start = process.ppid): Proc[] {
   const chain: Proc[] = [];
   for (let proc = table.get(start); proc && proc.pid > 1 && chain.length < 32; proc = table.get(proc.ppid)) chain.push(proc);
   return chain;
+}
+
+/** Optional `crew connect` discovery, restricted to an actual Codex ancestor's explicit listener. */
+export function owningCodexSocket(chain = ancestry(), args = (pid: number): string =>
+  execFileSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf8' })): string | undefined {
+  for (const proc of chain) {
+    if (basename(proc.comm) !== 'codex') continue;
+    try {
+      const match = args(proc.pid).match(/\bapp-server\s+--listen\s+unix:\/\/(\/\S+)(?:\s|$)/);
+      if (match) return match[1];
+    } catch { /* no process visibility: caller can pass --socket */ }
+  }
+  return undefined;
 }
 
 function hostAncestor(): { host: Host; pid: number } | undefined {
@@ -70,7 +84,9 @@ export function self(env: Env = process.env): Address {
   // A Codex tool call always carries its own thread id; a CREW_MAILBOX beside it was inherited
   // from a Claude session that launched this Codex, so the thread id wins.
   if (env.CODEX_THREAD_ID) {
-    return { mailbox: sessionMailbox('codex', env.CODEX_THREAD_ID), host: 'codex', threadId: env.CODEX_THREAD_ID, ...herdrTarget(env) };
+    const mailbox = sessionMailbox('codex', env.CODEX_THREAD_ID);
+    const socket = codexSocket(mailbox, env);
+    return { mailbox, host: 'codex', threadId: env.CODEX_THREAD_ID, ...(socket ? { codexSocket: socket } : {}), ...herdrTarget(env) };
   }
   if (env.CREW_MAILBOX) {
     const host: Host = HOSTS.find(h => env.CREW_MAILBOX!.startsWith(`${h}-`)) ?? 'claude';
@@ -90,5 +106,7 @@ export function hookSelf(host: Host, sessionId: string | undefined, env: Env = p
   const run = ownRun(env, sessionId);
   if (run) return runAddress(run, env);
   if (!sessionId) return undefined;
-  return { mailbox: sessionMailbox(host, sessionId), host, ...(host === 'codex' ? { threadId: sessionId } : {}), ...herdrTarget(env) };
+  const mailbox = sessionMailbox(host, sessionId);
+  const socket = host === 'codex' ? codexSocket(mailbox, env) : undefined;
+  return { mailbox, host, ...(host === 'codex' ? { threadId: sessionId } : {}), ...(socket ? { codexSocket: socket } : {}), ...herdrTarget(env) };
 }

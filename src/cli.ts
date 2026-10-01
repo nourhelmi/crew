@@ -5,7 +5,8 @@ import { delimiter, dirname, join, resolve as resolvePath } from 'node:path';
 import { parseArgs } from 'node:util';
 import { closePane, herdr, inHerdr, labelPane } from './herdr.ts';
 import { isHookEvent, runHook } from './hook.ts';
-import { self } from './identity.ts';
+import { owningCodexSocket, self } from './identity.ts';
+import { registerCodex, wakeCodex } from './codex-mail.ts';
 import { amend, format, resolve, send, takeUnread } from './mail.ts';
 import { resume } from './resume.ts';
 import { grade } from './outcome.ts';
@@ -32,6 +33,7 @@ const HELP = `crew: advisor crews on native Claude Code and Codex
   crew amend <run> [TEXT... | --file F] Append to your child's packet: scope, authorization, done-when.
   crew grade <run> good|bad [NOTE...]   Your verdict on a child's work; routing learns from it.
   crew inbox                   Print unread mail.
+  crew connect --socket PATH   Connect this loaded Codex root to its owning Unix app server.
   crew ls [--all]              Your children (or everything).
   crew read <run>              Result, or the tail of its terminal/log.
   crew resume <run>            Resume an exited headless session with its recorded launch settings.
@@ -121,11 +123,25 @@ async function main(argv: string[]): Promise<void> {
       effort: { type: 'string' }, name: { type: 'string' }, cwd: { type: 'string' }, keep: { type: 'boolean' },
       'dry-run': { type: 'boolean' }, timeout: { type: 'string' }, file: { type: 'string' }, all: { type: 'boolean' },
       host: { type: 'string' }, json: { type: 'boolean' }, quiet: { type: 'boolean' }, global: { type: 'boolean' },
-      checks: { type: 'string' },
+      checks: { type: 'string' }, socket: { type: 'string' },
     },
   });
 
   switch (command) {
+    case 'wake-codex': {
+      // Internal synchronous delivery adapter. No host discovery or thread takeover.
+      try { console.log(await wakeCodex(JSON.parse(stdin()) as Address)); }
+      catch { console.log('queued'); }
+      return;
+    }
+    case 'connect': {
+      const me = self();
+      const socket = values.socket ?? me.codexSocket ?? (me.host === 'codex' ? owningCodexSocket() : undefined);
+      if (!socket) fail('crew: crew connect --socket /absolute/path/to/owning-app-server.sock');
+      await registerCodex(me, socket);
+      console.log(`connected ${me.mailbox} to ${socket}; loaded roots accept direct mail`);
+      return;
+    }
     case 'spawn': {
       const role = oneOf<Role>(values.role, ROLES, 'role');
       const task = values.task ?? (values.packet ? readFileSync(values.packet, 'utf8') : positionals.length ? positionals.join(' ') : stdin());

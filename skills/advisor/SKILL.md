@@ -47,7 +47,13 @@ missing tool. If delegation is unavailable, work directly where permitted.
   children settle or you reach a real blocker. The watcher writes settlements and dialog notices
   to your inbox, and the Stop hook hands over unread mail before the turn ends. Crew never uses
   `codex queue`: it creates a later user turn, cannot steer this turn, and cannot cancel stale
-  pointers after the inbox has been read. An ended desktop thread does not wake automatically.
+  pointers after the inbox has been read. At Codex root entry, try `crew connect` once. When
+  the owning server exposes a local Unix socket, it reads the explicit listener from its own
+  Codex process ancestry or `CREW_CODEX_SOCKET`; pass `--socket /absolute/path/to/server.sock`
+  when discovery is unavailable. Crew verifies the root is loaded for
+  direct input; subsequent mail steers its active turn or starts an immediate idle turn.
+  Unloaded roots and private stdio servers retain the inbox/wait/Stop-hook path; do not
+  start or resume another server/thread to claim delivery.
 - **Handles.** `crew ls` lists your children; `crew read <run>` prints a result or the
   terminal tail; `crew msg <run|parent> "…"` sends a follow-up, answer or repair request;
   `crew inbox` reads your mail; `crew stop <run>` cancels. Children treat `crew msg` as

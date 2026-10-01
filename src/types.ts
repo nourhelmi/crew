@@ -25,6 +25,8 @@ export interface Address {
   name?: string;
   /** Codex thread identity; queue is not used for automatic mail delivery. */
   threadId?: string;
+  /** Explicit owning app-server Unix socket. Only loaded root sessions accept direct mail. */
+  codexSocket?: string;
   /** Herdr agent name or pane, when the session lives in a herdr pane. */
   herdrAgent?: string;
   /** The herdr session that pane belongs to; every herdr call for it must target this session. */
@@ -83,7 +85,7 @@ export interface Mail {
   pushed?: boolean;
 }
 
-export type Delivery = 'waiter' | 'opencode-plugin' | 'herdr-prompt' | 'headless-resume' | 'queued';
+export type Delivery = 'waiter' | 'opencode-plugin' | 'herdr-prompt' | 'headless-resume' | 'codex-steer' | 'codex-start' | 'queued';
 
 export interface Config {
   /** Role defaults when the Jev router is off or fails; `model@effort`. */

@@ -24,8 +24,10 @@
   pointers, one per unread batch, so nothing stale is replayed turn by turn. Children treat plain
   mail as advice; scope changes go through `crew amend`, which appends to the packet.
   Never use `codex queue`, including for roots: it creates future turns that cannot be cancelled
-  when the inbox is consumed. Codex roots keep their turn alive and use foreground waits, inbox
-  reads and the Stop hook. Runs also hear mail through their PostToolUse hooks.
+  when the inbox is consumed. Connected Codex roots use their explicitly recorded owning Unix socket for
+  turn/steer (active) or turn/start (idle and loaded). Never resume an unloaded root to wake it.
+  Roots without that connection keep their turn alive and use foreground waits, inbox reads
+  and the Stop hook. Runs also hear mail through their PostToolUse hooks.
 - Settlement follows the packet, not the first DONE: a terminal status settles only once the child
   has read every amendment, and a settled run whose result returns to IN PROGRESS is reopened
   (`reopen` in `src/mail.ts`), so waits, nudges and capacity cover it again.

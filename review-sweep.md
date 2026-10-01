@@ -139,3 +139,58 @@ Verification:
 Local logs: [before-fix regression](/tmp/crew-root-wake-before.log),
 [full suite](/tmp/crew-root-wake-tests.log), [focused regressions](/tmp/crew-root-wake-focused.log),
 [process ancestry](/tmp/crew-root-wake-ancestry.log), [installation](/tmp/crew-root-wake-install.log).
+
+## Follow-up: exposed owning server and direct root mail — 2026-10-01
+
+Crew **0.12.0** adds an opt-in Codex root transport. The desktop was relaunched with an explicit
+local Unix endpoint and its existing Code Mode/app-tools/code-review launch options. This exact
+root was verified loaded with `canAcceptDirectInput=true`; an automatic restart continuation was
+accepted through `turn/start`. The earlier daemon-shortcut restart had fallen back to stdio and
+sent no continuation. The unused diagnostic daemon was stopped after confirming its recorded PID
+and zero loaded threads. The desktop's owning control server remains running.
+
+`crew connect` discovers an explicit listener in its own Codex process ancestry, or accepts
+`--socket`/`CREW_CODEX_SOCKET`, verifies ownership and records the recipient endpoint. Registration
+wins over an older parent endpoint. Automatic delivery preserves the inbox, checks it again under
+the consumption mutex, then uses `turn/steer` with the current active turn ID or `turn/start` for an
+idle loaded root. Unsupported/unloaded roots retain inbox/wait/hooks. It never calls `thread/resume`,
+changes the root's model/permissions, or reinstates `codex queue`.
+
+The wake attempt is persisted before RPC. Accepted or ambiguous attempts cover an unread batch
+without expiring into replay; protocol rejections permit a later delivery to retry, with no immediate
+retry or steer-to-start downgrade. Ownership/RPC calls and lock waits are bounded. Native Node
+WebSocket framing is carried over a short-lived, one-use nonce-protected loopback-to-Unix bridge;
+there is no new runtime dependency or permanent TCP listener. Hook command strings are unchanged.
+
+Validation: **140 tests passed, zero failures/skips**, `npm run typecheck` and `git diff --check` passed.
+The installer updated Claude/Codex caches to 0.12.0. New isolated regressions cover active/idle
+selection, consume-before-send, simultaneous senders, expected-turn rejection, lost acknowledgements,
+timeouts, waiter precedence, pagination, root ownership, connection registration and endpoint migration.
+
+Live evidence uses the real desktop root and Claude Code run `b-y01njd80a`, session
+`4848ddd1-4bba-4804-9c2f-e91dfbf583a7`:
+
+```text
+Claude -> active Codex: STEER-LIVE-CLAUDE-INITIATED-20261001
+Codex -> Claude: STEER-LIVE-CODEX-REPLY-20261001
+Claude -> Codex: STEER-LIVE-CLAUDE-CONFIRMED-20261001
+Claude result: DONE: CLAUDE-INITIATED-ROUNDTRIP
+
+Codex -> same Claude session, Amendment 1: STEER-LIVE-CODEX-INITIATED-20261001
+Claude -> Codex: STEER-LIVE-CLAUDE-REPLY-20261001
+Claude result: DONE: CODEX-INITIATED-ROUNDTRIP
+```
+
+Actual inbox consumption and result artifacts corroborate both initiating directions. The root's
+accepted wake receipt uses `turn/steer` and the same active turn ID as the restart continuation,
+`01a0f8f6-75e2-7552-a40f-3bffbb946e6d`. A separate idle protocol test root
+`01a0f903-2ffb-7490-95ef-7c51d8066abc` received Crew's `codex-start`, consumed its temporary inbox
+(cursor advanced to 164), and wrote `IDLE-INBOX-CONSUMED-20261001`. The first ephemeral idle probe
+accepted `codex-start` but its history-read method was unsupported; it is not claimed as consumption
+proof. Both ephemeral probes are unloaded. The Claude probe is stopped; predecessor results remain.
+
+Local evidence: [/tmp/crew-steering-evidence](/tmp/crew-steering-evidence),
+[final tests](/tmp/crew-steering-tests-final.log), [typecheck](/tmp/crew-steering-typecheck-final.log),
+[installation](/tmp/crew-steering-install.log). The desktop switch is internal to the installed build;
+future ordinary launches may return to stdio. Use the local launcher after quitting the desktop,
+then `crew connect` in new root advisors. Details: [Codex steering setup](docs/codex-steering.md).

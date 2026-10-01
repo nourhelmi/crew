@@ -136,25 +136,36 @@ Five primitives, each built on something the hosts already do:
 |---|---|
 | **Spawn** | `crew spawn` picks a model (pinned, routed, or the role default), and the model's provider picks the CLI. The child gets a packet (its assignment) and a result path. |
 | **Wake** | The child writes `result.md` and its Stop hook settles it to the parent, which wakes the way its host does (table below). The parent's sweep is the backstop for a child whose hook never ran. |
-| **Message** | `crew msg` writes to a file inbox (the source of truth). An armed wait reads it; an idle pane gets one pointer per unread batch, and a busy child hears after its next tool call. Root Codex threads read via inbox, wait and Stop hooks. |
+| **Message** | `crew msg` writes to a file inbox (the source of truth). An armed wait reads it; an idle pane gets one pointer per unread batch, and a busy child hears after its next tool call. Connected Codex roots receive an active-turn steer or an immediate idle turn; other roots read via inbox, wait and Stop hooks. |
 | **Amend** | Children treat messages as advice. `crew amend` changes a child's scope, authority or done-when by appending to its packet. |
 | **Watch** | Each parent gets one detached watcher. Whenever no `crew wait` is running, it catches children stuck on a dialog or gone without a result, and results no hook reported. It exits when no child is live. |
 
 | When the parent is… | …it wakes because |
 |---|---|
 | a Claude Code session | its background `crew wait` exits, and Claude Code re-invokes the session |
-| a root Codex session | foreground `crew wait` returns mail in the current turn; the Stop hook hands over unread mail before finishing |
+| a connected root Codex session | its owning Unix app server steers the active turn, or starts an immediate turn when idle |
+| other root Codex sessions | foreground `crew wait` returns mail; the Stop hook hands over unread mail before finishing |
 | an idle headless Crew run | resumes the recorded Codex, Claude background or OpenCode session to read its inbox |
 | an idle agent in a herdr pane | the same pointer is typed into the pane |
 | a busy Crew child | a PostToolUse hook announces unread mail after its next tool call |
 
-Crew does not automatically wake an ended desktop Codex root. Keep the advisor's turn alive
-while required children are working; do independent work or use foreground `crew wait`.
-`codex queue` is not steering and cannot retract a pointer after its inbox batch is consumed.
-An app server available only through the desktop's own stdio has no external control socket
-for Crew's use. The documented
-[`turn/steer`](https://learn.chatgpt.com/docs/app-server#steer-an-active-turn) API requires access
-to the owning server and the active turn ID; starting another server does not provide that access.
+To enable direct Codex root mail, expose the **owning** app server over a local Unix socket,
+then run `crew connect --socket /absolute/path/to/server.sock` inside that root. Crew verifies
+that this exact thread is loaded and accepts direct input before recording the connection.
+`CREW_CODEX_SOCKET=/absolute/path/to/server.sock` can also supply the endpoint to root tools.
+The endpoint follows the parent address across hosts; a sender's server is never assumed to own its parent.
+
+Active roots receive [`turn/steer`](https://learn.chatgpt.com/docs/app-server#steer-an-active-turn)
+with the current turn ID. Idle loaded roots receive `turn/start`; no thread is resumed or taken over.
+Mail stays in the inbox and the push carries only a pointer. A consumed batch is rechecked before
+sending; uncertain acceptance is recorded before sending and cannot replay until that batch is read.
+No automatic `codex queue` calls are used.
+
+A desktop's private stdio server cannot be controlled externally. Starting another server alone
+is insufficient: the desktop must connect to it. Without an exposed owning socket, or when a
+root is unloaded, mail remains durable for `crew inbox`, foreground `crew wait` and the Stop hook.
+Keep the advisor's turn alive while required children are working. See [Codex socket setup](docs/codex-steering.md)
+for the supported CLI setup and the verified desktop configuration.
 
 Retained headless teammates resume the same recorded host session for later mail and packet
 amendments. Busy workers read through their hooks; concurrent resume requests serialize.

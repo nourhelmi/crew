@@ -3,6 +3,7 @@ import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { agentStatus, prompt } from './herdr.ts';
 import { requestResume } from './resume.ts';
+import { pushCodex, registeredSocket } from './codex-mail.ts';
 import { reviewed } from './outcome.ts';
 import { progressLine, readResult } from './result.ts';
 import { appendMail, findRun, hasWaiter, mailDir, newId, packetPath, readJson, readRun, resultPath, runDir, unread, updateRun, withLock, writeJson } from './store.ts';
@@ -29,7 +30,8 @@ export function resolve(ref: string, me: Address): Address {
   if (raw) {
     const host = raw[1] as Host;
     const id = raw[2]!;
-    return { mailbox: ref, host, ...(host === 'codex' && !id.startsWith('pid-') ? { threadId: id } : {}) };
+    const socket = host === 'codex' ? registeredSocket(ref) : undefined;
+    return { mailbox: ref, host, ...(host === 'codex' && !id.startsWith('pid-') ? { threadId: id } : {}), ...(socket ? { codexSocket: socket } : {}) };
   }
   throw new Error(`crew: no run, name or mailbox matches "${ref}" (see crew ls)`);
 }
@@ -43,17 +45,18 @@ function pointer(mail: Mail): string {
   return `[crew] ${what}. Run: crew inbox`;
 }
 
-/** A wake pushed this recently and still unread covers later mail too: one push per batch. */
+/** An unread wake covers later mail too; Codex attempts never expire into replay. */
 const WAKE_COVERS_MS = 10 * 60_000;
 function wakePending(mailbox: string): boolean {
-  const wake = readJson<{ id: string; at: number }>(join(mailDir(mailbox), 'wake.json'));
+  const wake = readJson<{ id: string; at: number; transport?: string }>(join(mailDir(mailbox), 'wake.json'));
   return unread(mailbox).mails.some(mail => (mail.pushed && Date.now() - Date.parse(mail.at) < WAKE_COVERS_MS)
-    || (mail.id === wake?.id && Date.now() - wake.at < WAKE_COVERS_MS));
+    || (mail.id === wake?.id && (wake.transport === 'codex' || Date.now() - wake.at < WAKE_COVERS_MS)));
 }
 
 /**
  * The inbox is the source of truth; pushes only wake the recipient.
- * Ladder: an armed `crew wait` sees it within a second; an
+ * Ladder: an armed `crew wait` sees it within a second; a loaded Codex root on an explicitly
+ * connected Unix server receives an active-turn steer or an immediate idle turn; an
  * OpenCode session's own crew plugin watches its inbox and wakes it; else type a one-line pointer
  * into an idle herdr agent; else it waits for the recipient's next `crew wait`, `crew inbox` or
  * Stop hook.
@@ -84,6 +87,7 @@ export function deliver(to: Address, mail: Mail): Delivery {
 function push(to: Address, mail: Mail): Delivery {
   const run = readRun(to.mailbox);
   if (run && run.launcher !== 'herdr') return requestResume(run) ? 'headless-resume' : 'queued';
+  if (!run && to.host === 'codex' && !to.herdrAgent) return pushCodex(to);
   if (to.host === 'opencode') return 'opencode-plugin';
   if (to.herdrAgent) {
     const status = agentStatus(to.herdrAgent, to.herdrSession);

@@ -146,15 +146,15 @@ export function withLock<T>(name: string, work: () => T, waitMs = 30_000, staleM
 }
 
 /** A launch must keep its mutex through Node's asynchronous spawn/error event. */
-export async function withLockAsync<T>(name: string, work: () => Promise<T>): Promise<T> {
+export async function withLockAsync<T>(name: string, work: () => Promise<T>, waitMs = 90_000, staleMs = 120_000): Promise<T> {
   const dir = join(home(), 'locks', name.replace(/[^a-zA-Z0-9._-]/g, '_'));
   mkdirSync(dirname(dir), { recursive: true });
-  const deadline = Date.now() + 90_000;
+  const deadline = Date.now() + waitMs;
   for (;;) {
     try { mkdirSync(dir); break; }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      if (Date.now() - (mtime(dir) ?? Date.now()) > 120_000) { try { rmdirSync(dir); } catch { /* another breaker */ } continue; }
+      if (Date.now() - (mtime(dir) ?? Date.now()) > staleMs) { try { rmdirSync(dir); } catch { /* another breaker */ } continue; }
       if (Date.now() > deadline) throw new Error(`crew: timed out waiting for lock ${name}`);
       await new Promise(resolve => setTimeout(resolve, 100));
     }
