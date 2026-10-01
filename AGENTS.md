@@ -20,11 +20,12 @@
   the first session that claims it.
 - Compaction drops file reads. Anything a session must keep following lives in a file that the
   SessionStart `compact` branch (`afterCompaction` in `src/hook.ts`) points back to.
-- Mail: the inbox is the only content channel. Pushes (`codex queue`, herdr prompts) are one-line
+- Mail: the inbox is the only content channel. Pushes (herdr prompts) are one-line
   pointers, one per unread batch, so nothing stale is replayed turn by turn. Children treat plain
   mail as advice; scope changes go through `crew amend`, which appends to the packet.
-  `codex queue` wakes root Codex threads only: it drains at a turn end or when the Codex app opens
-  the thread, so queued for a run it replays after the work is over. Runs hear mail via their hooks.
+  Never use `codex queue`, including for roots: it creates future turns that cannot be cancelled
+  when the inbox is consumed. Codex roots keep their turn alive and use foreground waits, inbox
+  reads and the Stop hook. Runs also hear mail through their PostToolUse hooks.
 - Settlement follows the packet, not the first DONE: a terminal status settles only once the child
   has read every amendment, and a settled run whose result returns to IN PROGRESS is reopened
   (`reopen` in `src/mail.ts`), so waits, nudges and capacity cover it again.

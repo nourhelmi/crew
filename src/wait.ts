@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { agentStatus, closePane, prompt, type AgentStatus } from './herdr.ts';
 import { self } from './identity.ts';
-import { codexQueue, format, reopen, settle, stall, takeUnread, waiting } from './mail.ts';
+import { format, reopen, settle, stall, takeUnread, waiting } from './mail.ts';
 import { requestResume, resuming } from './resume.ts';
 import { readResult } from './result.ts';
 import { bgActive, bgSession, ROOT } from './spawn.ts';
@@ -104,7 +104,7 @@ export async function wait(timeoutMs: number): Promise<Mail[]> {
 const watcherFile = (mailbox: string): string => join(mailDir(mailbox), 'watcher');
 
 /**
- * A parent that isn't waiting (a Codex root ends its turn and relies on pushes; a Claude root
+ * A parent that isn't waiting (a Codex root is doing other work; a Claude root
  * between re-arms) still needs someone to notice a child stuck on a dialog, gone without a
  * result, or settled without its hook. One detached watcher per parent sweeps while no
  * `crew wait` is armed, and exits once the parent has no live children.
@@ -134,7 +134,8 @@ export async function watch(mailbox: string, everyMs = LIVENESS_EVERY_MS, maxMs 
 
 export const KEEPALIVE = {
   // idle time before a nudge, and how many nudges in a row before one cold rewrite is cheaper
-  codex: { afterMs: 25 * 60_000, max: 10 }, // write 1.25x vs read 0.1x per nudge: break-even ~12
+  // No automatic Codex keepalives: queue cannot steer or retract a stale pointer.
+  codex: { afterMs: 25 * 60_000, max: 0 },
   claude: { afterMs: 50 * 60_000, max: 16 }, // write 2x vs ~2 reads at 0.05x (Opus 5.5): ~20
   // OpenCode's providers each cache differently (most automatically, for hours); no nudges.
   opencode: { afterMs: 25 * 60_000, max: 0 },
@@ -183,8 +184,7 @@ function keepWarm(mailbox: string): () => void {
     if (!transcript && Date.now() - looked > 60_000) { looked = Date.now(); transcript = transcriptPath(parent); }
     const last = transcript ? mtime(transcript) : undefined;
     if (last === undefined || !keepaliveDue(parent.host, Date.now() - Math.max(last, nudgedAt), nudges)) return;
-    const pushed = parent.host === 'codex' && parent.threadId ? codexQueue(parent.threadId, KEEPALIVE_TEXT)
-      : parent.herdrAgent && agentStatus(parent.herdrAgent, parent.herdrSession) === 'idle'
+    const pushed = parent.herdrAgent && agentStatus(parent.herdrAgent, parent.herdrSession) === 'idle'
         ? prompt(parent.herdrAgent, KEEPALIVE_TEXT, parent.herdrSession).ok : false;
     if (pushed) { nudges++; nudgedAt = Date.now(); }
   };
@@ -203,7 +203,7 @@ export function ensureWatcher(mailbox: string): void {
 /**
  * How a parent hears about its live children. A Claude parent must hold `crew wait` as a
  * background Bash command: that is what lists the work as a background task and wakes the session.
- * Codex and OpenCode parents are woken by pushes, so a plain reminder is enough there.
+ * Codex parents wait within their current turn; OpenCode's plugin supplies its wake.
  */
 export function waitHint(parent: Address): string | undefined {
   const names = liveChildren(parent.mailbox).map(run => run.name);

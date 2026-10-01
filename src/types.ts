@@ -23,7 +23,7 @@ export interface Address {
   mailbox: string;
   host: Host;
   name?: string;
-  /** Codex thread to push into via `codex queue`. */
+  /** Codex thread identity; queue is not used for automatic mail delivery. */
   threadId?: string;
   /** Herdr agent name or pane, when the session lives in a herdr pane. */
   herdrAgent?: string;
@@ -79,11 +79,11 @@ export interface Mail {
   text: string;
   /** Result file for settlement notices. */
   result?: string;
-  /** A wake pointer was pushed for this mail (`codex queue` or a herdr prompt). */
+  /** Legacy persisted wake coverage; current deliveries record wake.json instead. */
   pushed?: boolean;
 }
 
-export type Delivery = 'waiter' | 'codex-queue' | 'opencode-plugin' | 'herdr-prompt' | 'headless-resume' | 'queued';
+export type Delivery = 'waiter' | 'opencode-plugin' | 'herdr-prompt' | 'headless-resume' | 'queued';
 
 export interface Config {
   /** Role defaults when the Jev router is off or fails; `model@effort`. */

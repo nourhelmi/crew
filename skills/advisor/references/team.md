@@ -26,8 +26,10 @@ must end a turn mid-assignment writes `IN PROGRESS: <next step>`, which wakes no
 keeps it going; if it stops on that twice you get a `waiting` notice. One maker per checkout still applies. A teammate's `crew msg parent`
 reaches the root; it can reach a sibling by name.
 
-Keep `crew wait` armed while teammates are alive (in Claude Code, as a background
-command). That is how their reports and messages wake you. Teammates wake the same way:
+Keep `crew wait` armed while waiting for required teammate work (Claude Code: a background
+command; Codex: foreground, within your current turn). Read `crew inbox` at handoffs while doing
+independent work. Crew does not queue later Codex user turns; an ended desktop root has no
+automatic wake. Teammates wake through their own host transports:
 a headless teammate resumes its recorded session to read its inbox, and an idle
 teammate in herdr gets a one-line pointer typed into its pane, one per unread batch; a busy teammate is
 told about unread mail after its next tool call. Any session with unread mail is kept
@@ -35,7 +37,7 @@ going at its next turn end until it has read it.
 
 Retire members before closing a team; retirement waits for real descendant settlement.
 Sent or queued is not read or done, so never resend an ambiguous message as a new one.
-`crew msg` prints how it was delivered: `waiter`, `codex-queue`, `opencode-plugin`, `herdr-prompt`, `headless-resume` or
+`crew msg` prints how it was delivered: `waiter`, `opencode-plugin`, `herdr-prompt`, `headless-resume` or
 `queued`. `headless-resume` means a resume request was scheduled; it does not prove the mail was read.
 `crew resume <run>` explicitly resumes an exited headless session with its recorded model and access.
 A fresh maker can also continue from files: give `crew spawn --packet` a continuation packet

@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -37,7 +36,7 @@ export function resolve(ref: string, me: Address): Address {
 
 const label = (from: Mail['from']): string => from.name ?? from.mailbox;
 
-/** One line that wakes the recipient; the inbox carries the content, so nothing stale is replayed. */
+/** One line that wakes an idle pane; the inbox carries the content. */
 function pointer(mail: Mail): string {
   const who = label(mail.from);
   const what = mail.kind === 'message' ? `new message from ${who}` : mail.kind === 'amendment' ? `packet amendment from ${who}` : `${who} ${mail.kind}`;
@@ -52,24 +51,17 @@ function wakePending(mailbox: string): boolean {
     || (mail.id === wake?.id && Date.now() - wake.at < WAKE_COVERS_MS));
 }
 
-export function codexQueue(threadId: string, text: string): boolean {
-  try {
-    execFileSync('codex', ['queue', '--thread', threadId, '--message', text], { timeout: 20_000, stdio: 'ignore' });
-    return true;
-  } catch { return false; }
-}
-
 /**
  * The inbox is the source of truth; pushes only wake the recipient.
- * Ladder: an armed `crew wait` sees it within a second; else push into a root Codex thread; an
+ * Ladder: an armed `crew wait` sees it within a second; an
  * OpenCode session's own crew plugin watches its inbox and wakes it; else type a one-line pointer
  * into an idle herdr agent; else it waits for the recipient's next `crew wait`, `crew inbox` or
  * Stop hook.
  *
- * Never `codex queue` a run: its hooks already announce mail after each tool call and hand it over
- * before the turn can end. A queued pointer drains only at a turn end, or whenever someone opens
- * the thread in the Codex app, so for a run it fires after the work is over, as a fresh turn in a
- * finished thread that finds an empty inbox. `codex exec` never drains it at all.
+ * Never use `codex queue`, including for roots. It queues a future user turn, not a steer.
+ * Reading the inbox cannot cancel that turn: each consumed batch can leave another stale pointer
+ * to replay after the work. Root advisors wait in the foreground; their Stop hook drains mail
+ * before the current turn ends. Children also hear it through their PostToolUse hooks.
  */
 export function deliver(to: Address, mail: Mail): Delivery {
   return withLock(`delivery-${to.mailbox}`, () => {
@@ -82,7 +74,7 @@ export function deliver(to: Address, mail: Mail): Delivery {
     if (hasWaiter(to.mailbox)) return 'waiter';
     if (covered) return 'queued';
     const delivery = push(to, mail);
-    if (delivery === 'codex-queue' || delivery === 'herdr-prompt' || delivery === 'headless-resume') {
+    if (delivery === 'herdr-prompt' || delivery === 'headless-resume') {
       writeJson(join(mailDir(to.mailbox), 'wake.json'), { id: mail.id, at: Date.now() });
     }
     return delivery;
@@ -92,9 +84,6 @@ export function deliver(to: Address, mail: Mail): Delivery {
 function push(to: Address, mail: Mail): Delivery {
   const run = readRun(to.mailbox);
   if (run && run.launcher !== 'herdr') return requestResume(run) ? 'headless-resume' : 'queued';
-  if (to.host === 'codex' && to.threadId && !readRun(to.mailbox) && codexQueue(to.threadId, pointer(mail))) {
-    return 'codex-queue';
-  }
   if (to.host === 'opencode') return 'opencode-plugin';
   if (to.herdrAgent) {
     const status = agentStatus(to.herdrAgent, to.herdrSession);

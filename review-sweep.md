@@ -1,6 +1,6 @@
 # Crew lifecycle review and implementation — 2026-09-30
 
-Implementation: **Crew 0.11.0**, installed in the local Claude Code and Codex plugin caches. Default launches remain fresh runs. Retained headless sessions now have an optional, serialized resume path. The original review's retained-worker, liveness, settlement-delivery and team-guidance findings are resolved.
+Historical implementation: **Crew 0.11.0**, installed in the local Claude Code and Codex plugin caches. Default launches remain fresh runs. Retained headless sessions have an optional, serialized resume path. The original retained-worker, liveness and settlement-delivery findings were addressed; the root Codex queue transport needed a further correction, recorded below.
 
 Baseline: `a3d5c5f` (0.10.6), initially clean. This review covers the 0.11.0 lifecycle changes. Runtime dependencies remain zero. Hook command strings were preserved, so their existing Codex trust hashes remain valid.
 
@@ -101,3 +101,41 @@ Evidence directory: [/tmp/crew-resume-evidence](/tmp/crew-resume-evidence).
 - [Owned process and credential cleanup](/tmp/crew-resume-evidence/cleanup.log)
 
 The installer intentionally updated the local Crew plugin caches. Test processes and credential fixtures were removed; unrelated sessions and Keychain items were preserved.
+
+## Follow-up: stale root Codex notifications — 2026-10-01
+
+Crew **0.11.1** corrects a missed root-advisor case. The 0.11.0 root-only queue exemption
+was insufficient: a root can consume mail while still working, and a subsequent batch queues
+another future user turn. The earlier pointers remain in Codex independently of the inbox cursor.
+The reported session's actual transcript contained 13 Crew pointer messages; its inbox cursor
+had reached the end. The last mail arrived at 16:55 UTC, while pointers replayed around 17:23–17:25 UTC.
+No analytics files, session history or mailbox contents were modified during diagnosis.
+
+Automatic `codex queue` calls are now removed for all mail and keepalives. Foreground `crew wait`
+returns mail within the advisor's current turn. Its Stop hook hands over unread batches before
+the turn finishes. Advisor/team instructions require inbox reads at handoffs and foreground
+waiting while required child work remains. Herdr prompts and retained headless resumes still
+use their existing transports; hook command strings were preserved.
+
+This is not a new steering transport. The installed CLI exposes queue without a steering or
+cancellation option. The desktop owns a stdio app server; its default CLI proxy socket was absent.
+The documented [turn/steer API](https://learn.chatgpt.com/docs/app-server#steer-an-active-turn)
+requires the owning server and matching active turn ID. A separate app server would not steer
+that desktop conversation. An ended desktop root therefore has no automatic Crew wake; its
+advisor must keep the turn alive while required children are working. Existing pointers already
+submitted to Codex are outside Crew's inbox lifecycle.
+
+Verification:
+
+- The batch-consumption regression fails against the previous `src/mail.ts` with an unexpected
+  `codex-queue` delivery, and passes against the correction. The probe used an isolated copy.
+- Repeated root Stop-hook delivery and consumption, concurrent CLI sends, armed foreground
+  wait, missing Codex executable and cold-transcript keepalive checks pass without queue writes.
+- Full suite: 128 tests, 127 passed, zero failed, one sandbox skip (`ps` unavailable).
+  The skipped process-ancestry test passed separately outside the sandbox.
+- Typecheck and diff whitespace checks passed.
+- Installer completed; Claude Code and Codex 0.11.1 caches both contain the corrected guide.
+
+Local logs: [before-fix regression](/tmp/crew-root-wake-before.log),
+[full suite](/tmp/crew-root-wake-tests.log), [focused regressions](/tmp/crew-root-wake-focused.log),
+[process ancestry](/tmp/crew-root-wake-ancestry.log), [installation](/tmp/crew-root-wake-install.log).

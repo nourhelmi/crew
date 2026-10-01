@@ -669,17 +669,18 @@ esac
       assert.equal(deliver(idle, letter('four')), 'herdr-prompt');
     } finally { s.done(); }
   });
-  it('queues a Codex pointer for a root thread only, never for a run its hooks already reach', () => {
+  it('never queues Codex pointers for root or child threads', () => {
     const s = stub();
     try {
       const root = { mailbox: 'codex-01a0root', host: 'codex' as const, threadId: '01a0root' };
-      assert.equal(deliver(root, letter('settled')), 'codex-queue');
-      assert.deepEqual(s.calls('queue'), ['queue --thread 01a0root --message [crew] new message from lane. Run: crew inbox']);
+      assert.equal(deliver(root, letter('settled')), 'queued');
+      assert.deepEqual(s.calls('queue'), []);
       const child = mail.runAddress(run({ threadId: '01a0child', sessionId: '01a0child' }));
       assert.equal(deliver(child, letter('amend')), 'queued');
       assert.equal(mail.runAddress(run({ id: 'b-done', state: 'done', threadId: '01a0done' })).threadId, '01a0done');
       assert.equal(deliver(mail.runAddress(store.readRun('b-done')!), letter('late')), 'queued');
-      assert.equal(s.calls('queue').length, 1, 'no pointer queued into a run thread');
+      assert.equal(s.calls('queue').length, 0, 'no pointer queued into any thread');
+      assert.deepEqual(mail.takeUnread(root.mailbox).map(m => m.text), ['settled']);
       assert.deepEqual(mail.takeUnread('b-test').map(m => m.text), ['amend']);
     } finally { s.done(); }
   });
@@ -738,7 +739,7 @@ describe('prompt-cache keepalive', async () => {
   it('nudges just before each host\'s cache expires, and gives up when a rewrite is cheaper', () => {
     const minutes = (n: number) => n * 60_000;
     assert.equal(keepaliveDue('codex', minutes(24), 0), false);
-    assert.equal(keepaliveDue('codex', minutes(25), 0), true);   // OpenAI: 30-minute cache
+    assert.equal(keepaliveDue('codex', minutes(25), 0), false);  // no deferred queue turns
     assert.equal(keepaliveDue('claude', minutes(49), 0), false);
     assert.equal(keepaliveDue('claude', minutes(50), 0), true);  // Claude Code: 1-hour cache
     assert.equal(keepaliveDue('codex', minutes(90), KEEPALIVE.codex.max), false);

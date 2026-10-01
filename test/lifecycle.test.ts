@@ -20,6 +20,7 @@ const store = await import('../src/store.ts');
 const mail = await import('../src/mail.ts');
 const { watch } = await import('../src/wait.ts');
 const { self } = await import('../src/identity.ts');
+const { runHook } = await import('../src/hook.ts');
 
 // Entire host surfaces are fixtures. No real daemon, credentials, config, pane or transcript.
 const hostShim = `#!${process.execPath}
@@ -65,8 +66,6 @@ if (args[0] === 'worker' || args[0] === 'exec' || args[0] === 'run') {
   const thread = args[args.indexOf('--thread')+1];
   const inbox = path.join(p.CREW_HOME,'mail','codex-' + thread,'inbox.jsonl');
   log({queue:thread, visible:fs.existsSync(inbox)?fs.readFileSync(inbox,'utf8'):''});
-  if(p.SHIM_FAIL_WAKE) process.exit(2);
-  if(p.SHIM_SLOW_WAKE) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,150);
 } else if (args[0] === '--bg') {
   const previous=fs.existsSync(p.SHIM_SESSIONS)?fs.readFileSync(p.SHIM_SESSIONS,'utf8').trim().split('\\n').filter(Boolean).map(l=>JSON.parse(l)).findLast(r=>r.sessionId===args[args.indexOf('--resume')+1]):undefined;
   const settings = args.includes('--settings') ? JSON.parse(args[args.indexOf('--settings')+1]) : {env:previous.settingsEnv};
@@ -144,22 +143,48 @@ const until = async (check: () => boolean) => {
 };
 
 describe('cross-process delivery and lifecycle regressions', () => {
-  it('persists mail before a Codex wake can read it', () => {
-    mail.send(parent, { mailbox: 'codex-root', host: 'codex', threadId: 'root' }, 'visible before wake');
-    assert.match(hostCalls()[0].visible, /visible before wake/);
+  it('persists root Codex mail without creating a deferred user turn', () => {
+    assert.equal(mail.send(parent, { mailbox: 'codex-root', host: 'codex', threadId: 'root' }, 'durable mail'), 'queued');
+    assert.equal(mail.takeUnread('codex-root')[0]?.text, 'durable mail');
+    assert.deepEqual(hostCalls(), []);
   });
 
-  it('keeps mail durable when the wake fails', () => {
-    process.env.SHIM_FAIL_WAKE = '1';
+  it('delivers root mail even when the Codex executable is absent', () => {
+    rmSync(join(dir, 'bin', 'codex'));
     assert.equal(mail.send(parent, { mailbox: 'codex-root', host: 'codex', threadId: 'root' }, 'retry me'), 'queued');
     assert.equal(mail.takeUnread('codex-root')[0]?.text, 'retry me');
+    assert.deepEqual(hostCalls(), []);
   });
 
-  it('deduplicates simultaneous wakes across processes', async () => {
+  it('keeps simultaneous root deliveries without any Codex queue writes', async () => {
     const args = ['msg', 'codex-root', 'fixture mail'];
-    await Promise.all([cli(args, { SHIM_SLOW_WAKE: '1' }), cli(args, { SHIM_SLOW_WAKE: '1' }), cli(args, { SHIM_SLOW_WAKE: '1' })]);
-    assert.equal(hostCalls().filter(c => c.queue).length, 1);
+    await Promise.all([cli(args), cli(args), cli(args)]);
+    assert.equal(hostCalls().filter(c => c.queue).length, 0);
     assert.equal(mail.takeUnread('codex-root').length, 3);
+  });
+
+  it('hands each root batch to the current Stop hook without stale turns after consumption', async () => {
+    const root = { mailbox: 'codex-root', host: 'codex' as const, threadId: 'root' };
+    // This is the analytics failure: a root reads one batch while its turn keeps going,
+    // then more mail arrives. The old transport queued a future turn for every batch.
+    for (const text of ['first finding', 'second finding', 'final result']) {
+      assert.equal(mail.send(parent, root, text), 'queued');
+      const output = JSON.parse(runHook('stop', 'codex', JSON.stringify({ session_id: 'root' }), env));
+      assert.equal(output.decision, 'block');
+      assert.match(output.reason, new RegExp(text));
+      assert.equal(await cli(['inbox']), 'no new mail');
+    }
+    assert.equal(runHook('stop', 'codex', JSON.stringify({ session_id: 'root' }), env), '');
+    assert.deepEqual(hostCalls(), []);
+  });
+
+  it('wakes an armed root Codex wait directly without a queued pointer', async () => {
+    const waiting = cli(['wait', '--timeout', '5s']);
+    await until(() => store.hasWaiter('codex-root'));
+    assert.equal(mail.send(parent, { mailbox: 'codex-root', host: 'codex', threadId: 'root' }, 'settled while waiting'), 'waiter');
+    assert.match(await waiting, /settled while waiting/);
+    assert.equal(await cli(['inbox']), 'no new mail');
+    assert.deepEqual(hostCalls(), []);
   });
 
   it('does not rewind a cursor when an older reader commits late', () => {
@@ -262,7 +287,7 @@ describe('cross-process delivery and lifecycle regressions', () => {
     mail.takeUnread('b-test');
   });
 
-  it('spaces keepalives even when a queued pointer has not touched the transcript yet', async () => {
+  it('never queues Codex keepalives into a cold root transcript', async () => {
     const child = spawnProcess(process.execPath, ['-e', 'setTimeout(()=>{},5000)'], { detached: true, stdio: 'ignore' });
     child.unref();
     fixtureRun({ pid: child.pid!, parent: { mailbox: 'codex-root', host: 'codex', threadId: 'root' } });
@@ -272,7 +297,7 @@ describe('cross-process delivery and lifecycle regressions', () => {
     const cold = new Date(Date.now() - 30 * 60000);
     utimesSync(transcript, cold, cold);
     await watch('codex-root', 10, 1000);
-    assert.equal(hostCalls().filter(c => c.queue).length, 1);
+    assert.equal(hostCalls().filter(c => c.queue).length, 0);
   });
 });
 
