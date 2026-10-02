@@ -19,6 +19,7 @@ const parent = { mailbox: 'claude-root', host: 'claude' as const };
 const store = await import('../src/store.ts');
 const mail = await import('../src/mail.ts');
 const { watch } = await import('../src/wait.ts');
+const { resuming } = await import('../src/resume.ts');
 const { self } = await import('../src/identity.ts');
 const { runHook } = await import('../src/hook.ts');
 
@@ -495,8 +496,15 @@ if(a[0]==='pane'&&a[1]==='split'){
   it('reports a resumed worker that exits with unread mail instead of retrying forever', async () => {
     const run: RunMeta = JSON.parse(await cli(['spawn', '--role', 'builder', '--keep', '--model', 'gpt-6.1-sol@low', '--cwd', dir, '--json', '--', 'initial assignment']));
     await until(() => Boolean(store.readRun(run.id)?.settled) && !store.alive(store.readRun(run.id)?.pid));
+    const initialPid = store.readRun(run.id)?.pid;
     await cli(['amend', run.id, 'new work'], { SHIM_FAIL_RESUME: '1' });
-    await until(() => (store.readRun(run.id)?.turn ?? 0) > 0 && !store.alive(store.readRun(run.id)?.pid));
+    // turn increments before launch publishes the replacement PID. The old dead PID is
+    // not proof the resumed worker exited, and liveness deliberately skips the resume lock.
+    await until(() => {
+      const resumed = store.readRun(run.id);
+      return (resumed?.turn ?? 0) > 0 && resumed?.pid !== initialPid
+        && !store.alive(resumed?.pid) && !resuming(run.id);
+    });
     await watch('codex-root', 20, 100);
     assert.equal(store.readRun(run.id)?.state, 'stalled');
     assert.ok(mail.takeUnread('codex-root').some(m => m.kind === 'stalled'));

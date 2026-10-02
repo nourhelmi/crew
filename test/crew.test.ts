@@ -369,7 +369,8 @@ describe('launch shape', () => {
   it('grants sandboxed children crew/checkpoint state and the checkout\'s git dir', () => {
     const repo = mkdtempSync(join(tmpdir(), 'crew-repo-'));
     execFileSync('git', ['init', '-q', repo]);
-    execFileSync('git', ['-C', repo, 'commit', '-q', '--allow-empty', '-m', 'init']);
+    execFileSync('git', ['-C', repo, '-c', 'user.name=Crew fixture', '-c', 'user.email=crew-fixture@example.invalid',
+      '-c', 'commit.gpgsign=false', 'commit', '-q', '--allow-empty', '-m', 'init']);
     const tree = join(tmpdir(), `crew-tree-${process.pid}`);
     execFileSync('git', ['-C', repo, 'worktree', 'add', '-q', tree]);
     try {
@@ -454,7 +455,8 @@ describe('trust', async () => {
   it('finds checkouts and worktrees under a root, skipping dependency dirs', () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'crew-root-')));
     execFileSync('git', ['init', '-q', join(root, 'app')]);
-    execFileSync('git', ['-C', join(root, 'app'), 'commit', '-q', '--allow-empty', '-m', 'init']);
+    execFileSync('git', ['-C', join(root, 'app'), '-c', 'user.name=Crew fixture', '-c', 'user.email=crew-fixture@example.invalid',
+      '-c', 'commit.gpgsign=false', 'commit', '-q', '--allow-empty', '-m', 'init']);
     execFileSync('git', ['-C', join(root, 'app'), 'worktree', 'add', '-q', join(root, 'app-worktrees', 'feat')]);
     execFileSync('git', ['init', '-q', join(root, 'app', 'node_modules', 'dep')]);
     const found = trust.checkouts(root);
