@@ -15,6 +15,8 @@ const CREW_BIN = join(HOME, '.local', 'bin', 'crew');
 // `npm run` prepends every ancestor node_modules/.bin; a stale npm Claude Code there must not win.
 const CLAUDE = existsSync(join(HOME, '.local', 'bin', 'claude')) ? join(HOME, '.local', 'bin', 'claude') : 'claude';
 const say = (message: string): void => console.log(`crew install: ${message}`);
+// Claude's --add-dir needs an existing directory; keep checkpoint state shared across launches.
+mkdirSync(join(HOME, '.advisor'), { recursive: true });
 
 const OLD_SKILLS = ['advisor', 'advisor-intelligence', 'advisor-role-advisor', 'advisor-role-builder', 'advisor-role-checker',
   'advisor-role-foreman', 'advisor-team', 'cos', 'meta-harness'];
@@ -69,19 +71,22 @@ for (const dir of ['.claude/skills', '.codex/skills', '.agents/skills'].map(d =>
   }
 }
 
-// 3. Claude settings: re-enable background tasks, drop the old trace hooks (the plugin brings crew's).
+// 3. Claude settings: shared state access, background tasks and plugin-owned hooks.
 {
   const path = join(HOME, '.claude', 'settings.json');
-  const settings = readJson<{ env?: Record<string, string>; hooks?: Hooks }>(path);
-  if (settings) {
-    const before = JSON.stringify(settings);
-    if (settings.env) {
-      delete settings.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS;
-      if (!Object.keys(settings.env).length) delete settings.env;
-    }
-    if (settings.hooks) settings.hooks = prune(settings.hooks, hook => OLD_TRACE.test(hook.command ?? ''));
-    if (JSON.stringify(settings) !== before) { backup(path); writeJson(path, settings); say('updated ~/.claude/settings.json (background tasks on, old trace hooks gone)'); }
+  const previous = readJson<{ env?: Record<string, string>; hooks?: Hooks;
+    permissions?: { additionalDirectories?: string[]; [key: string]: unknown } }>(path);
+  if (!previous && existsSync(path)) throw new Error(`crew install: refusing to overwrite invalid settings at ${path}`);
+  const settings = previous ?? {};
+  const before = JSON.stringify(settings);
+  settings.permissions ??= {};
+  settings.permissions.additionalDirectories = [...new Set([...(settings.permissions.additionalDirectories ?? []), join(HOME, '.crew'), join(HOME, '.advisor')])];
+  if (settings.env) {
+    delete settings.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS;
+    if (!Object.keys(settings.env).length) delete settings.env;
   }
+  if (settings.hooks) settings.hooks = prune(settings.hooks, hook => OLD_TRACE.test(hook.command ?? ''));
+  if (JSON.stringify(settings) !== before) { backup(path); writeJson(path, settings); say('updated ~/.claude/settings.json (Crew/checkpoint access, background tasks, old trace hooks gone)'); }
   const agent = join(HOME, '.claude', 'agents', 'advisor-maker.md');
   if (existsSync(agent) && !isLink(agent)) { backup(agent); renameSync(agent, join(BACKUP, 'claude-advisor-maker.md')); say('moved ~/.claude/agents/advisor-maker.md aside (the plugin provides it)'); }
 }
@@ -99,7 +104,7 @@ link(join(REPO, 'codex', 'agents', 'advisor-maker.toml'), join(HOME, '.codex', '
   }
 }
 
-// 4b. Codex sandbox: crew's state dir is writable, and `crew` itself is pre-approved to run
+// 4b. Codex sandbox: crew/checkpoint state is writable, and `crew` itself is pre-approved to run
 //     unsandboxed (it launches agents and talks to herdr and the Codex daemon).
 {
   const rules = join(HOME, '.codex', 'rules', 'crew.rules');
@@ -107,24 +112,27 @@ link(join(REPO, 'codex', 'agents', 'advisor-maker.toml'), join(HOME, '.codex', '
   if (!existsSync(rules) || readFileSync(rules, 'utf8') !== ruleText) {
     mkdirSync(dirname(rules), { recursive: true });
     writeFileSync(rules, ruleText);
-    say('wrote ~/.codex/rules/crew.rules (crew runs without approval prompts)');
+    say('wrote ~/.codex/rules/crew.rules (allows outside-sandbox Crew requests)');
   }
   const path = join(HOME, '.codex', 'config.toml');
-  const crewHome = join(HOME, '.crew');
-  if (existsSync(path)) {
-    const text = readFileSync(path, 'utf8');
+  const roots = [join(HOME, '.crew'), join(HOME, '.advisor')];
+  {
+    const text = existsSync(path) ? readFileSync(path, 'utf8') : '';
     const lines = text.split('\n');
     let at = lines.findIndex(line => line.trim() === '[sandbox_workspace_write]');
     if (at < 0) { lines.push('', '[sandbox_workspace_write]'); at = lines.length - 1; }
     let end = at + 1;
     while (end < lines.length && !lines[end]!.trimStart().startsWith('[')) end++;
     const rootsAt = lines.slice(at + 1, end).findIndex(line => /^\s*writable_roots\s*=/.test(line));
-    if (rootsAt < 0) lines.splice(at + 1, 0, `writable_roots = [${JSON.stringify(crewHome)}]`);
-    else if (!lines[at + 1 + rootsAt]!.includes(JSON.stringify(crewHome))) {
-      lines[at + 1 + rootsAt] = lines[at + 1 + rootsAt]!.replace(/\[\s*/, `[${JSON.stringify(crewHome)}, `).replace(', ]', ']');
+    if (rootsAt < 0) lines.splice(at + 1, 0, `writable_roots = ${JSON.stringify(roots)}`);
+    else {
+      const block = lines.slice(at + 1, end).join('\n');
+      const missing = roots.filter(root => !block.includes(JSON.stringify(root)) && !block.includes(`'${root}'`));
+      if (missing.length) lines[at + 1 + rootsAt] = lines[at + 1 + rootsAt]!
+        .replace(/\[\s*/, `[${missing.map(root => JSON.stringify(root)).join(', ')}, `).replace(/,\s*\]/, ']');
     }
     const next = lines.join('\n');
-    if (next !== text) { backup(path); writeFileSync(path, next); say('added ~/.crew to Codex sandbox writable_roots'); }
+    if (next !== text) { backup(path); mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, next); say('added ~/.crew and ~/.advisor to Codex sandbox writable_roots'); }
   }
 }
 

@@ -48,9 +48,10 @@ missing tool. If delegation is unavailable, work directly where permitted.
   to your inbox, and the Stop hook hands over unread mail before the turn ends. Crew never uses
   `codex queue`: it creates a later user turn, cannot steer this turn, and cannot cancel stale
   pointers after the inbox has been read. At Codex root entry, try `crew connect` once. When
-  the owning server exposes a local Unix socket, it reads the explicit listener from its own
-  Codex process ancestry or `CREW_CODEX_SOCKET`; pass `--socket /absolute/path/to/server.sock`
-  when discovery is unavailable. Crew verifies the root is loaded for
+  the owning server exposes a local Unix socket, it reads the listener from its own
+  Codex process ancestry or `CREW_CODEX_SOCKET`, then tries the managed daemon's default
+  under `CODEX_HOME` when process visibility is restricted. Pass `--socket /absolute/path/to/server.sock`
+  for a custom endpoint. Crew verifies the root is loaded for
   direct input; subsequent mail steers its active turn or starts an immediate idle turn.
   Unloaded roots and private stdio servers retain the inbox/wait/Stop-hook path; do not
   start or resume another server/thread to claim delivery.
@@ -70,8 +71,13 @@ missing tool. If delegation is unavailable, work directly where permitted.
   Codex desktop app, a plain terminal), Claude children are `claude --bg` sessions
   (`claude agents`, `claude attach <id>`) and Codex children are `codex exec` runs.
   A child stuck on a dialog wakes you with a `waiting` notice naming where to answer it.
-- **Host notes.** Codex: `crew` is pre-approved to run outside the sandbox, so call it
-  directly. Claude Code: a turn end with unread crew mail is held open until you read it.
+- **Host notes.** Codex: the installed `crew` rule allows an outside-sandbox request; it
+  does not remove the sandbox from an ordinary tool call. Run `crew connect`, host launches,
+  messaging and resumes as standalone shell commands with `sandbox_permissions="require_escalated"`
+  when local IPC/host access requires it. Honor the host's approval result. Do not combine
+  them with checkpoint scripts in the same call or keep retrying an `EPERM` inside the sandbox.
+  The installer grants `~/.crew` and `~/.advisor` writes for new workspace sessions;
+  an already running root can retain its old permissions. Claude Code: a turn end with unread crew mail is held open until you read it.
   `crew wait` returns the oldest unread batch first; re-arm it until you have what you need.
 
 ## Route

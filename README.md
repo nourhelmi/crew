@@ -94,7 +94,7 @@ The installer is idempotent, and it backs up every file it touches to `~/.crew/b
 - links `~/.local/bin/crew`
 - installs the `crew` plugin into Claude Code and Codex, using this repo as a local marketplace
 - links the Codex `advisor-maker` role
-- pre-approves `crew` in Codex (`~/.codex/rules/crew.rules`) and makes `~/.crew` writable in its sandbox
+- pre-approves outside-sandbox `crew` requests in Codex (`~/.codex/rules/crew.rules`) and grants `~/.crew`/`~/.advisor` writes in Codex and Claude
 - removes `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` from Claude settings, since background tasks are how Claude parents wake
 
 Codex asks you once to review crew's hooks (`/hooks`, then trust). The hook commands are
@@ -150,7 +150,8 @@ Five primitives, each built on something the hosts already do:
 | a busy Crew child | a PostToolUse hook announces unread mail after its next tool call |
 
 To enable direct Codex root mail, expose the **owning** app server over a local Unix socket,
-then run `crew connect --socket /absolute/path/to/server.sock` inside that root. Crew verifies
+then run `crew connect` inside that root. It discovers the managed default under `CODEX_HOME` or
+an explicit listener; use `--socket /absolute/path/to/server.sock` for a custom endpoint. Crew verifies
 that this exact thread is loaded and accepts direct input before recording the connection.
 `CREW_CODEX_SOCKET=/absolute/path/to/server.sock` can also supply the endpoint to root tools.
 The endpoint follows the parent address across hosts; a sender's server is never assumed to own its parent.
@@ -318,7 +319,7 @@ part of normal review.
 - **Identity:** crew children are their run id, Claude roots are `claude-<session id>`, and Codex
   roots are `codex-<thread id>`.
 - **Sandboxes:** Codex's `workspace-write` keeps `.git` read-only, so spawn grants the checkout's git
-  dir and `~/.crew` as writable roots, and builders commit without an escalation. Claude children
+  dir, `~/.crew` and `~/.advisor` as writable roots, and builders commit without an escalation. Claude children
   get the same dirs, plus crew's skills, via `--add-dir`.
 - **herdr:** every call is pinned to the session the run was spawned in, and agents are addressed by
   pane. Children split *away* from their parent: the first takes the right side, and each later
@@ -389,8 +390,10 @@ spawn uses the role defaults in your config, and `--model` always pins.
 <summary><b>Does crew bypass permissions or sandboxes?</b></summary>
 
 Never. It adds no bypass flags; children inherit your approvals and sandbox. The only things it
-pre-approves are its own `crew` command in Codex, and the git dir and `~/.crew` as writable roots
-for the children it launches.
+pre-approves are outside-sandbox requests for its own `crew` command in Codex, and the git dir,
+`~/.crew` and `~/.advisor` as writable roots for children. The installer grants shared state and
+checkpoint directories to roots too. An approval rule does not unsandbox an ordinary tool call;
+Unix socket IPC still requires the host's permitted outside-sandbox path or user-selected Full access.
 </details>
 
 <details>

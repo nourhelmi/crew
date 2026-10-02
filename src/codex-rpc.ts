@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createConnection } from 'node:net';
 import type { Duplex } from 'node:stream';
@@ -11,8 +12,12 @@ export class RpcRejected extends Error {}
  * carries it to the Unix socket. No runtime dependency or permanent TCP listener. */
 export async function connectCodex(socketPath: string): Promise<{ rpc: Rpc; close: () => void }> {
   if (!isAbsolute(socketPath)) throw new Error('crew: app-server socket must be absolute');
+  // Managed endpoints are symlinks. Resolve them before the AF_UNIX path-length limit applies.
+  let target = socketPath;
+  try { target = realpathSync(socketPath); } catch { /* preserve the actual connect error below */ }
   const nonce = '/' + randomBytes(24).toString('hex');
   const sockets = new Set<Duplex>();
+  let transportError: Error | undefined;
   let used = false;
   const bridge = createServer((_req, res) => { res.writeHead(403); res.end(); });
   bridge.on('upgrade', (req, front, head) => {
@@ -21,10 +26,17 @@ export async function connectCodex(socketPath: string): Promise<{ rpc: Rpc; clos
     }
     used = true;
     bridge.close();
-    const back = createConnection(socketPath);
+    const back = createConnection(target);
     sockets.add(front); sockets.add(back);
     for (const socket of [front, back]) {
-      socket.on('error', () => { front.destroy(); back.destroy(); });
+      socket.on('error', (error: NodeJS.ErrnoException) => {
+        transportError = new Error(`crew: cannot connect to Codex socket ${socketPath}: ${error.code ?? error.message}`
+          + (error.syscall ? ` (${error.syscall})` : '')
+          + (/^(EPERM|EACCES)$/.test(error.code ?? '')
+            ? '; run the crew command outside the host sandbox with its approved exception, or select Full access'
+            : '; check the owning server endpoint and use crew connect --socket /absolute/path/to/server.sock'), { cause: error });
+        front.destroy(); back.destroy();
+      });
       socket.on('close', () => { sockets.delete(socket); front.destroy(); back.destroy(); });
     }
     back.once('connect', () => {
@@ -64,7 +76,7 @@ export async function connectCodex(socketPath: string): Promise<{ rpc: Rpc; clos
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('crew: app-server connect timeout')), 2000);
       ws.onopen = () => { clearTimeout(timer); resolve(); };
-      ws.onerror = () => { clearTimeout(timer); reject(new Error('crew: app-server connect failed')); };
+      ws.onerror = () => { clearTimeout(timer); reject(transportError ?? new Error('crew: app-server connect failed')); };
     });
     ws.onerror = failPending;
     const rpc: Rpc = async <T>(method: string, params: object): Promise<T> => {
@@ -78,7 +90,7 @@ export async function connectCodex(socketPath: string): Promise<{ rpc: Rpc; clos
         });
       } finally { clearTimeout(timer); pending.delete(requestId); }
     };
-    await rpc('initialize', { clientInfo: { name: 'crew', title: 'Crew mail', version: '0.12.0' }, capabilities: { experimentalApi: true } });
+    await rpc('initialize', { clientInfo: { name: 'crew', title: 'Crew mail', version: '0.12.1' }, capabilities: { experimentalApi: true } });
     ws.send('{"method":"initialized"}');
     return { rpc, close };
   } catch (error) { close(); throw error; }

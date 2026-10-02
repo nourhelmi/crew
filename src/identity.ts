@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { basename } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, join } from 'node:path';
 import { readRun } from './store.ts';
 import { codexSocket } from './codex-mail.ts';
 import { HOSTS, type Address, type Host, type RunMeta } from './types.ts';
@@ -30,14 +31,19 @@ export function ancestry(start = process.ppid): Proc[] {
   return chain;
 }
 
-/** Optional `crew connect` discovery, restricted to an actual Codex ancestor's explicit listener. */
+/** Candidate only: registration must still verify the exact root is loaded for direct input. */
+export function defaultCodexSocket(env: Env = process.env): string {
+  return join(env.CODEX_HOME ?? join(env.HOME ?? homedir(), '.codex'), 'app-server-control', 'app-server-control.sock');
+}
+
+/** Discover an actual Codex ancestor's Unix listener, including the managed default. */
 export function owningCodexSocket(chain = ancestry(), args = (pid: number): string =>
-  execFileSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf8' })): string | undefined {
+  execFileSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf8' }), env: Env = process.env): string | undefined {
   for (const proc of chain) {
     if (basename(proc.comm) !== 'codex') continue;
     try {
-      const match = args(proc.pid).match(/\bapp-server\s+--listen\s+unix:\/\/(\/\S+)(?:\s|$)/);
-      if (match) return match[1];
+      const match = args(proc.pid).match(/\bapp-server\s+--listen\s+unix:\/\/(\/\S+)?(?:\s|$)/);
+      if (match) return match[1] ?? defaultCodexSocket(env);
     } catch { /* no process visibility: caller can pass --socket */ }
   }
   return undefined;

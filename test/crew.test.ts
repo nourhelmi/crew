@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { after, beforeEach, describe, it } from 'node:test';
 
 const HOME = mkdtempSync(join(tmpdir(), 'crew-test-'));
+process.env.HOME = HOME;
+delete process.env.ADVISOR_STATE_DIR;
 process.env.CREW_HOME = HOME;
 delete process.env.CREW_CODEX_SOCKET;
 delete process.env.CODEX_APP_SERVER_WS_URL;
@@ -364,24 +366,27 @@ describe('launch shape', () => {
     const codex = argv('codex', { host: 'codex', model: 'gpt-6.1-sol', effort: 'xhigh', strategy: 'jev' }, 'b', config, 'GO');
     assert.deepEqual(codex, ['--model', 'gpt-6.1-sol', '-c', 'model_reasoning_effort="xhigh"', '-c', 'check_for_update_on_startup=false', 'GO']);
   });
-  it('grants sandboxed children crew state and the checkout\'s git dir', () => {
+  it('grants sandboxed children crew/checkpoint state and the checkout\'s git dir', () => {
     const repo = mkdtempSync(join(tmpdir(), 'crew-repo-'));
     execFileSync('git', ['init', '-q', repo]);
     execFileSync('git', ['-C', repo, 'commit', '-q', '--allow-empty', '-m', 'init']);
     const tree = join(tmpdir(), `crew-tree-${process.pid}`);
     execFileSync('git', ['-C', repo, 'worktree', 'add', '-q', tree]);
     try {
-      assert.deepEqual(writableRoots(repo).map(root => realpathSync(root)), [realpathSync(HOME), realpathSync(join(repo, '.git'))]);
-      assert.deepEqual(writableRoots(tmpdir()), [HOME]);
+      assert.deepEqual(writableRoots(repo), [HOME, join(HOME, '.advisor'), join(repo, '.git')]);
+      assert.deepEqual(writableRoots(tmpdir()), [HOME, join(HOME, '.advisor')]);
       const roots = writableRoots(tree);
-      assert.equal(roots.length, 2);
-      assert.equal(realpathSync(roots[1]!), realpathSync(join(repo, '.git')));
+      assert.equal(roots.length, 3);
+      assert.equal(realpathSync(roots[2]!), realpathSync(join(repo, '.git')));
       const codex = argv('codex', { host: 'codex', model: 'gpt-6.1-sol', effort: 'high', strategy: 'jev' }, 'b', store.loadConfig(), 'GO', roots);
       assert.equal(codex[6], '-c');
       assert.match(codex[7] ?? '', /^sandbox_workspace_write\.writable_roots=\[".*"\]$/);
       const claude = argv('claude', { host: 'claude', model: 'opus', effort: 'high', strategy: 'jev' }, 'a', store.loadConfig(), 'GO', roots);
-      assert.equal(claude.filter(arg => arg === '--add-dir').length, 3);
+      assert.equal(claude.filter(arg => arg === '--add-dir').length, 4);
+      process.env.ADVISOR_STATE_DIR = join(HOME, 'custom-checkpoints');
+      assert.deepEqual(writableRoots(tmpdir()), [HOME, process.env.ADVISOR_STATE_DIR]);
     } finally {
+      delete process.env.ADVISOR_STATE_DIR;
       rmSync(tree, { recursive: true, force: true });
       rmSync(repo, { recursive: true, force: true });
     }

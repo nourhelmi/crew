@@ -5,7 +5,7 @@ import { delimiter, dirname, join, resolve as resolvePath } from 'node:path';
 import { parseArgs } from 'node:util';
 import { closePane, herdr, inHerdr, labelPane } from './herdr.ts';
 import { isHookEvent, runHook } from './hook.ts';
-import { owningCodexSocket, self } from './identity.ts';
+import { defaultCodexSocket, owningCodexSocket, self } from './identity.ts';
 import { registerCodex, wakeCodex } from './codex-mail.ts';
 import { amend, format, resolve, send, takeUnread } from './mail.ts';
 import { resume } from './resume.ts';
@@ -136,7 +136,7 @@ async function main(argv: string[]): Promise<void> {
     }
     case 'connect': {
       const me = self();
-      const socket = values.socket ?? me.codexSocket ?? (me.host === 'codex' ? owningCodexSocket() : undefined);
+      const socket = values.socket ?? me.codexSocket ?? (me.host === 'codex' ? owningCodexSocket() ?? defaultCodexSocket() : undefined);
       if (!socket) fail('crew: crew connect --socket /absolute/path/to/owning-app-server.sock');
       await registerCodex(me, socket);
       console.log(`connected ${me.mailbox} to ${socket}; loaded roots accept direct mail`);

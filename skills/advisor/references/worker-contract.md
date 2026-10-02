@@ -4,6 +4,13 @@ Read your packet and the relevant repository instructions. Use only the tools an
 permissions this host exposes; the parent grants a task, not a bypass of authentication,
 approval, sandboxing or delegation limits. This contract needs no runtime or multiplexer.
 
+On Codex, `crew`'s installed approval rule does not unsandbox ordinary tool calls.
+Use a standalone shell call with `sandbox_permissions="require_escalated"` for Crew
+host launches, IPC messaging and resumes when required, and honor the approval result.
+Do not repeatedly retry `EPERM` inside the sandbox or duplicate mail to retry a wake.
+Child launches grant Crew state, advisor checkpoints and the checkout's git directory;
+these grants do not by themselves allow Unix socket connections.
+
 - Own the outcome within the assigned surface. Trace the real flow before editing; reuse
   existing code and standard libraries. Apply Ponytail (minimalism) when active and honor an
   explicit off choice; simplicity never removes safety, accessibility, error handling or required

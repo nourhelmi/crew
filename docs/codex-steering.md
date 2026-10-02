@@ -12,8 +12,10 @@ codex app-server --listen unix:///absolute/private/path/server.sock
 codex --remote unix:///absolute/private/path/server.sock
 ```
 
-Inside the root, run `crew connect`. It can discover an explicit Unix listener in its own Codex
-process ancestry. If process visibility is restricted, pass the endpoint:
+Inside the root, run `crew connect`. It discovers explicit and managed-default Unix listeners
+in its own Codex process ancestry. If process visibility is restricted, it tries
+`$CODEX_HOME/app-server-control/app-server-control.sock` (default `~/.codex`). That is only
+a candidate: the exact root must still be loaded and accept direct input. For a custom endpoint:
 
 ```sh
 crew connect --socket /absolute/private/path/server.sock
@@ -50,6 +52,21 @@ in `~/.crew`. Ordinary launches that do not supply this endpoint may use private
 Verify `thread/loaded/list` includes the intended root and `thread/read` reports
 `canAcceptDirectInput=true`. A successful handshake or persisted thread file is insufficient.
 `crew connect` performs this ownership check. It never calls `thread/resume`.
+
+## Sandbox access
+
+The installer adds `~/.crew` and `~/.advisor` to Codex workspace writable roots and Claude's
+additional directories. New children receive these state/checkpoint roots plus the checkout's
+git directory. Existing sessions can retain their old permission snapshots; refresh their
+permission mode or start a new session before expecting newly installed grants to apply.
+
+A writable socket directory does not grant Unix socket IPC. The installed Codex `crew` rule
+allows an outside-sandbox request, but ordinary shell calls still run inside the sandbox.
+For `crew connect` and host operations, request a standalone command with
+`sandbox_permissions="require_escalated"` and honor the host's approval response. Full access
+is another user-selected option; Crew does not change global approval or sandbox modes.
+Connection failures preserve the endpoint, operating-system code and syscall. Do not interpret
+`EPERM` as a dead daemon or restart an unrelated chat to repair it.
 
 ## Delivery behavior
 

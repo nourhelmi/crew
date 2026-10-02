@@ -61,11 +61,11 @@ export function bootstrap(run: Pick<RunMeta, 'id' | 'name' | 'role' | 'keep' | '
 
 /**
  * Directories a sandboxed child must be able to write beyond its cwd: crew's own state
- * (result, mail) and the checkout's git dir. Codex's workspace-write keeps `.git` read-only
+ * (result, mail), advisor checkpoints and the checkout's git dir. Codex's workspace-write keeps `.git` read-only
  * even inside the workspace, so without it every commit costs an escalation round trip.
  */
 export function writableRoots(cwd: string): string[] {
-  const roots = [home()];
+  const roots = [home(), process.env.ADVISOR_STATE_DIR ? resolvePath(process.env.ADVISOR_STATE_DIR) : join(homedir(), '.advisor')];
   try {
     const common = execFileSync('git', ['-C', cwd, 'rev-parse', '--git-common-dir'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
     roots.push(resolvePath(cwd, common));

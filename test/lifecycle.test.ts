@@ -615,9 +615,10 @@ if(a[0]==='pane'&&a[1]==='split'){
     mkdirSync(join(dir, '.claude'), { recursive: true });
     mkdirSync(join(dir, '.codex'), { recursive: true });
     const settings = join(dir, '.claude', 'settings.json');
-    writeFileSync(settings, JSON.stringify({ env: { KEEP_THIS: 'yes', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' }, enabledPlugins: { 'unrelated@plugin': true } }));
+    writeFileSync(settings, JSON.stringify({ env: { KEEP_THIS: 'yes', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' }, enabledPlugins: { 'unrelated@plugin': true },
+      permissions: { defaultMode: 'auto', additionalDirectories: ['/fixture/other'] }, sandbox: { enabled: true } }));
     const config = join(dir, '.codex', 'config.toml');
-    writeFileSync(config, 'model = "fixture"\n[sandbox_workspace_write]\nwritable_roots = ["/fixture/other"]\n');
+    writeFileSync(config, 'model = "fixture"\nsandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nwritable_roots = [\n  "/fixture/other",\n]\nnetwork_access = true\n[unrelated]\nkeep = true\n');
     const install = () => exec(process.execPath, [join(REPO, 'scripts', 'install.ts')], { env, timeout: 15000 });
     await install();
     const firstSettings = readFileSync(settings, 'utf8');
@@ -627,8 +628,14 @@ if(a[0]==='pane'&&a[1]==='split'){
     assert.equal(readFileSync(config, 'utf8'), firstConfig);
     assert.deepEqual(JSON.parse(firstSettings).env, { KEEP_THIS: 'yes' });
     assert.equal(JSON.parse(firstSettings).enabledPlugins['unrelated@plugin'], true);
+    assert.deepEqual(JSON.parse(firstSettings).permissions, { defaultMode: 'auto', additionalDirectories: ['/fixture/other', join(dir, '.crew'), join(dir, '.advisor')] });
+    assert.equal(JSON.parse(firstSettings).sandbox.enabled, true);
+    assert.ok(existsSync(join(dir, '.advisor')));
     assert.match(firstConfig, /\/fixture\/other/);
     assert.match(firstConfig, /\.crew/);
+    assert.match(firstConfig, /\.advisor/);
+    assert.match(firstConfig, /sandbox_mode = "workspace-write"/);
+    assert.match(firstConfig, /network_access = true\n\[unrelated\]\nkeep = true/);
   });
 
   it('marks a missing executable launch failed without an unhandled spawn error', async () => {

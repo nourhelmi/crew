@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { after, beforeEach, describe, it } from 'node:test';
@@ -12,7 +12,8 @@ delete process.env.CREW_CODEX_SOCKET; delete process.env.CODEX_APP_SERVER_WS_URL
 const { send, takeUnread } = await import('../src/mail.ts');
 const { unread, mailDir, writeJson, markWaiter } = await import('../src/store.ts');
 const { registerCodex, codexSocket } = await import('../src/codex-mail.ts');
-const { self, owningCodexSocket } = await import('../src/identity.ts');
+const { self, owningCodexSocket, defaultCodexSocket } = await import('../src/identity.ts');
+const { connectCodex } = await import('../src/codex-rpc.ts');
 const to = { mailbox: 'codex-root', host: 'codex' as const, threadId: 'root', codexSocket: join(HOME, 'server.sock') };
 const from = { mailbox: 'claude-child', host: 'claude' as const };
 const scenarioFile = join(HOME, 'scenario.json'), eventsFile = join(HOME, 'events.jsonl');
@@ -110,13 +111,39 @@ describe('Codex owning-server mail', () => {
     assert.equal(send(from, { ...to, codexSocket: join(HOME, 'old-server.sock') }, 'new owner'), 'codex-steer');
     assert.equal(unread(to.mailbox).mails[0]?.text, 'new owner');
   });
-  it('discovers only an explicit Unix listener in its own Codex ancestry', () => {
+  it('discovers explicit and managed-default Unix listeners in its own Codex ancestry', () => {
     const process = { pid: 10, ppid: 1, comm: '/app/codex' };
     assert.equal(owningCodexSocket([process], () => '/app/codex -c features.x=true app-server --listen unix:///tmp/owner.sock -c x=y'), '/tmp/owner.sock');
     assert.equal(owningCodexSocket([process], () => '/app/codex app-server --listen stdio://'), undefined);
     assert.equal(owningCodexSocket([process], () => '/app/codex app-server --listen ws://127.0.0.1:123'), undefined);
     assert.equal(owningCodexSocket([{ ...process, comm: '/app/other' }], () => '/app/codex app-server --listen unix:///tmp/foreign.sock'), undefined);
     assert.equal(owningCodexSocket([process], () => { throw new Error('no visibility'); }), undefined);
+    assert.equal(owningCodexSocket([process], () => '/app/codex app-server --listen unix:// --managed-daemon', { CODEX_HOME: join(HOME, 'managed') }), join(HOME, 'managed', 'app-server-control', 'app-server-control.sock'));
+    assert.equal(defaultCodexSocket({ HOME }), join(HOME, '.codex', 'app-server-control', 'app-server-control.sock'));
+  });
+  it('connects through the managed default without process visibility, but rejects unloaded roots', async () => {
+    const socket = defaultCodexSocket();
+    mkdirSync(join(process.env.CODEX_HOME!, 'app-server-control'), { recursive: true });
+    symlinkSync(to.codexSocket, socket);
+    const env = { ...process.env, CODEX_THREAD_ID: 'root', CREW_NO_DELEGATE: '1', CREW_NODE: process.execPath,
+      PATH: '/nonexistent' }; // ps unavailable; the CLI still must verify ownership
+    try {
+      const cli = () => exec(process.execPath, [resolve('src/cli.ts'), 'connect'], { env });
+      assert.match((await cli()).stdout, /connected codex-root/);
+      assert.equal(codexSocket(to.mailbox, {}), socket);
+      scenario({ unloaded: true });
+      await assert.rejects(cli(), /not loaded/);
+      assert.equal(turns().length, 0);
+    } finally { rmSync(socket, { force: true }); }
+  });
+  it('preserves the failed Unix socket path, syscall and error code', async () => {
+    const socket = join(HOME, 'missing.sock');
+    await assert.rejects(connectCodex(socket), (error: Error) => {
+      assert.match(error.message, /ENOENT \(connect\)/);
+      assert.ok(error.message.includes(socket));
+      assert.equal((error.cause as NodeJS.ErrnoException).code, 'ENOENT');
+      return true;
+    });
   });
   it('serializes concurrent sends through the public CLI', async () => {
     writeJson(join(mailDir(to.mailbox), 'codex-connection.json'), { socket: to.codexSocket });

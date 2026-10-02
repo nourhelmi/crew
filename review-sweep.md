@@ -194,3 +194,39 @@ Local evidence: [/tmp/crew-steering-evidence](/tmp/crew-steering-evidence),
 [installation](/tmp/crew-steering-install.log). The desktop switch is internal to the installed build;
 future ordinary launches may return to stdio. Use the local launcher after quitting the desktop,
 then `crew connect` in new root advisors. Details: [Codex steering setup](docs/codex-steering.md).
+
+## 0.12.1 — managed daemon discovery and checkpoint permissions, 2026-10-02
+
+The interrupted CoS session showed two independent setup failures: `crew connect` did not
+recognize a managed `--listen unix://` endpoint, and checkpoint initialization attempted to
+create `~/.advisor/.../locks/checkpoint` outside its writable roots. The checkpoint already
+existed after its approved retry; no Crew child runs had been launched for that session.
+
+Crew now discovers managed defaults under `CODEX_HOME`, including when process visibility is
+restricted, while still requiring the exact loaded root and direct-input capability. Unix
+endpoint symlinks are resolved before the socket path-length limit applies. Connection failures
+retain their OS code, syscall and endpoint; a sandboxed live call reports `EPERM (connect)`.
+The outside-sandbox approved call verifies ownership successfully. Directory write permission
+alone does not permit Unix socket IPC; advisor and worker guidance now distinguishes the two.
+
+The installer grants shared Crew/checkpoint state to Codex and Claude roots; child launches
+include advisor checkpoints (or `ADVISOR_STATE_DIR`) along with Crew state and the git directory.
+The isolated installer regression checks multiline writable roots, preservation of unrelated
+settings and approval/sandbox choices, and idempotence. Full validation: **142 tests passed,
+zero failures/skips**, typecheck passed; the final installer-only delta also passed its focused
+regression and typecheck. Earlier live Claude↔Codex roundtrip evidence above remains historical
+0.12.0 evidence; this patch's new live proof is connection/ownership, not another agent exchange.
+
+Live ownership was verified for this desktop root on `~/.crew/desktop-control.sock` and the
+interrupted CoS root `01a0fc42-89ed-7c73-a026-34f53c9081b7` on the managed default socket. Its
+registration is recorded; no turn was started, steered or resumed for that workstream.
+Claude/Codex plugin caches are installed at 0.12.1. Existing chats can retain old permission
+snapshots and must refresh their permission selection or launch a new session.
+
+Separately, at the user's explicit request, local global defaults were changed to Codex
+`approval_policy="never"`/`sandbox_mode="danger-full-access"` and Claude
+`permissions.defaultMode="bypassPermissions"`/`sandbox.enabled=false`. The user's local Crew
+Claude `auto` override was removed so launches inherit that choice. A fresh temporary Codex
+server confirmed the effective defaults via `config/read` without starting threads. Backups
+are under `~/.crew/backups/2026-10-02T11-48-13-global-permissions`. These are personal settings,
+not defaults shipped by Crew, and the installer preserves them.
