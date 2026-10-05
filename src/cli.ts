@@ -36,6 +36,7 @@ const HELP = `crew: advisor crews on native Claude Code and Codex
   crew connect --socket PATH   Connect this loaded Codex root to its owning Unix app server.
   crew ls [--all]              Your children (or everything).
   crew read <run>              Result, or the tail of its terminal/log.
+  crew dashboard [--port N]    Local read-only workstream viewer and live output (default 4317).
   crew resume <run>            Resume an exited headless session with its recorded launch settings.
   crew stop <run>              Stop a run and close its pane.
   crew route --role R --task T Show where a task would go, without launching.
@@ -123,11 +124,16 @@ async function main(argv: string[]): Promise<void> {
       effort: { type: 'string' }, name: { type: 'string' }, cwd: { type: 'string' }, keep: { type: 'boolean' },
       'dry-run': { type: 'boolean' }, timeout: { type: 'string' }, file: { type: 'string' }, all: { type: 'boolean' },
       host: { type: 'string' }, json: { type: 'boolean' }, quiet: { type: 'boolean' }, global: { type: 'boolean' },
-      checks: { type: 'string' }, socket: { type: 'string' },
+      checks: { type: 'string' }, socket: { type: 'string' }, port: { type: 'string' },
     },
   });
 
   switch (command) {
+    case 'dashboard': {
+      const { dashboard } = await import('./dashboard.ts');
+      await dashboard(values.port === undefined ? 4317 : /^\d+$/.test(values.port) ? Number(values.port) : NaN);
+      return;
+    }
     case 'wake-codex': {
       // Internal synchronous delivery adapter. No host discovery or thread takeover.
       try { console.log(await wakeCodex(JSON.parse(stdin()) as Address)); }

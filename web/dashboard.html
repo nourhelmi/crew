@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Crew — workstreams</title>
+  <link rel="stylesheet" href="/dashboard.css">
+  <script src="/dashboard.js" defer></script>
+</head>
+<body>
+<div id="crew-dashboard">
+ <div class="cw-window">
+  <header class="cw-top">
+   <div class="cw-logo"><span class="cw-brandmark" aria-hidden="true"><b></b><b></b><b></b></span>crew.</div>
+   <span class="cw-top-label">Your agents, in view.</span>
+   <span class="cw-demo" id="connection" role="status">Connecting…</span>
+  </header>
+  <div class="cw-layout">
+   <aside class="cw-sidebar" aria-label="Workstreams">
+    <div class="cw-eyebrow">Workstreams</div>
+    <label class="cw-search-label" for="workstream-search">Find a workstream or agent</label>
+    <input id="workstream-search" class="cw-search" type="search" placeholder="Find work…" autocomplete="off">
+    <nav class="cw-streams" id="workstreams" aria-label="Choose workstream"></nav>
+    <div class="cw-sidebar-bottom"><div class="cw-machine">Local workspace</div><p class="cw-sidebar-note">Read only. Agents keep working when you close this page.</p></div>
+   </aside>
+   <main class="cw-main">
+    <header class="cw-heading"><div class="cw-heading-top"><div><div class="cw-eyebrow" id="project">Crew</div><h1 id="stream-title">Your workstreams</h1></div><span class="cw-age" id="stream-age"></span></div><p class="cw-subtitle" id="stream-subtitle">Reading local Crew records…</p><div class="cw-branch" id="cwd"></div></header>
+    <div class="cw-attention cw-clear" id="attention" role="status"></div>
+    <p class="cw-data-warning" id="warnings" role="status" hidden></p>
+    <div class="cw-stage" id="stage">
+     <section class="cw-overview" aria-label="Delegation map">
+      <div class="cw-mapbar"><span class="cw-eyebrow">Crew map</span><span class="cw-small-count" id="count"></span></div>
+      <div class="cw-map" id="map"></div>
+      <div class="cw-legend"><span class="cw-legend-line"></span>Delegated by its parent</div>
+     </section>
+     <aside class="cw-inspector" aria-label="Selected agent">
+      <div class="cw-inspect-head" id="inspect-head"><h2>Select an agent</h2></div>
+      <div class="cw-tabs" aria-label="Agent detail view">
+       <button type="button" data-tab="output" aria-pressed="true">Output</button>
+       <button type="button" data-tab="activity" aria-pressed="false">Activity</button>
+       <button type="button" data-tab="packet" aria-pressed="false">Packet</button>
+       <button type="button" data-tab="result" aria-pressed="false">Result</button>
+       <button type="button" data-tab="messages" aria-pressed="false">Mail</button>
+      </div>
+      <div class="cw-details" id="details"><p class="cw-subtitle">Select an agent to follow its output.</p></div>
+     </aside>
+    </div>
+    <footer class="cw-footer"><span>Local observation · no inboxes consumed</span><span id="observed"></span></footer>
+   </main>
+  </div>
+ </div>
+</div>
+</body>
+</html>

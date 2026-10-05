@@ -310,6 +310,34 @@ part of normal review.
   Opus lanes burning the same 5-hour window. A routed spawn past the cap goes to the `overflow`
   model; a `--model` pin stays put, with a warning.
 
+## Dashboard
+
+Run `crew dashboard` and open the printed local URL (default `http://127.0.0.1:4317`).
+Use `crew dashboard --port 0` for an available port, or `--port 4320` to choose one.
+It works from an ordinary terminal or either desktop app; it does not need to run inside Herdr.
+
+The dashboard groups Crew members by their root session, follows nested delegation, and shows
+each member's output, public activity, packet, result, and mail history. Select **Output → Expand**
+to follow one member. Output follows the tail until you scroll up; **Follow output** returns to it.
+The page reconnects automatically, and `?run=<run-id>` links directly to a member.
+
+This is a read-only observer. It does not consume inboxes, attach to or resume agents, settle
+runs, or invoke host CLIs. Closing the page or stopping the server leaves the workstream alone.
+The server binds only to `127.0.0.1`, rejects cross-site requests, and serves no write endpoints.
+
+Codex and Claude members use their recorded native session transcripts when available, including
+agents running inside Herdr. Captured `codex exec --json` output is the fallback. Public messages,
+tool calls and tool results update as complete records are written, with a one-second refresh;
+hidden reasoning and harness context are omitted. This is a transcript viewer, not a terminal
+emulator: it does not reproduce TUI redraws, stream unpersisted tokens, or accept terminal input.
+Unsupported or missing sources are shown explicitly. Recent output is bounded, and reconnecting
+loads the current tail rather than claiming a complete historical recording.
+
+Run status is Crew's recorded state, not a live process assertion. Root sessions are labelled
+separately because they have no Crew run status; output shows the source's last-write time. A
+result file can appear before Crew settles the run. The observer never changes either state.
+`CREW_HOME`, `CODEX_HOME`, and `CLAUDE_CONFIG_DIR` select the corresponding local stores.
+
 ## Under the hood
 
 - **State** is files: `~/.crew/runs/<id>/{meta.json, packet.md, result.md}` and
