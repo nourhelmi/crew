@@ -5,7 +5,7 @@
 <p align="center">
   <b>Run an engineering team of AI coding agents across Claude Code and Codex.</b><br>
   An advisor leads. Builders, checkers and teammates run on whichever CLI their model needs,<br>
-  and they spawn, wake and message each other natively. No server, no database, no dependencies.
+  and they spawn, wake and message each other natively. No orchestration server, no database, no runtime dependencies.
 </p>
 
 <p align="center">
@@ -21,6 +21,7 @@
   <a href="#quickstart">Quickstart</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#the-team">The team</a> ·
+  <a href="#dashboard">Dashboard</a> ·
   <a href="#commands">Commands</a> ·
   <a href="#routing">Routing</a> ·
   <a href="#configuration">Configuration</a> ·
@@ -48,8 +49,8 @@ everything:
   waits; `codex queue` creates future turns and leaves stale notifications after mail is consumed.
 - **herdr** gives every agent a visible pane with lifecycle state.
 
-What's missing is the glue *between* hosts. crew is that glue: about 1,700 lines of
-dependency-free TypeScript and a few plain files in `~/.crew`.
+What's missing is the glue *between* hosts. crew is that glue: dependency-free TypeScript
+and a few plain files in `~/.crew`.
 
 | | |
 |---|---|
@@ -58,6 +59,7 @@ dependency-free TypeScript and a few plain files in `~/.crew`.
 | **Native wake, no polling** | Children settle through hooks. Parents wake the way their host already wakes. |
 | **Teams that talk** | Kept teammates message each other and the lead, whichever CLI each one runs on. |
 | **Visible by default** | In herdr, every agent is a named pane that splits away from its parent and closes when it's done. |
+| **A browser view of the whole crew** | `crew dashboard` shows delegation, agent output, packets, results and mail, including work started outside herdr. |
 | **Plain files** | State is JSON you can `cat`. Races are settled by exclusive-create claim files. |
 
 ## Quickstart
@@ -79,6 +81,9 @@ Then, in any repository:
 The advisor decides what to do itself and what to delegate. Inside [herdr](https://herdr.dev) its
 crew appears in panes beside it; anywhere else, children run as `claude --bg` sessions and
 `codex exec` runs.
+
+For a browser view of the workstream, run `crew dashboard` and open the printed local URL.
+Select any member to follow its output. See the [dashboard](#dashboard) below.
 
 **Requirements:** macOS or Linux, Node.js ≥ 24 (crew runs its TypeScript directly), and
 [Claude Code](https://code.claude.com) and/or the [Codex CLI](https://github.com/openai/codex),
@@ -208,6 +213,7 @@ crew spawn --role builder --packet api.md --name api          # routed: the mode
 crew spawn --role checker --checks api --packet review.md        # its verdict on api's work teaches routing
 crew spawn --role advisor --keep --name billing --packet p.md # a CoS teammate
 crew wait                       # until a child settles, stalls or needs a dialog, or mail arrives
+crew dashboard                  # local browser view of workstreams and live agent output
 crew msg billing "…"            # follow-up or answer (advice)
 crew amend billing "…"          # scope, authority, done-when or a new assignment: appended to its packet
 crew grade api bad "missed the migration"                      # your verdict; routing learns from it
@@ -312,7 +318,18 @@ part of normal review.
 
 ## Dashboard
 
-Run `crew dashboard` and open the printed local URL (default `http://127.0.0.1:4317`).
+See what each agent is doing while the lead waits. The browser view follows the whole crew,
+with a delegation map on the left and the selected member's output on the right.
+
+![Crew dashboard showing a Codex builder and Claude checker, with the selected builder's output](assets/dashboard.png)
+
+*The running dashboard with sample data. No live workstream content is included in this image.*
+
+```sh
+crew dashboard
+```
+
+Open the printed local URL (default `http://127.0.0.1:4317`).
 Use `crew dashboard --port 0` for an available port, or `--port 4320` to choose one.
 It works from an ordinary terminal or either desktop app; it does not need to run inside Herdr.
 
