@@ -3,11 +3,11 @@ import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { rootEnv } from './console-controller.ts';
-import { ConsoleError, metaPath, readMeta, readReceipt, readView, receiptPath, receipts, sessionDir, writeView } from './console-store.ts';
+import { consoleArgsHash, ConsoleError, metaPath, readMeta, readReceipt, readView, receiptPath, receipts, sessionDir, writeView } from './console-store.ts';
 import type { ConsoleMeta, ConsoleReceipt, ConsoleView } from './console-store.ts';
 import type { ConsoleHostAdapter, HostCallbacks, HostEvent, HostFactory } from './console-host.ts';
 import type { ConsoleAnswer, ConsoleCommand, ConsoleEvent, ConsoleState } from './console-types.ts';
-import { hasWaiter, home, mailDir, readJson, unread, withLock, withLockAsync, writeJson } from './store.ts';
+import { hasWaiter, home, loadConfig, mailDir, readJson, unread, withLock, withLockAsync, writeJson } from './store.ts';
 import { retireRoot } from './retire.ts';
 import { terminateOwnedProcess } from './console-process.ts';
 
@@ -33,6 +33,7 @@ export class ConsoleSupervisor {
     this.id = id; this.root = options.root ?? home(); this.factory = options.factory; this.onExit = options.onExit ?? (() => {});
     const meta = readMeta(id, this.root); const view = readView(id, this.root);
     if (!meta || !view) throw new ConsoleError('Managed session state is unavailable.', 404, 'STATE_UNAVAILABLE');
+    if (meta.args) { meta.argsHash ??= consoleArgsHash(meta.args); delete meta.args; }
     this.meta = meta; this.view = view; this.ownerFile = join(sessionDir(id, this.root), 'owner.json');
   }
   private own(): boolean {
@@ -147,6 +148,8 @@ export class ConsoleSupervisor {
     };
   }
   private async connect(): Promise<void> {
+    const args = loadConfig().args[this.meta.launch.host];
+    if (this.meta.argsHash && this.meta.argsHash !== consoleArgsHash(args)) throw new ConsoleError('Native host configuration changed. Restore the recorded configuration or start a new session.', 409, 'HOST_CONFIG_CHANGED');
     const generation = ++this.generation;
     const current = (): void => {
       if (this.closed || this.meta.retiring || generation !== this.generation) throw new ConsoleError('Session was retired during provider connection.', 409, 'SESSION_RETIRED');
@@ -159,7 +162,7 @@ export class ConsoleSupervisor {
     let factory = this.factory;
     if (!factory) factory = this.meta.launch.host === 'codex' ? (await import('./console-codex.ts')).createCodexHost : (await import('./console-claude.ts')).createClaudeHost;
     current();
-    this.adapter = factory({ launch: this.meta.launch, instructions: this.meta.instructions, args: this.meta.args,
+    this.adapter = factory({ launch: this.meta.launch, instructions: this.meta.instructions, args,
       env: { ...rootEnv(), CREW_HOME: this.root, CREW_CONSOLE_SESSION: this.id }, callbacks: this.callbacks(this.generation), ...(this.meta.identity ? { identity: this.meta.identity } : {}) });
     await this.adapter.start();
     current();

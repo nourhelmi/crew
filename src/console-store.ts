@@ -19,7 +19,10 @@ export function sessionDir(id: string, root = home()): string {
 export interface ConsoleMeta {
   launch: ConsoleLaunch;
   instructions: string;
-  args: string[];
+  /** Bind policy without duplicating credential-bearing native CLI arguments. */
+  argsHash?: string;
+  /** Legacy private metadata, scrubbed when its supervisor next owns it. */
+  args?: string[];
   identity?: HostIdentity;
   pid?: number;
   epoch?: string;
@@ -66,6 +69,7 @@ function canonical(value: unknown): unknown {
   return value;
 }
 export const intentHash = (intent: ConsoleIntent): string => createHash('sha256').update(JSON.stringify(canonical(intent))).digest('hex');
+export const consoleArgsHash = (args: string[]): string => createHash('sha256').update(JSON.stringify(args)).digest('hex');
 export function acceptIntent(id: string, intent: ConsoleIntent, root = home()): ConsoleReceipt {
   const requestId = intent.payload.requestId;
   const path = receiptPath(id, requestId, root);

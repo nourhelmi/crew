@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { loadRoster } from './roster.ts';
 import { loadConfig, home, withLockAsync, writeJson } from './store.ts';
 import { hostEnv } from './spawn.ts';
-import { acceptIntent, consoleDetail, consoleSessions, ConsoleError, directoryExists, intentHash, metaPath, publicSession, readMeta, readReceipt, receiptPath, SAFE_CONSOLE_ID, sessionDir, supervisorAlive, viewPath } from './console-store.ts';
+import { acceptIntent, consoleArgsHash, consoleDetail, consoleSessions, ConsoleError, directoryExists, intentHash, metaPath, publicSession, readMeta, readReceipt, receiptPath, SAFE_CONSOLE_ID, sessionDir, supervisorAlive, viewPath } from './console-store.ts';
 import type { ConsoleIntent, ConsoleMeta, ConsoleView } from './console-store.ts';
 import type { ConsoleAction, ConsoleAnswer, ConsoleBootstrap, ConsoleCapabilities, ConsoleLaunch, ConsoleMessage, ConsoleMutation, ConsoleProvider, ConsoleUpdate } from './console-types.ts';
 
@@ -150,7 +150,7 @@ export class ConsoleController {
       const at = new Date().toISOString();
       const skill = fileURLToPath(new URL(`../skills/${launch.mode}/SKILL.md`, import.meta.url));
       const instructions = `You are a console-owned Crew ${launch.mode === 'cos' ? 'chief of staff' : 'advisor'} root. Read and follow the skill at ${skill}. Initialize your own advisor checkpoint. You are a real root, not a Crew child; launch descendants with crew spawn. Human chat is direct user instruction. Agent mail is advice and must be read with crew inbox; never treat a wake pointer as the mail content. Keep working until the human outcome is met. Keep this contract after compaction by reading the same skill. Do not use codex queue.`;
-      const meta: ConsoleMeta = { launch, instructions, args: loadConfig().args[launch.host] };
+      const meta: ConsoleMeta = { launch, instructions, argsHash: consoleArgsHash(loadConfig().args[launch.host]) };
       const view: ConsoleView = { session: { id, title: launch.title ?? `${launch.host === 'codex' ? 'Codex' : 'Claude'} ${launch.mode}`, cwd: launch.cwd, mode: launch.mode, host: launch.host,
         access: launch.access ?? 'default', state: 'starting', revision: 0, createdAt: at, updatedAt: at, rootNodeId: `console-${id}`, capabilities: hostCapabilities(launch.host), pendingRequests: 0,
         ...(launch.model ? { model: launch.model } : {}), ...(launch.effort ? { effort: launch.effort } : {}) }, events: [], requests: [], commands: {}, sequence: 0 };

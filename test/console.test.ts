@@ -77,6 +77,22 @@ test('console security rejects cross-site, missing capability, unsafe fields and
   } finally { await f.cleanup(); }
 });
 
+test('private configured launch arguments are not copied into durable console metadata or public views', async () => {
+  const f = await fixture();
+  try {
+    writeJson(process.env.CREW_CONFIG!, { router: { enabled: false }, args: { codex: ['-c', 'fixture_token="synthetic-private-token"'], claude: [] } });
+    const launched = await f.controller.launch(f.launch('hold'));
+    assert.doesNotMatch(readFileSync(metaPath(launched.session.id, f.root), 'utf8'), /synthetic-private-token|fixture_token/);
+    assert.doesNotMatch(JSON.stringify(f.controller.detail(launched.session.id)), /synthetic-private-token|fixture_token/);
+    assert.doesNotMatch(JSON.stringify(f.controller.bootstrap()), /synthetic-private-token|fixture_token/);
+    assert.match(readMeta(launched.session.id, f.root)!.argsHash!, /^[a-f0-9]{64}$/);
+    await f.controller.action(launched.session.id, { requestId: 'interrupt-private', action: 'interrupt', revision: f.controller.detail(launched.session.id)!.session.revision });
+    writeJson(process.env.CREW_CONFIG!, { router: { enabled: false }, args: { codex: ['-c', 'sandbox_mode="danger-full-access"'], claude: [] } });
+    await assert.rejects(f.controller.action(launched.session.id, { requestId: 'changed-config', action: 'resume', revision: f.controller.detail(launched.session.id)!.session.revision }), (error: unknown) => error instanceof ConsoleError && error.code === 'HOST_CONFIG_CHANGED');
+    assert.equal(f.calls(launched.session.id).filter(c => c.method === 'start').length, 1);
+  } finally { await f.cleanup(); }
+});
+
 test('managed roots launch once, stream durable public chat, survive listener reload, retain exact identity and close deliberately', async () => {
   const f = await fixture();
   try {
