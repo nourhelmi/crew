@@ -70,6 +70,7 @@ it('starts without sending a prompt, persists UUID identity, and resumes exactly
   assert.equal(launch.args[launch.args.indexOf('--permission-mode') + 1], 'auto');
   assert.equal(launch.args[launch.args.indexOf('--append-system-prompt') + 1], 'Fixture parent CoS/advisor contract');
   assert.equal(launch.args[launch.args.indexOf('--permission-prompt-tool') + 1], 'stdio');
+  assert.ok(launch.args.includes('--replay-user-messages'));
   assert.equal(launch.args[launch.args.indexOf('--system-prompt-snapshot') + 1], 'off');
   assert.equal(launch.args[launch.args.indexOf('--model') + 1], 'fixture');
   assert.equal(launch.args[launch.args.indexOf('--effort') + 1], 'high');
@@ -105,6 +106,7 @@ it('queues active input until result AND host idle, and delivers one turn at a t
   assert.equal(f.users().length, 1, 'a result while the host remains running must not flush input');
   f.emit({ type: 'system', subtype: 'session_state_changed', state: 'idle' });
   await until(() => f.users().length === 2);
+  await until(() => f.commands.some(c => c.id === 'b' && c.state === 'delivered'));
   assert.equal(f.users()[1]?.message.content, 'B');
   assert.deepEqual(f.commands.filter(c => c.id === 'b').map(c => c.state), ['queued', 'delivered']);
   f.emit({ fixture: 'result' }); await until(() => f.users().length === 3);
@@ -261,7 +263,7 @@ it('reports initialization rejection, process loss, malformed output and session
   f.emit({ fixture: 'exit', code: 7 });
   await until(() => f.states.some(s => s.state === 'failed' || s.state === 'disconnected'));
   assert.equal(f.requests.size, 0);
-  assert.ok(f.commands.some(c => c.id === 'active' && c.state === 'uncertain'));
+  assert.deepEqual(f.commands.filter(c => c.id === 'active').map(c => c.state), ['queued', 'delivered']);
   assert.ok(f.commands.some(c => c.id === 'queued' && c.state === 'failed'));
   await assert.rejects(f.host.answer({ requestId: 'stale', pendingRequestId: stale, option: 'allow' }));
   for (const row of [{ fixture: 'raw', text: '{"thinking":"private malformed thought",bad JSON}\n' }, { type: 'system', subtype: 'init', session_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }]) {
@@ -286,7 +288,77 @@ it('interrupt failure cannot release replacement input and close invalidates all
   closing.approval('pending'); await until(() => closing.requests.size === 1);
   await closing.host.close(); await closing.host.close();
   assert.equal(closing.states.at(-1)?.state, 'closed'); assert.equal(closing.requests.size, 0);
-  assert.ok(closing.commands.some(c => c.id === 'active' && c.state === 'uncertain'));
+  assert.deepEqual(closing.commands.filter(c => c.id === 'active').map(c => c.state), ['queued', 'delivered']);
   assert.ok(closing.commands.some(c => c.id === 'queued' && c.state === 'failed'));
   await assert.rejects(closing.host.send('Closed', 'closed'), /not connected/);
+});
+
+it('requires a native echo with current UUID and session, ignores tool rows and reused echoes, and reports missing-ACK disconnect uncertain', async t => {
+  const f = fixture(t, { mode: 'no-user-ack' }); await f.host.start();
+  const first = f.host.send('First', 'first');
+  await until(() => f.users().length === 1);
+  const user = f.users()[0]!;
+  assert.equal(f.commands.at(-1)?.state, 'queued', 'successful pipe write alone cannot confirm input delivery');
+  f.emit({ ...user, uuid: 'reused-old-id' });
+  f.emit({ ...user, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool', content: 'Result' }] } });
+  await delay(30);
+  assert.ok(!f.commands.some(c => c.id === 'first' && c.state === 'delivered'));
+  f.emit(user); assert.equal(await first, 'delivered');
+  f.emit({ fixture: 'result' }); await until(() => f.states.at(-1)?.state === 'idle');
+  const second = f.host.send('Second', 'second'); await until(() => f.users().length === 2);
+  assert.notEqual(f.users()[1]?.uuid, user.uuid);
+  f.emit(user); await delay(30);
+  assert.ok(!f.commands.some(c => c.id === 'second' && c.state === 'delivered'));
+  f.emit({ fixture: 'exit', code: 9 }); assert.equal(await second, 'uncertain');
+  assert.deepEqual(f.commands.filter(c => c.id === 'first').map(c => c.state), ['queued', 'delivered']);
+  assert.deepEqual(f.commands.filter(c => c.id === 'second').map(c => c.state), ['queued', 'uncertain']);
+  const wrong = fixture(t, { mode: 'no-user-ack' }); await wrong.host.start();
+  const input = wrong.host.send('Mismatch', 'wrong'); await until(() => wrong.users().length === 1);
+  wrong.emit({ ...wrong.users()[0]!, session_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' });
+  assert.equal(await input, 'uncertain');
+  assert.ok(!wrong.commands.some(c => c.state === 'delivered'));
+});
+
+it('times out a missing native echo as uncertain and never resends the input', async t => {
+  const f = fixture(t, { mode: 'no-user-ack' }); await f.host.start();
+  assert.equal(await f.host.send('No echo', 'missing-ack'), 'uncertain');
+  assert.deepEqual(f.commands.filter(c => c.id === 'missing-ack').map(c => c.state), ['queued', 'uncertain']);
+  assert.ok(f.states.some(s => /acknowledgment timed out/.test(s.error ?? '')));
+  assert.equal(f.users().length, 1);
+});
+
+it('interrupts input still awaiting its echo without orphaning the receipt or replaying it', async t => {
+  const f = fixture(t, { mode: 'no-user-ack' }); await f.host.start();
+  const first = f.host.send('Blocked acknowledgment', 'blocked');
+  await until(() => f.users().length === 1);
+  await f.host.interrupt();
+  assert.equal(await first, 'uncertain');
+  assert.equal(f.states.at(-1)?.state, 'interrupted');
+  f.emit(f.users()[0]!); await delay(30);
+  assert.deepEqual(f.commands.filter(c => c.id === 'blocked').map(c => c.state), ['queued', 'uncertain']);
+  const next = f.host.send('Human continues', 'next'); await until(() => f.users().length === 2);
+  f.emit(f.users()[1]!); assert.equal(await next, 'delivered');
+  assert.equal(f.users().length, 2);
+});
+
+it('bounds public text and JSON deltas, queued human input, and incomplete wire frames', async t => {
+  const f = fixture(t); await f.host.start(); await f.host.send('Bounded', 'active');
+  for (let i = 0; i < 16; i++) assert.equal(await f.host.send(`Queued ${i}`, `q${i}`), 'queued');
+  await assert.rejects(f.host.send('Overflow', 'overflow'), /queue is full/);
+  await assert.rejects(f.host.send('x'.repeat(24_001), 'too-long'), /24,000/);
+  const stream = (event: Json) => f.emit({ type: 'stream_event', event });
+  stream({ type: 'message_start', message: { id: 'large' } });
+  stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
+  stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'a'.repeat(15_000) } });
+  stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'a'.repeat(15_000) } });
+  stream({ type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'large-tool', name: 'Bash', input: {} } });
+  stream({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: 'b'.repeat(80_000) } });
+  f.emit({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'large-tool', content: 'c'.repeat(80_000) }] } });
+  await until(() => f.events.some(e => e.kind === 'tool' && e.state === 'completed'));
+  assert.ok(f.events.filter(e => e.kind === 'assistant' || e.kind === 'tool').every(e => e.text.length <= 24_000));
+  assert.ok(f.events.some(e => e.kind === 'assistant' && e.text.endsWith('[Output truncated]')));
+  assert.ok(f.events.some(e => e.kind === 'tool' && e.text.endsWith('[Output truncated]')));
+  assert.equal(f.users().length, 1);
+  f.emit({ fixture: 'raw', text: '{"content":"' + 'x'.repeat(1024 * 1024) });
+  await until(() => f.states.some(s => /stream frame exceeded/.test(s.error ?? '')));
 });

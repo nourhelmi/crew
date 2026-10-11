@@ -27,6 +27,8 @@ createInterface({ input: process.stdin }).on('line', line => {
     if (subtype === 'interrupt' && mode !== 'interrupt-delay' && mode !== 'interrupt-error') setTimeout(result, 20);
   } else if (value.type === 'user') {
     output({ type: 'system', subtype: 'session_state_changed', state: 'running', session_id: sessionId });
+    if (mode === 'send-disconnect-before-ack') process.exit(9);
+    if (mode !== 'no-user-ack') output(value);
     if (mode === 'send-disconnect') process.exit(9);
   }
 });

@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { createInterface } from 'node:readline';
 import type { ConsoleHostAdapter, HostOptions } from './console-host.ts';
 import type { ConsoleAnswer, ConsoleRequest, ConsoleState, CommandState } from './console-types.ts';
 
@@ -11,9 +10,16 @@ const string = (value: unknown): string => typeof value === 'string' ? value : '
 const array = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TIMEOUT = 30_000;
+const MAX_TEXT = 24_000;
+const MAX_FRAME = 1024 * 1024;
+const MAX_QUEUE = 16;
+const MAX_BLOCKS = 128;
+const TRUNCATED = '\n[Output truncated]';
+const preview = (value: string): string => value.length <= MAX_TEXT ? value : value.slice(0, MAX_TEXT - TRUNCATED.length) + TRUNCATED;
 
 interface PendingControl { resolve(value: ObjectValue): void; reject(error: Error): void; timer: NodeJS.Timeout }
-interface PendingInput { text: string; requestId: string }
+interface PendingInput { text: string; requestId: string; queued?: true }
+interface PendingAck { requestId: string; uuid: string; resolve(delivered: boolean): void; reject(error: Error): void; timer: NodeJS.Timeout }
 interface PendingRequest { wireId: string; input: ObjectValue; public: ConsoleRequest }
 interface Block { kind: 'text' | 'tool'; key: string; text: string; title: string }
 
@@ -35,7 +41,8 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
   let turnEnded = false;
   let hostStateSeen = false;
   let hostIdle = true;
-  let activeCommand: string | undefined;
+  let awaitingAck: PendingAck | undefined;
+  let blockCount = 0;
   let idleWaiter: { resolve(): void; reject(error: Error): void } | undefined;
   const queue: PendingInput[] = [];
   const controls = new Map<string, PendingControl>();
@@ -57,7 +64,7 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
     for (const blocks of messages.values()) for (const block of blocks.values()) {
       if (block.kind === 'text') cb.event({ kind: 'assistant', key: block.key, text: block.text, streaming: false });
     }
-    messages.clear(); streams.clear();
+    messages.clear(); streams.clear(); blockCount = 0;
   }
   function kill(signal: NodeJS.Signals = 'SIGTERM'): void {
     if (!child?.pid) return;
@@ -74,8 +81,10 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
     for (const pending of controls.values()) { clearTimeout(pending.timer); pending.reject(error); }
     controls.clear();
     idleWaiter?.reject(error); idleWaiter = undefined;
-    if (activeCommand) cb.command(activeCommand, 'uncertain', error.message);
-    activeCommand = undefined;
+    if (awaitingAck) {
+      const ack = awaitingAck; awaitingAck = undefined; clearTimeout(ack.timer);
+      cb.command(ack.requestId, 'uncertain', error.message); ack.reject(error);
+    }
     for (const input of queue.splice(0)) cb.command(input.requestId, 'failed', error.message);
     setState(disconnected ? 'disconnected' : 'failed', error.message);
     kill();
@@ -106,8 +115,8 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
     return result;
   }
   function maybeIdle(): void {
-    if (!busy || !turnEnded || (hostStateSeen && !hostIdle) || requests.size) return;
-    busy = false; activeCommand = undefined;
+    if (!busy || !turnEnded || (hostStateSeen && !hostIdle) || requests.size || awaitingAck) return;
+    busy = false;
     finishStreams();
     idleWaiter?.resolve(); idleWaiter = undefined;
     setState(interrupting ? 'interrupted' : 'idle');
@@ -115,21 +124,23 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
   }
   async function deliver(input: PendingInput): Promise<CommandState> {
     busy = true; turnEnded = false; hostIdle = false;
-    activeCommand = input.requestId;
     const turnId = randomUUID();
     cb.identity({ sessionId, turnId });
     setState('running');
+    if (!input.queued) cb.command(input.requestId, 'queued');
+    let confirmed = false;
+    const receipt = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => fail(new Error('Claude user acknowledgment timed out; input delivery is uncertain')), TIMEOUT);
+      awaitingAck = { requestId: input.requestId, uuid: turnId, timer, reject, resolve(delivered) { confirmed = delivered; resolve(); } };
+    });
     try {
-      await write({ type: 'user', uuid: turnId, session_id: sessionId, parent_tool_use_id: null,
-        message: { role: 'user', content: input.text } });
-      if (failure || closing) throw failure ?? new Error('Claude closed before input delivery completed');
-      cb.command(input.requestId, 'delivered');
-      return 'delivered';
+      await Promise.all([write({ type: 'user', uuid: turnId, session_id: sessionId, parent_tool_use_id: null,
+        message: { role: 'user', content: input.text } }), receipt]);
+      return confirmed ? 'delivered' : 'uncertain';
     } catch (error) {
       const reason = error instanceof Error ? error : new Error(String(error));
-      cb.command(input.requestId, 'uncertain', reason.message);
       fail(reason);
-      return 'uncertain';
+      return confirmed ? 'delivered' : 'uncertain';
     }
   }
   async function pump(): Promise<void> {
@@ -142,14 +153,22 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
   }
   function blocksFor(id: string): Map<number, Block> {
     let blocks = messages.get(id);
-    if (!blocks) { blocks = new Map(); messages.set(id, blocks); }
+    if (!blocks) {
+      if (messages.size >= MAX_BLOCKS) throw new Error('Claude turn exceeded the public message limit');
+      blocks = new Map(); messages.set(id, blocks);
+    }
     return blocks;
+  }
+  function storeBlock(blocks: Map<number, Block>, index: number, block: Block): void {
+    if (!blocks.has(index) && ++blockCount > MAX_BLOCKS) throw new Error('Claude turn exceeded the public block limit');
+    blocks.set(index, block);
   }
   function toolBlock(value: ObjectValue): Block {
     const id = string(value.id) || randomUUID();
     const previous = tools.get(id);
-    const block: Block = previous ?? { kind: 'tool', key: `claude:tool:${id}`, text: '', title: string(value.name) || 'Tool' };
-    block.text = JSON.stringify(value.input ?? {}); tools.set(id, block);
+    if (!previous && tools.size >= MAX_BLOCKS) throw new Error('Claude exceeded the outstanding tool limit');
+    const block: Block = previous ?? { kind: 'tool', key: `claude:tool:${id}`, text: '', title: preview(string(value.name) || 'Tool') };
+    block.text = preview(JSON.stringify(value.input ?? {})); tools.set(id, block);
     return block;
   }
   function stream(message: ObjectValue): void {
@@ -166,16 +185,19 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
     if (event.type === 'content_block_start') {
       const content = object(event.content_block);
       let block: Block;
-      if (content.type === 'text') block = { kind: 'text', key: `claude:${id}:${index}`, text: string(content.text), title: '' };
+      if (content.type === 'text') block = { kind: 'text', key: `claude:${id}:${index}`, text: preview(string(content.text)), title: '' };
       else if (content.type === 'tool_use') { block = toolBlock(content); block.text = ''; }
       else return; // Thinking, signatures and hidden content never reach callbacks.
-      blocks.set(index, block); emit(block, true);
+      storeBlock(blocks, index, block); emit(block, true);
     } else if (event.type === 'content_block_delta') {
       const block = blocks.get(index), delta = object(event.delta);
       if (!block) return;
-      if (block.kind === 'text' && delta.type === 'text_delta') block.text += string(delta.text);
-      else if (block.kind === 'tool' && delta.type === 'input_json_delta') block.text += string(delta.partial_json);
+      let next: string;
+      if (block.kind === 'text' && delta.type === 'text_delta') next = preview(block.text + string(delta.text));
+      else if (block.kind === 'tool' && delta.type === 'input_json_delta') next = preview(block.text + string(delta.partial_json));
       else return;
+      if (next === block.text) return;
+      block.text = next;
       emit(block, true);
     } else if (event.type === 'content_block_stop') {
       const block = blocks.get(index); if (block) emit(block, false);
@@ -192,7 +214,7 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
       const content = object(entry);
       if (content.type === 'text') {
         // CLI can emit individual completed blocks with the same API message id.
-        const text = string(content.text);
+        const text = preview(string(content.text));
         const candidates = [...blocks.values()].filter(b => b.kind === 'text');
         const prefixes = candidates.filter(b => b.text && (text.startsWith(b.text) || b.text.startsWith(text)));
         const matching = candidates.find(b => b.text === text)
@@ -200,8 +222,8 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
         const existing = blocks.get(index);
         const block = matching ?? (existing?.kind === 'text' ? existing : undefined)
           ?? { kind: 'text', key: `claude:${id}:${index}`, text: '', title: '' };
-        block.text = text; if (!matching) blocks.set(index, block); emit(block, false);
-      } else if (content.type === 'tool_use') { const block = toolBlock(content); blocks.set(index, block); emit(block, false); }
+        block.text = text; if (!matching) storeBlock(blocks, index, block); emit(block, false);
+      } else if (content.type === 'tool_use') { const block = toolBlock(content); storeBlock(blocks, index, block); emit(block, false); }
     });
   }
   function toolResults(message: ObjectValue): void {
@@ -212,7 +234,7 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
       const tool = tools.get(id);
       const text = typeof result.content === 'string' ? result.content
         : array(result.content).map(object).filter(c => c.type === 'text').map(c => string(c.text)).join('\n');
-      cb.event({ kind: 'tool', key: tool?.key ?? `claude:tool:${id}`, title: tool?.title ?? 'Tool', text,
+      cb.event({ kind: 'tool', key: tool?.key ?? `claude:tool:${id}`, title: tool?.title ?? 'Tool', text: preview(text),
         state: result.is_error === true ? 'failed' : 'completed' });
       tools.delete(id);
     }
@@ -221,11 +243,13 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
     const wireId = string(message.request_id), request = object(message.request);
     if (!wireId) throw new Error('Claude control request has no id');
     if (seenRequests.has(wireId)) return;
+    if (seenRequests.size >= 8192 || wireId.length > 256) throw new Error('Claude exceeded the control request identity limit');
     seenRequests.add(wireId);
     const reject = (reason: string) => {
       void write({ type: 'control_response', response: { subtype: 'error', request_id: wireId, error: reason } }).catch(fail);
     };
     if (interrupting) { reject('Claude turn is being interrupted'); return; }
+    if (requests.size >= 32) { reject('Too many pending Claude requests'); return; }
     if (request.subtype !== 'can_use_tool') { reject(`Unsupported Claude control request: ${string(request.subtype)}`); return; }
     if (typeof request.tool_name !== 'string' || !request.tool_name || !request.input || typeof request.input !== 'object' || Array.isArray(request.input)) {
       reject('Malformed Claude permission request'); return;
@@ -247,7 +271,7 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
             }; }) };
         }) };
     } else publicRequest = { id, kind: 'approval', title: string(request.title) || `Allow ${string(request.tool_name)}?`,
-      description: [string(request.description), string(request.decision_reason), JSON.stringify(input, null, 2)].filter(Boolean).join('\n'),
+      description: preview([string(request.description), string(request.decision_reason), JSON.stringify(input, null, 2)].filter(Boolean).join('\n')),
       options: [{ id: 'allow', label: 'Allow once' }, { id: 'deny', label: 'Deny' }] };
     requests.set(id, { wireId, input, public: publicRequest });
     setState('waiting'); cb.request(publicRequest);
@@ -267,7 +291,10 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
     } else if (message.type === 'control_request') publishRequest(message);
     else if (message.type === 'control_cancel_request') {
       const cancelled = string(message.request_id);
-      if (cancelled) seenRequests.add(cancelled);
+      if (cancelled) {
+        if (cancelled.length > 256 || !seenRequests.has(cancelled) && seenRequests.size >= 8192) throw new Error('Claude exceeded the control request identity limit');
+        seenRequests.add(cancelled);
+      }
       for (const [id, request] of requests) if (request.wireId === message.request_id) {
         requests.delete(id); cb.cancelRequest(id);
       }
@@ -275,7 +302,15 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
       maybeIdle();
     } else if (message.type === 'stream_event') stream(message);
     else if (message.type === 'assistant') assistant(message);
-    else if (message.type === 'user') toolResults(message);
+    else if (message.type === 'user') {
+      const value = object(message.message);
+      if (awaitingAck && message.session_id === sessionId && message.uuid === awaitingAck.uuid && value.role === 'user'
+        && !array(value.content).some(c => object(c).type === 'tool_result')) {
+        const ack = awaitingAck; awaitingAck = undefined; clearTimeout(ack.timer);
+        ack.resolve(true); cb.command(ack.requestId, 'delivered'); maybeIdle();
+      }
+      toolResults(message);
+    }
     else if (message.type === 'system' && message.subtype === 'session_state_changed') {
       hostStateSeen = true; hostIdle = message.state === 'idle';
       if (message.state === 'running' && !busy) { busy = true; turnEnded = false; setState('running'); }
@@ -285,7 +320,7 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
       if (message.is_error) {
         const error = string(message.result) || array(message.errors).map(string).join('\n') || `Claude turn failed: ${string(message.subtype)}`;
         if (!ready) throw new Error(error);
-        cb.event({ kind: 'status', text: error });
+        cb.event({ kind: 'status', text: preview(error) });
       }
       maybeIdle();
     }
@@ -308,7 +343,7 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
       extra.push('--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions');
     }
     return [...extra, '--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
-      '--include-partial-messages', '--permission-prompts', 'host', '--permission-prompt-tool', 'stdio',
+      '--include-partial-messages', '--replay-user-messages', '--permission-prompts', 'host', '--permission-prompt-tool', 'stdio',
       options.identity ? `--resume=${sessionId}` : `--session-id=${sessionId}`,
       '--append-system-prompt', options.instructions, '--system-prompt-snapshot', 'off',
       ...(options.launch.model ? ['--model', options.launch.model] : []),
@@ -331,14 +366,30 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
       child.stderr.resume();
       child.once('error', error => fail(error));
       child.once('exit', (code, signal) => { if (!closing) fail(new Error(`Claude process exited (${signal ?? code}); connection lost`), code === 0); });
-      const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
-      lines.on('line', line => {
+      let pendingLine = '';
+      function line(line: string): void {
+        if (line.length > MAX_FRAME) { fail(new Error('Claude stream frame exceeded 1,048,576 characters')); return; }
         if (!line.trim() || !line.trimStart().startsWith('{')) return;
         try { receive(JSON.parse(line)); } catch (error) {
           fail(error instanceof Error && !(error instanceof SyntaxError) ? error : new Error('Invalid Claude stream JSON'));
         }
+      }
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (chunk: string) => {
+        if (failure || closing) return;
+        pendingLine += chunk;
+        let end: number;
+        while ((end = pendingLine.indexOf('\n')) >= 0) {
+          line(pendingLine.slice(0, end)); pendingLine = pendingLine.slice(end + 1);
+          if (failure || closing) { pendingLine = ''; return; }
+        }
+        if (pendingLine.length > MAX_FRAME) { pendingLine = ''; fail(new Error('Claude stream frame exceeded 1,048,576 characters')); }
       });
-      lines.once('close', () => { if (!closing) fail(new Error('Claude stdout disconnected'), true); });
+      child.stdout.once('end', () => {
+        if (pendingLine.trim()) line(pendingLine);
+        pendingLine = '';
+        if (!closing) fail(new Error('Claude stdout disconnected'), true);
+      });
       await control({ subtype: 'initialize', hooks: null });
       if (failure || closing) throw failure ?? new Error('Claude closed during initialization');
       ready = true;
@@ -352,6 +403,11 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
   async function interrupt(): Promise<void> {
     available();
     interrupting = true; cancelRequests();
+    if (awaitingAck) {
+      const ack = awaitingAck; awaitingAck = undefined; clearTimeout(ack.timer);
+      cb.command(ack.requestId, 'uncertain', 'Interrupted before native Claude acknowledgment');
+      ack.resolve(false);
+    }
     for (const input of queue.splice(0)) cb.command(input.requestId, 'failed', 'Cancelled by explicit Claude interrupt');
     const wait = busy ? new Promise<void>((resolve, reject) => { idleWaiter = { resolve, reject }; }) : Promise.resolve();
     const timer = setTimeout(() => fail(new Error('Claude interrupt did not reach idle; outcome is uncertain')), TIMEOUT);
@@ -374,14 +430,19 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
       let attemptedInterrupt = false;
       try {
         available();
+        if (text.length > MAX_TEXT) throw new Error('Claude input exceeds 24,000 characters');
         if (shouldInterrupt) {
           attemptedInterrupt = true;
           await doInterrupt();
           // The interrupt cancels old queued turns; this human input resumes work.
           if (!busy) return await deliver({ text, requestId });
-          queue.unshift({ text, requestId }); cb.command(requestId, 'queued'); return 'queued';
+          if (queue.length >= MAX_QUEUE) throw new Error('Claude input queue is full');
+          queue.unshift({ text, requestId, queued: true }); cb.command(requestId, 'queued'); return 'queued';
         }
-        if (busy || interrupting || queue.length || requests.size) { queue.push({ text, requestId }); cb.command(requestId, 'queued'); void pump(); return 'queued'; }
+        if (busy || interrupting || queue.length || requests.size) {
+          if (queue.length >= MAX_QUEUE) throw new Error('Claude input queue is full');
+          queue.push({ text, requestId, queued: true }); cb.command(requestId, 'queued'); void pump(); return 'queued';
+        }
         return await deliver({ text, requestId });
       } catch (error) {
         cb.command(requestId, attemptedInterrupt ? 'uncertain' : 'failed', error instanceof Error ? error.message : String(error));
@@ -430,8 +491,10 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
         const error = new Error('Claude transport closed');
         for (const pending of controls.values()) { clearTimeout(pending.timer); pending.reject(error); }
         controls.clear(); idleWaiter?.reject(error); idleWaiter = undefined;
-        if (activeCommand) cb.command(activeCommand, 'uncertain', 'Claude closed during an active turn');
-        activeCommand = undefined;
+        if (awaitingAck) {
+          const ack = awaitingAck; awaitingAck = undefined; clearTimeout(ack.timer);
+          cb.command(ack.requestId, 'uncertain', error.message); ack.reject(error);
+        }
         for (const input of queue.splice(0)) cb.command(input.requestId, 'failed', error.message);
         if (child && child.exitCode === null && child.signalCode === null) {
           const ownedChild = child;
