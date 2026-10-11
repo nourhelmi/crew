@@ -153,6 +153,11 @@ byte-exact copy. The helper closes its setup server before returning reviewed
 before/after metadata; the console runner retains it as `hooks-trust.json`.
 Fake RPC regression tests establish these validation and cleanup mechanics;
 root-owned live calls establish installed-provider behavior.
+Setup has its own bounded 10-second budget. The requested behavioral `--timeout`
+starts after the managed provider acknowledges the initial human input, so hook
+setup/cold startup cannot consume the model workflow's budget. Reports retain
+total elapsed duration. Setup errors before a managed launch block; failures
+after a managed launch fail. Both paths remove copied credentials and owned hosts.
 
 ```sh
 npm run eval:live -- \

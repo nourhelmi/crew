@@ -44,6 +44,7 @@ if(!argv.includes('app-server')||argv.at(-1)!=='stdio://')process.exit(8);
 if((fs.statSync(path.join(process.env.CODEX_HOME,'auth.json')).mode&0o777)!==0o600)process.exit(9);
 const thread='synthetic-provider-thread',mode=${JSON.stringify(mode)};
 fs.appendFileSync(${JSON.stringify(join(dir, 'server-pids.jsonl'))},String(process.pid)+'\\n');
+fs.writeFileSync(${JSON.stringify(join(dir, 'setup-locator.json'))},JSON.stringify({home:process.env.HOME,codexHome:process.env.CODEX_HOME,base:process.env.EVAL_BASE,pid:process.pid}));
 const log=value=>fs.appendFileSync(${JSON.stringify(join(dir, 'provider.jsonl'))},JSON.stringify(value)+'\\n');
 const send=value=>process.stdout.write(JSON.stringify(value)+'\\n');
 const notify=(method,params)=>send({method,params});
@@ -142,11 +143,19 @@ describe('actual console HTTP runner with a credential-free fake provider', () =
           assert.ok(existsSync(join(dir, 'locator.json')), 'owned fake app-server must start before interruption');
           process.emit('SIGINT');
         }
-        const { report } = await pending;
-        assert.equal(report.status, 'fail', JSON.stringify(report)); assert.match(report.note, interrupt ? /Interrupted/ : /Timed out/);
+        const { report, directory } = await pending;
+        const capture = JSON.parse(readFileSync(join(directory, 'console-capture.json'), 'utf8'));
+        assert.equal(report.status, 'fail', JSON.stringify(report));
+        assert.equal(capture.managedIds.length, 1, 'behavioral timeout starts after an acknowledged managed launch');
+        if (!interrupt) assert.ok(capture.http.some((h: { response?: { events?: { kind: string; command?: { state: string } }[] } }) =>
+          h.response?.events?.some(e => e.kind === 'user' && e.command?.state === 'delivered')), 'provider acknowledged initial input before the deadline');
+        assert.match(report.note, interrupt ? /Interrupted/ : /Timed out/);
         if (interrupt) assert.ok(Date.now() - started < 10_000, 'signal cleanup does not wait for workflow deadline');
-        const { home, pid } = JSON.parse(readFileSync(join(dir, 'locator.json'), 'utf8'));
-        assert.equal(existsSync(home), false); assert.throws(() => process.kill(pid, 0), /ESRCH/);
+        const { home } = JSON.parse(readFileSync(join(dir, 'setup-locator.json'), 'utf8'));
+        assert.equal(existsSync(home), false);
+        for (const pid of readFileSync(join(dir, 'server-pids.jsonl'), 'utf8').trim().split('\n').map(Number)) {
+          assert.throws(() => process.kill(pid, 0), /ESRCH/);
+        }
       } finally { rmSync(dir, { recursive: true, force: true }); }
     }
   });

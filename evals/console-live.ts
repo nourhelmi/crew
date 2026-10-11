@@ -84,7 +84,7 @@ export async function runConsoleLive(options: LiveOptions): Promise<{ report: Re
   let origin = ''; let token = ''; let sessionId = ''; let launched = false;
   let report: Report | undefined;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error(`Timed out after ${options.timeoutMs}ms; console provider workflow incomplete.`)), options.timeoutMs);
+  let timer = setTimeout(() => controller.abort(new Error('Timed out after 10000ms; isolated console setup incomplete.')), 10_000);
   const stop = (): void => controller.abort(new Error('Interrupted; owned console workflow stopped.'));
   process.once('SIGINT', stop); process.once('SIGTERM', stop);
   const supervisorGroups = (): number[] => {
@@ -233,6 +233,14 @@ export async function runConsoleLive(options: LiveOptions): Promise<{ report: Re
     sessionId = mutation.session.id; launched = true;
     if (!/^[a-zA-Z0-9._-]+$/.test(sessionId)) throw new Error('Unsafe managed session ID returned.');
     await request('POST', '/api/console/sessions', launch);
+    // Bound setup separately; the behavioral deadline begins only after the
+    // managed provider has acknowledged delivery of the initial human input.
+    await waitFor(() => request<ConsoleDetail>('GET', `/api/console/sessions/${sessionId}`), detail => {
+      if (['failed', 'closed', 'disconnected'].includes(detail.session.state)) throw new Error(`Console launch ${detail.session.state}: ${detail.session.error ?? 'no details'}`);
+      return detail.events.some(e => e.kind === 'user' && e.command?.requestId === launch.requestId && e.command.state === 'delivered');
+    });
+    clearTimeout(timer);
+    timer = setTimeout(() => controller.abort(new Error(`Timed out after ${options.timeoutMs}ms; console provider workflow incomplete.`)), options.timeoutMs);
     const firstStream = await connect(1);
     const first = await complete(launch.requestId);
     capture.details.push({ phase: 'first', detail: first }); identity('first', first);
