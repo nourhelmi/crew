@@ -33,7 +33,9 @@
   "scripts": {
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "setup": "node --disable-warning=ExperimentalWarning scripts/install.ts"
+    "setup": "node --disable-warning=ExperimentalWarning scripts/install.ts",
+    "eval": "node --disable-warning=ExperimentalWarning scripts/eval.ts",
+    "eval:live": "node --disable-warning=ExperimentalWarning scripts/eval.ts --live"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
