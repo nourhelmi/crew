@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { agentStatus, closePane, prompt, type AgentStatus } from './herdr.ts';
 import { self } from './identity.ts';
-import { format, reopen, settle, stall, takeUnread, waiting } from './mail.ts';
+import { format, hasPendingSettlement, reopen, settle, stall, takeUnread, waiting } from './mail.ts';
 import { requestResume, resuming } from './resume.ts';
 import { readResult } from './result.ts';
 import { bgActive, bgSession, ROOT } from './spawn.ts';
@@ -36,24 +36,28 @@ function sweep(mailbox: string, checkBg: boolean): void {
   for (const listed of listRuns()) {
     if (listed.parent.mailbox !== mailbox) continue;
     const run = reopen(listed);
+    if (hasPendingSettlement(run.id) || (run.settled?.notice && !run.settled.notified)) settle(run.id);
     if (run.state !== 'stopped') {
       // Parent-side settlement covers a child whose Stop hook never ran, and a settled child's newer result.
       const result = readResult(resultPath(run.id));
       const hasResult = Boolean(result && result.hash !== run.amendment?.resultHash
-        && !unread(run.id).mails.some(mail => mail.kind === 'amendment'));
+        && !unread(run.id).mails.some(mail => ['amendment', 'assignment'].includes(mail.kind)));
       if (hasResult) settle(run.id);
+      if (unread(run.id).mails.length && run.launcher !== 'herdr' && !resuming(run.id)) requestResume(readRun(run.id) ?? run);
       if (run.state === 'running' && !resuming(run.id)) {
         const herdrStatus = run.herdr && !run.herdr.closed ? agentStatus(run.herdr.agent, run.herdr.session) : undefined;
         const bg: Bg | 'unchecked' = run.launcher === 'bg' && checkBg ? bgSession(run.bgId ?? run.sessionId ?? '', run.launch?.env) : 'unchecked';
         // An approval, question or folder-trust dialog needs a human or the parent.
         if (run.launcher === 'herdr' && herdrStatus !== 'unknown') waiting(run.id, herdrStatus === 'blocked');
         if (bg !== 'unchecked' && bg !== 'unknown') waiting(run.id, bg?.status === 'blocked');
-        if (unread(run.id).mails.length && run.launcher !== 'herdr') requestResume(readRun(run.id) ?? run);
-        if (!hasResult || unread(run.id).mails.length || (run.keep && run.launcher === 'herdr')) {
+        if (!hasResult || unread(run.id).mails.length || run.keep) {
           const why = gone(run, herdrStatus, bg);
           const lastMail = unread(run.id).mails.at(-1)?.id;
           const needsLaunch = run.launcher !== 'herdr' && run.sessionId && run.launch && lastMail && lastMail !== run.resumedMail;
-          if (why && !needsLaunch) stall(run.id, why);
+          if (why && !needsLaunch) {
+            if (run.keep && run.assignment?.status !== 'active' && hasResult && !unread(run.id).mails.length) settle(run.id, true);
+            else stall(run.id, why);
+          }
         }
       }
     }
@@ -222,7 +226,7 @@ export function liveChildren(mailbox: string): RunMeta[] {
 function watched(mailbox: string): RunMeta[] {
   return listRuns().filter(run => run.parent.mailbox === mailbox && (run.state === 'running'
     || (run.state !== 'stopped' && run.launch && run.sessionId && unread(run.id).mails.at(-1)?.id !== run.resumedMail && unread(run.id).mails.length)
-    || (run.settled?.notice && !run.settled.notified)
+    || hasPendingSettlement(run.id) || (run.settled?.notice && !run.settled.notified)
     || (run.state === 'done' && !run.keep && run.herdr && !run.herdr.closed)
     || (run.state === 'blocked' && (run.launcher === 'exec' ? alive(run.pid)
       : run.launcher === 'herdr' ? Boolean(run.herdr && !run.herdr.closed && agentStatus(run.herdr.agent, run.herdr.session))

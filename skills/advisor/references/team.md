@@ -14,15 +14,22 @@ the same either way:
 | status / roster | `crew ls` (state, model, last reported status) |
 | message a teammate, or the root | `crew msg <name|parent> "…"` or `--file <file>` |
 | context or follow-up (advice) | `crew msg <name> "…"` or `--file <file>` |
-| change scope, authorization or done-when, or assign a distinct outcome | `crew amend <name> "…"` or `--file <new-packet>`: appended to its packet; the teammate rewrites its result.md for a new outcome |
+| revise current scope, authorization or done-when | `crew amend <name> "…"` or `--file <file>`: appended to its current packet |
+| assign a distinct outcome | `crew assign <name> --packet <file>`: same retained identity, new assignment, preserved history |
+| accept the exact delivered outcome | `crew accept <name> <submission-ref>` (inspect with `crew read <name> --json`) |
 | judge a delivered outcome (routing learns from it) | `crew grade <name> good\|bad "<why>"` |
 | rename | not supported; retire and enlist under the new name |
 | retire | tell it to settle its own children, wait for its settle notice, then `crew stop <name>` |
 
 Messages are advice: they never grant scope, assign work or certify completion. Scope,
 authorizations and done-when change only by `crew amend`, which becomes part of the
-packet; decide them up front where you can. A follow-up message to the same member handles
-same-outcome repair; an amended packet is for a genuinely distinct outcome. A teammate that
+current packet; decide them up front where you can. Distinct outcomes use `crew assign`.
+An amendment invalidates acceptance; a replacement result also needs exact acceptance.
+DONE submits a result, not acceptance: CoS accepts delivered advisor outcomes before
+calling them integrated. `crew grade` records routing quality separately. Submitted Markdown
+is immutable under `runs/<id>/submissions`; `crew read <name> --submission <ref>` reads it.
+Retained DONE members are idle and remain visible/reserved until retirement. BLOCKED and
+FAIL keep attention. Workers do not need acceptance merely to end their turns. A teammate that
 must end a turn mid-assignment writes `IN PROGRESS: <next step>`, which wakes no one and
 keeps it going; if it stops on that twice you get a `waiting` notice. One maker per checkout still applies. A teammate's `crew msg parent`
 reaches the root; it can reach a sibling by name.
@@ -36,7 +43,8 @@ teammate in herdr gets a one-line pointer typed into its pane, one per unread ba
 told about unread mail after its next tool call. Any session with unread mail is kept
 going at its next turn end until it has read it.
 
-Retire members before closing a team; retirement waits for real descendant settlement.
+Retire members after their descendants settle; `crew stop` recursively cancels any remaining
+descendants before closing the member. Retire all members before closing a team.
 Sent or queued is not read or done, so never resend an ambiguous message as a new one.
 `crew msg` prints how it was delivered: `waiter`, `opencode-plugin`, `herdr-prompt`, `headless-resume` or
 `queued`. `headless-resume` means a resume request was scheduled; it does not prove the mail was read.

@@ -7,15 +7,16 @@ import { closePane, herdr, inHerdr, labelPane } from './herdr.ts';
 import { isHookEvent, runHook } from './hook.ts';
 import { defaultCodexSocket, owningCodexSocket, self } from './identity.ts';
 import { registerCodex, wakeCodex } from './codex-mail.ts';
-import { amend, format, resolve, send, takeUnread } from './mail.ts';
+import { amend, assign, format, resolve, send, takeUnread } from './mail.ts';
 import { resume } from './resume.ts';
+import { accept, submissionPath } from './assignment.ts';
 import { grade } from './outcome.ts';
 import { loadRoster, rosterPath, routerView, unrunnable } from './roster.ts';
 import { isEffort, route } from './route.ts';
-import { bgActive, hostEnv, liveOnHost, spawn } from './spawn.ts';
+import { bgActive, hostEnv, spawn } from './spawn.ts';
 import { checkouts, trustPaths, trustTargets } from './trust.ts';
 import { routerSetting, setSessionRouter, setShellRouter } from './settings.ts';
-import { configPath, findRun, listRuns, loadConfig, readJson, resultPath, runDir, updateRun, writeJson } from './store.ts';
+import { configPath, findRun, listRuns, loadConfig, readJson, resultPath, retained, runDir, updateRun, withLock, writeJson } from './store.ts';
 import { HOSTS, ROLES, type Address, type Host, type Role, type RunMeta } from './types.ts';
 import { wait, waitHint, watch } from './wait.ts';
 
@@ -31,11 +32,13 @@ const HELP = `crew: advisor crews on native Claude Code and Codex
                                Claude: run it as a background command, it wakes you on exit.
   crew msg <to> [TEXT... | --file F]   to = parent | run name | run id | mailbox (advice)
   crew amend <run> [TEXT... | --file F] Append to your child's packet: scope, authorization, done-when.
+  crew assign <run> --packet FILE    New assignment on a retained member; prior evidence is preserved.
+  crew accept <run> <submission>     Parent acceptance of the exact current submission (not grade).
   crew grade <run> good|bad [NOTE...]   Your verdict on a child's work; routing learns from it.
   crew inbox                   Print unread mail.
   crew connect --socket PATH   Connect this loaded Codex root to its owning Unix app server.
   crew ls [--all]              Your children (or everything).
-  crew read <run>              Result, or the tail of its terminal/log.
+  crew read <run> [--submission REF] [--json]   Result/history, or the tail of its terminal/log.
   crew dashboard [--port N]    Local read-only workstream viewer and live output (default 4317).
   crew resume <run>            Resume an exited headless session with its recorded launch settings.
   crew stop <run>              Stop a run and close its pane.
@@ -81,7 +84,7 @@ function age(iso: string): string {
 function row(run: RunMeta): string {
   const where = run.herdr ? `herdr:${run.herdr.agent}` : run.bgId ? `bg:${run.bgId}` : run.pid ? `exec:${run.pid}` : run.launcher;
   const last = run.settled ? `  "${run.settled.status.slice(0, 60)}"` : '';
-  return `${run.name.padEnd(18)} ${run.id.padEnd(12)} ${run.role.padEnd(8)} ${`${run.route.host} ${run.route.model}@${run.route.effort}`.padEnd(30)} ${run.state.padEnd(8)} ${where.padEnd(16)} ${age(run.createdAt).padStart(4)}${run.keep ? ' kept' : ''}${last}`;
+  return `${run.name.padEnd(18)} ${run.id.padEnd(12)} ${run.role.padEnd(8)} ${`${run.route.host} ${run.route.model}@${run.route.effort}`.padEnd(30)} ${run.state.padEnd(8)} ${where.padEnd(16)} ${age(run.createdAt).padStart(4)}${run.keep ? ' kept' : ''}${run.assignment ? ` assignment:${run.assignment.id}/${run.assignment.revision} ${run.assignment.status}${run.assignment.submission ? ` submission:${run.assignment.submission}` : ''}` : ''}${last}`;
 }
 
 function tail(run: RunMeta): string {
@@ -97,8 +100,14 @@ function tail(run: RunMeta): string {
   catch { return '(no output captured)'; }
 }
 
-function stopRun(run: RunMeta): void {
-  const current = updateRun(run.id, live => ({ ...live, state: 'stopped' })) ?? run;
+function stopRun(run: RunMeta, visited = new Set<string>()): void {
+  if (visited.has(run.id)) return;
+  visited.add(run.id);
+  const { current, children } = withLock('spawn', () => ({
+    current: updateRun(run.id, live => ({ ...live, state: 'stopped' })) ?? run,
+    children: listRuns().filter(child => child.parent.mailbox === run.id),
+  }));
+  for (const child of children) stopRun(child, visited);
   if (current.herdr && !current.herdr.closed) {
     if (!closePane(current.herdr.pane, current.herdr.session)) throw new Error(`crew: ${current.name} is marked stopped, but its pane close failed; retry crew stop`);
     updateRun(current.id, live => live.herdr ? { ...live, herdr: { ...live.herdr, closed: true } } : undefined);
@@ -124,7 +133,7 @@ async function main(argv: string[]): Promise<void> {
       effort: { type: 'string' }, name: { type: 'string' }, cwd: { type: 'string' }, keep: { type: 'boolean' },
       'dry-run': { type: 'boolean' }, timeout: { type: 'string' }, file: { type: 'string' }, all: { type: 'boolean' },
       host: { type: 'string' }, json: { type: 'boolean' }, quiet: { type: 'boolean' }, global: { type: 'boolean' },
-      checks: { type: 'string' }, socket: { type: 'string' }, port: { type: 'string' },
+      submission: { type: 'string' }, checks: { type: 'string' }, socket: { type: 'string' }, port: { type: 'string' },
     },
   });
 
@@ -162,12 +171,6 @@ async function main(argv: string[]): Promise<void> {
       const where = run.herdr ? `herdr pane ${run.herdr.pane}` : run.bgId ? `claude --bg ${run.bgId}` : run.pid ? `codex exec pid ${run.pid}` : run.launcher;
       console.log(`${values['dry-run'] ? 'would spawn' : 'spawned'} ${run.name} (run ${run.id}): ${run.route.host} ${run.route.model}@${run.route.effort} [${run.route.strategy}] via ${where}`);
       if (run.route.reason && run.route.strategy === 'default') console.log(`  routing fell back to the role default: ${run.route.reason}`);
-      if (run.route.strategy === 'overflow') console.log(`  capacity: ${run.route.reason}`);
-      const cap = loadConfig().capacity[run.route.host];
-      const live = liveOnHost(run.route.host) + (values['dry-run'] ? 1 : 0);
-      if (cap && run.route.strategy === 'pinned' && live > cap.max) {
-        console.log(`  note: ${live} live ${run.route.host} runs, over the cap of ${cap.max}; they share one rate limit`);
-      }
       if (!values['dry-run']) console.log(`  result: ${resultPath(run.id)}\n  ${waitHint(run.parent) ?? 'wake: crew wait'}`);
       return;
     }
@@ -205,6 +208,20 @@ async function main(argv: string[]): Promise<void> {
       console.log(`amendment ${number} appended to ${run.name}'s packet: ${delivery}`);
       return;
     }
+    case 'assign': {
+      const [ref] = positionals;
+      if (!ref || !values.packet) fail('crew: crew assign <run> --packet FILE');
+      const { run, delivery } = assign(self(), ref, readFileSync(values.packet, 'utf8'));
+      console.log(`assignment ${run.assignment!.id} started for ${run.name}: ${delivery}`);
+      return;
+    }
+    case 'accept': {
+      const [ref, submission] = positionals;
+      if (!ref || !submission) fail('crew: crew accept <run> <submission-ref> (see crew ls --json or crew read --json)');
+      const run = accept(self(), ref, submission);
+      console.log(`accepted ${run.name} assignment ${run.assignment!.id} submission ${submission}`);
+      return;
+    }
     case 'grade': {
       const [ref, verdict, ...words] = positionals;
       if (!ref || (verdict !== 'good' && verdict !== 'bad')) fail('crew: crew grade <run> good|bad [NOTE...]');
@@ -221,7 +238,7 @@ async function main(argv: string[]): Promise<void> {
       let runs = listRuns();
       if (!values.all) {
         const me = self();
-        runs = runs.filter(run => run.parent.mailbox === me.mailbox && (run.state === 'running' || Date.now() - Date.parse(run.createdAt) < 86_400_000));
+        runs = runs.filter(run => run.parent.mailbox === me.mailbox && (retained(run) || Date.now() - Date.parse(run.createdAt) < 86_400_000));
       }
       if (values.json) { console.log(JSON.stringify(runs)); return; }
       console.log(runs.length ? runs.map(row).join('\n') : 'no runs');
@@ -229,8 +246,11 @@ async function main(argv: string[]): Promise<void> {
     }
     case 'read': {
       const run = findRun(positionals[0] ?? fail('crew: crew read <run>')) ?? fail('crew: no such run');
+      if (values.json) { console.log(JSON.stringify({ assignment: run.assignment, history: run.assignmentHistory ?? [], settled: run.settled })); return; }
       let result: string | undefined;
-      try { result = readFileSync(resultPath(run.id), 'utf8'); } catch { /* none yet */ }
+      if (values.submission && ![run.assignment, ...(run.assignmentHistory ?? [])].some(a => a?.submissions.some(s => s.ref === values.submission))) fail('crew: no such submission for this run');
+      try { result = readFileSync(values.submission ? submissionPath(run.id, values.submission) : resultPath(run.id), 'utf8'); }
+      catch { if (values.submission) fail(`crew: submission ${values.submission} is unavailable`); }
       console.log(result ?? `no result yet (${run.state}); recent output:\n${tail(run)}`);
       return;
     }

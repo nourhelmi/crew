@@ -38,6 +38,7 @@ function run(overrides: Partial<RunMeta> = {}): RunMeta {
     ...overrides,
   };
   store.writeRun(meta);
+  writeFileSync(store.packetPath(meta.id), 'fixture packet\n');
   return meta;
 }
 
@@ -152,13 +153,13 @@ describe('settlement', () => {
     assert.equal(mail.settle('b-test'), undefined);
     assert.equal(mail.takeUnread('claude-root').length, 1);
   });
-  it('keeps a kept teammate running and re-notifies on a new result', () => {
+  it('keeps a kept teammate idle after DONE, preserves blocked attention and re-notifies on a new result', () => {
     run({ keep: true });
     writeResult('b-test', 'DONE: first');
     mail.settle('b-test');
     writeResult('b-test', 'BLOCKED: second needs a call');
     mail.settle('b-test');
-    assert.equal(store.readRun('b-test')?.state, 'running');
+    assert.equal(store.readRun('b-test')?.state, 'blocked');
     assert.equal(mail.takeUnread('claude-root').length, 2);
   });
   it('settles a blocked child again when it goes on to finish', () => {
@@ -169,7 +170,7 @@ describe('settlement', () => {
     writeResult('b-test', 'DONE: used the ISO table');
     assert.equal(runHook('stop', 'codex', '{"session_id":"t"}', { CREW_HOME: HOME, CREW_RUN: 'b-test' }), '');
     assert.equal(store.readRun('b-test')?.state, 'done');
-    assert.deepEqual(mail.takeUnread('claude-root').map(m => m.text.replace(/^.*: /, '')), ['which currency table?', 'used the ISO table']);
+    assert.deepEqual(mail.takeUnread('claude-root').map(m => m.text.replace(/^.*: /, '').replace(/ \(assignment .*$/, '')), ['which currency table?', 'used the ISO table']);
   });
   it('holds a DONE written while an amendment is still unread, then settles once the child reads it', () => {
     run();
@@ -208,16 +209,16 @@ describe('settlement', () => {
     writeResult('b-test', 'DONE: amendments 1-5, CI green');
     assert.equal(runHook('stop', 'claude', '{"session_id":"t"}', { CREW_HOME: HOME, CREW_RUN: 'b-test' }), '');
     assert.equal(store.readRun('b-test')?.state, 'done');
-    assert.deepEqual(mail.takeUnread('claude-root').map(m => [m.kind, m.text.replace(/^.*: /, '')]), [['settled', 'amendments 1-5, CI green']]);
+    assert.deepEqual(mail.takeUnread('claude-root').map(m => [m.kind, m.text.replace(/^.*: /, '').replace(/ \(assignment .*$/, '')]), [['settled', 'amendments 1-5, CI green']]);
   });
-  it('leaves kept teammates and unsettled drafts alone', () => {
+  it('reopens kept teammates but leaves stopped drafts alone', () => {
     run({ keep: true, state: 'done', settled: { hash: 'h', at: new Date().toISOString(), status: 'DONE' } });
     writeResult('b-test', 'IN PROGRESS: next');
-    assert.equal(mail.reopen(store.readRun('b-test')!).state, 'done');
+    assert.equal(mail.reopen(store.readRun('b-test')!).state, 'running');
     run({ id: 'b-two', name: 'builder-z', state: 'stopped', settled: { hash: 'h', at: new Date().toISOString(), status: 'DONE' } });
     writeResult('b-two', 'IN PROGRESS: next');
     assert.equal(mail.reopen(store.readRun('b-two')!).state, 'stopped', 'a stopped run stays stopped');
-    assert.deepEqual(mail.takeUnread('claude-root'), []);
+    assert.equal(mail.takeUnread('claude-root')[0]?.kind, 'reopened');
   });
   it('reports a dialog-blocked child once per episode', () => {
     run({ launcher: 'herdr', herdr: { pane: 'w1:p2', agent: 'builder-x' } });
@@ -624,25 +625,6 @@ describe('amendments', () => {
     assert.equal(one?.kind, 'amendment');
     assert.match(mail.format(one!), /^\[amendment\] from root \(part of your packet\):\nAmendment 1/);
     assert.throws(() => mail.amend({ mailbox: 'a-peer', host: 'claude' }, 'b-test', 'x'), /only builder-x's parent/);
-  });
-});
-
-describe('capacity', async () => {
-  const { withinCapacity } = await import('../src/spawn.ts');
-  const config = { ...store.loadConfig(), capacity: { claude: { max: 2, overflow: 'gpt-6.1-sol@high' } } };
-  const opus = { host: 'claude' as const, model: 'claude-opus-5-5', effort: 'high' as const, strategy: 'jev' as const };
-
-  it('moves a routed spawn off a host at its cap', () => {
-    assert.deepEqual(withinCapacity(opus, config, undefined, () => 1), opus);
-    const moved = withinCapacity(opus, config, undefined, () => 2);
-    assert.deepEqual({ ...moved, reason: undefined }, { host: 'codex', model: 'gpt-6.1-sol', effort: 'high', strategy: 'overflow', reason: undefined });
-    assert.match(moved.reason ?? '', /claude has 2 live runs \(cap 2\)/);
-    assert.equal(withinCapacity(opus, config, 'max', () => 3).effort, 'max');
-  });
-  it('leaves pins and uncapped hosts alone', () => {
-    assert.deepEqual(withinCapacity({ ...opus, strategy: 'pinned' }, config, undefined, () => 9).host, 'claude');
-    const sol = { host: 'codex' as const, model: 'gpt-6.1-sol', effort: 'high' as const, strategy: 'jev' as const };
-    assert.deepEqual(withinCapacity(sol, config, undefined, () => 9), sol);
   });
 });
 

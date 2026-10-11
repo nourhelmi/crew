@@ -25,7 +25,7 @@ const elapsed = at => {
   return m < 1 ? 'Just now' : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.floor(m/60)}h ago` : `${Math.floor(m/1440)}d ago`;
 };
 const time = at => at && Number.isFinite(Date.parse(at)) ? new Date(at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
-const status = n => n.waitingSince ? 'Needs attention' : ({running:'Running',done:'Result ready',blocked:'Blocked',failed:'Failed',stalled:'Stalled',stopped:'Stopped',untracked:'Root session'}[n.state] || n.state);
+const status = n => n.waitingSince ? 'Needs attention' : ({idle:n.assignment?.status === 'accepted' ? 'Idle · accepted' : n.assignment?.status === 'submitted' ? 'Idle · submitted' : 'Retained idle',running:'Running',done:'Result ready',blocked:'Blocked',failed:'Failed',stalled:'Stalled',stopped:'Stopped',untracked:'Root session'}[n.state] || n.state);
 const attention = n => n.waitingSince || ['blocked','failed','stalled'].includes(n.state);
 const badge = n => `<span class="cw-status ${attention(n) ? 'attention' : n.state === 'running' ? '' : 'waiting'}"><span class="cw-dot"></span>${esc(status(n))}</span>`;
 const host = n => `<span class="cw-host ${n.host==='claude' ? 'claude' : ''}" aria-label="${esc(hostName(n.host))}">${n.host==='claude' ? '✳' : n.host==='codex' ? '›_' : 'o'}</span>`;
@@ -153,7 +153,9 @@ function renderDetail() {
     el('details').innerHTML=warnings+'<p class="cw-source-note">Mail history · reading here does not consume it.</p>'+(detail.messages.length?detail.messages.slice().reverse().map(m=>`<div class="cw-event"><span class="cw-time">${esc(time(m.at))} · ${esc(m.kind)}</span><strong>${esc(m.from)}</strong><p>${esc(m.text)}</p></div>`).join(''):'<div class="cw-empty"><h3>No messages yet</h3><p>Messages received by this agent will appear here.</p></div>');
   } else {
     const value=detail[state.tab];
-    el('details').innerHTML=warnings+(value?`<pre class="cw-document">${esc(value)}</pre>`:`<div class="cw-empty"><h3>${state.tab==='packet'?'No Crew packet':'No result yet'}</h3><p>${state.tab==='packet'?'Root sessions receive their instructions in the host app. Select a Crew member to inspect its packet.':'The agent’s recorded result will appear here when it writes one.'}</p></div>`);
+    const assignments = n?.assignment ? [...(n.assignmentHistory || []), n.assignment] : [];
+    const history = state.tab === 'result' && assignments.length ? `<div class="cw-source-note">${assignments.map(a => `<p>Assignment ${esc(a.id)} · revision ${esc(a.revision)} · ${esc(a.status)}${a.accepted ? ` · accepted by ${esc(a.accepted.by)}` : ''}</p>${a.submissions.map(s => `<p>Submission ${esc(s.ref)}${s.accepted ? ' · accepted' : ''}<br><code>${esc(s.result)}</code></p>`).join('')}`).join('')}</div>` : '';
+    el('details').innerHTML=warnings+history+(value?`<pre class="cw-document">${esc(value)}</pre>`:`<div class="cw-empty"><h3>${state.tab==='packet'?'No Crew packet':'No result yet'}</h3><p>${state.tab==='packet'?'Root sessions receive their instructions in the host app. Select a Crew member to inspect its packet.':'The agent’s recorded result will appear here when it writes one.'}</p></div>`);
   }
 }
 

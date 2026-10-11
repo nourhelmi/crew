@@ -56,6 +56,19 @@ it('projects nested ownership, preserves recorded state, and never exposes launc
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE_TOKEN|secret argument|never send me/);
 });
 
+it('projects retained idle and accepted assignments with immutable historical refs without changing state', () => {
+  const accepted = { submission: 'initial-r0-a', at: '2026-10-05', by: parent };
+  run({ state: 'idle', assignment: { id: 'initial', revision: 0, createdAt: '2026-10-05', status: 'accepted', submission: accepted.submission, accepted,
+    submissions: [{ ref: accepted.submission, hash: 'a', packetHash: 'packet', revision: 0, at: '2026-10-05', status: 'DONE', result: '/immutable/result.md', accepted }] } });
+  run({ id: 'a-blocked', role: 'advisor', state: 'blocked' });
+  const observer = new DashboardObserver(roots); const snapshot = observer.snapshot();
+  assert.equal(snapshot.workstreams[0]!.running, 0);
+  assert.equal(snapshot.workstreams[0]!.attention, 1);
+  assert.equal(snapshot.nodes.find(n => n.id === 'b-worker')!.state, 'idle');
+  assert.equal(snapshot.nodes.find(n => n.id === 'b-worker')!.assignment!.accepted!.submission, accepted.submission);
+  assert.equal(snapshot.nodes.find(n => n.id === 'b-worker')!.assignment!.submissions[0]!.result, '/immutable/result.md');
+});
+
 it('reads a Herdr member from its native transcript without host IPC or mailbox consumption', () => {
   run();
   write(transcript(), message('Actual agent output'));

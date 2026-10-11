@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { activeDescendants, candidate, currentAssignment, packetMail, snapshot, unaccepted } from './assignment.ts';
 import { agentStatus, prompt } from './herdr.ts';
 import { requestResume } from './resume.ts';
 import { pushCodex, registeredSocket } from './codex-mail.ts';
 import { reviewed } from './outcome.ts';
 import { progressLine, readResult } from './result.ts';
-import { appendMail, findRun, hasWaiter, mailDir, newId, packetPath, readJson, readRun, resultPath, runDir, unread, updateRun, withLock, writeJson } from './store.ts';
+import { appendMail, changePacket, findRun, hasWaiter, mailDir, newId, packetPath, readJson, readRun, resultPath, runDir, unread, updateRun, withLock, writeJson } from './store.ts';
 import type { Address, Delivery, Host, Mail, RunMeta } from './types.ts';
 
 export function runAddress(run: RunMeta): Address {
@@ -41,7 +42,7 @@ const label = (from: Mail['from']): string => from.name ?? from.mailbox;
 /** One line that wakes an idle pane; the inbox carries the content. */
 function pointer(mail: Mail): string {
   const who = label(mail.from);
-  const what = mail.kind === 'message' ? `new message from ${who}` : mail.kind === 'amendment' ? `packet amendment from ${who}` : `${who} ${mail.kind}`;
+  const what = mail.kind === 'message' ? `new message from ${who}` : mail.kind === 'assignment' ? `new assignment from ${who}` : mail.kind === 'amendment' ? `packet amendment from ${who}` : `${who} ${mail.kind}`;
   return `[crew] ${what}. Run: crew inbox`;
 }
 
@@ -115,16 +116,47 @@ export function amend(from: Address, runRef: string, text: string): { run: RunMe
   if (run.parent.mailbox !== from.mailbox) throw new Error(`crew: only ${run.name}'s parent can amend its packet; send advice with crew msg`);
   const packet = packetPath(run.id);
   let number = 0;
-  let delivery: Delivery = 'queued';
+  const notice: Mail = { id: newId('m'), at: new Date().toISOString(), kind: 'amendment', from, text: '' };
   const amended = updateRun(run.id, current => {
     if (current.state === 'stopped') throw new Error(`crew: ${current.name} is stopped; spawn a new run for new work`);
-    number = (readFileSync(packet, 'utf8').match(/^## Amendment \d+/gm)?.length ?? 0) + 1;
+    const assignment = currentAssignment(current);
+    number = assignment.revision + 1;
     const hash = readResult(resultPath(run.id))?.hash;
-    appendFileSync(packet, `\n## Amendment ${number} (${new Date().toISOString()})\n\n${text.trim()}\n`);
-    return { ...current, state: 'running', amendment: { number, ...(hash ? { resultHash: hash } : {}) } };
+    notice.text = `Amendment ${number} (appended to ${packet}):\n${text.trim()}`;
+    return changePacket(current, {
+      assignment: { ...unaccepted(assignment), revision: number, status: 'active' },
+      amendment: { number, ...(hash ? { resultHash: hash } : {}) }, notice,
+      packet: `${readFileSync(packet, 'utf8')}\n## Amendment ${number} (${notice.at})\n\n${text.trim()}\n`,
+    });
   }) ?? run;
-  delivery = send(from, runAddress(amended), `Amendment ${number} (appended to ${packet}):\n${text.trim()}`, 'amendment');
-  return { run: amended, number, delivery };
+  return { run: amended, number, delivery: deliver(runAddress(amended), notice) };
+}
+
+/** New outcome, same retained member/host/model. Old packets and result history remain inspectable. */
+export function assign(from: Address, runRef: string, text: string): { run: RunMeta; delivery: Delivery } {
+  const run = findRun(runRef);
+  if (!run) throw new Error(`crew: no run matches "${runRef}"`);
+  if (!text.trim()) throw new Error('crew: empty assignment');
+  const notice: Mail = { id: newId('m'), at: new Date().toISOString(), kind: 'assignment', from, text: '' };
+  const assigned = updateRun(run.id, current => {
+    if (current.parent.mailbox !== from.mailbox) throw new Error(`crew: only ${current.name}'s parent can assign it work`);
+    if (!current.keep || current.state === 'stopped') throw new Error('crew: assign requires a retained member that has not been stopped');
+    const previous = currentAssignment(current);
+    if (previous.status === 'active' || current.state === 'running' || activeDescendants(current.id).length || packetMail(current)) {
+      throw new Error('crew: current work must settle before a new assignment; revise it with crew amend');
+    }
+    const id = newId('task');
+    const assignment = { id, revision: 0, createdAt: notice.at, status: 'active' as const, submissions: [] };
+    const dir = join(runDir(current.id), 'assignments');
+    mkdirSync(dir, { recursive: true });
+    const oldPacket = readFileSync(packetPath(current.id), 'utf8');
+    try { writeFileSync(join(dir, `${previous.id}.md`), oldPacket, { flag: 'wx', mode: 0o600 }); }
+    catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e; }
+    notice.text = `Assignment ${id} (replaced current packet at ${packetPath(current.id)}):\n${text.trim()}`;
+    return changePacket(current, { assignment, assignmentHistory: [...(current.assignmentHistory ?? []), previous], notice,
+      packet: `${text.trim()}\n`, draft: '# Status\nIN PROGRESS: new assignment\n' });
+  })!;
+  return { run: assigned, delivery: deliver(runAddress(assigned), notice) };
 }
 
 const fromRun = (run: RunMeta): Mail['from'] => ({ mailbox: run.id, name: run.name, host: run.route.host });
@@ -135,74 +167,102 @@ function claim(id: string, event: string): boolean {
   catch { return false; }
 }
 
-/** A committed completion notice survives later drafts, amendments and explicit stops. */
+const settlementEvent = (id: string, settled: NonNullable<RunMeta['settled']>): string =>
+  join(runDir(id), `.settled-${settled.ref ?? settled.hash}`);
+
+export function hasPendingSettlement(id: string): boolean {
+  try {
+    return readdirSync(runDir(id)).filter(name => name.startsWith('.settled-')).some(name => {
+      try { const event = readJson<NonNullable<RunMeta['settled']>>(join(runDir(id), name)); return Boolean(event?.notice && !event.notified); }
+      catch { return false; }
+    });
+  } catch { return false; }
+}
+
+/** Scan the durable outbox, including claims left before metadata or replaced by later results. */
 function flushSettlement(id: string): Delivery | undefined {
   const run = readRun(id);
-  if (!run?.settled?.notice || run.settled.notified) return undefined;
-  const delivery = deliver(run.parent, run.settled.notice);
-  const acknowledged = { ...run.settled, notified: true };
-  writeJson(join(runDir(id), `.settled-${run.settled.hash}`), acknowledged);
-  updateRun(id, current => current.settled?.hash === run.settled!.hash ? { ...current, settled: acknowledged } : undefined);
+  if (!run) return undefined;
+  let events: string[] = [];
+  try { events = readdirSync(runDir(id)).filter(name => name.startsWith('.settled-')).map(name => join(runDir(id), name)); } catch { /* absent */ }
+  const pending = new Map<string, NonNullable<RunMeta['settled']>>();
+  for (const file of events) {
+    try {
+      const event = readJson<NonNullable<RunMeta['settled']>>(file);
+      if (event?.notice && !event.notified) pending.set(event.notice.id, event);
+    } catch { /* legacy empty claims */ }
+  }
+  if (run.settled?.notice && !run.settled.notified) pending.set(run.settled.notice.id, run.settled);
+  let delivery: Delivery | undefined;
+  for (const settled of pending.values()) {
+    delivery = deliver(run.parent, settled.notice!);
+    const acknowledged = { ...settled, notified: true };
+    writeJson(settlementEvent(id, settled), acknowledged);
+    updateRun(id, current => current.settled?.notice?.id === settled.notice!.id ? { ...current, settled: acknowledged } : undefined);
+  }
   return delivery;
 }
 
-/** Tell the parent about a (new) terminal result. Idempotent per result content. */
-export function settle(id: string): Delivery | undefined {
+/** Tell the parent about a terminal submission, once per assignment/revision/content. */
+export function settle(id: string, finishTurn = false): Delivery | undefined {
   const pendingDelivery = flushSettlement(id);
-  const status = readResult(resultPath(id));
-  if (!status) return pendingDelivery;
+  const value = candidate(id);
+  if (!value) return pendingDelivery;
+  const { status } = value;
   let fresh: RunMeta | undefined;
   let isNew = false;
-  const event = join(runDir(id), `.settled-${status.hash}`);
   updateRun(id, run => {
-    if (run.state === 'stopped') return undefined;
-    if (run.settled?.hash === status.hash) {
-      if (run.settled.notice && !run.settled.notified) fresh = run;
+    if (run.state === 'stopped' || activeDescendants(id).length || candidate(id)?.text !== value.text) return undefined;
+    let assignment = currentAssignment(run);
+    if (assignment.status !== 'active' && assignment.submissions.find(s => s.ref === assignment.submission)?.hash !== status.hash) {
+      assignment = { ...unaccepted(assignment), revision: assignment.revision + 1, status: 'active' };
+    }
+    const ref = `${assignment.id}-r${assignment.revision}-${status.hash}`;
+    if (run.settled?.ref === ref) {
+      if (finishTurn && !packetMail(run) && run.amendment?.resultHash !== status.hash) return { ...run, state: run.keep && status.verdict === 'done' ? 'idle' : status.verdict };
       return undefined;
     }
-    if (readResult(resultPath(id))?.hash !== status.hash || run.amendment?.resultHash === status.hash
-      || unread(id).mails.some(mail => mail.kind === 'amendment')) return undefined;
+    if (candidate(id)?.text !== value.text || run.amendment?.resultHash === status.hash || packetMail(run)) return undefined;
+    const submission = snapshot(id, assignment, value);
     let settled: NonNullable<RunMeta['settled']>;
+    const event = join(runDir(id), `.settled-${ref}`);
     try {
-      const at = new Date().toISOString();
-      settled = { hash: status.hash, at, status: status.line, notice: {
-        id: `settled-${id}-${status.hash}`, at, kind: 'settled', from: fromRun(run),
-        text: `${run.role} on ${run.route.model}@${run.route.effort}: ${status.line}`, result: resultPath(id),
+      const at = submission.at;
+      settled = { ref, hash: status.hash, at, status: status.line, notice: {
+        id: `settled-${id}-${ref}`, at, kind: 'settled', from: fromRun(run),
+        text: `${run.role} on ${run.route.model}@${run.route.effort}: ${status.line} (assignment ${assignment.id}, submission ${ref}; awaiting parent acceptance)`,
+        result: submission.result,
       } };
-      // The claim IS the outbox: if the process dies before metadata, the next sweep replays it.
+      // The claim IS the outbox, replayed even if metadata is never committed.
       writeFileSync(event, JSON.stringify(settled), { flag: 'wx', mode: 0o600 });
       isNew = true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      try { settled = readJson<NonNullable<RunMeta['settled']>>(event)!; } catch { return undefined; } // legacy empty claim
-      if (!settled?.notice || settled.notified) return undefined;
+      try { settled = readJson<NonNullable<RunMeta['settled']>>(event)!; } catch { return undefined; }
+      if (!settled?.notice) return undefined;
     }
-    fresh = { ...run, state: run.keep ? 'running' : status.verdict, settled };
+    const submitted = assignment.submissions.find(s => s.ref === ref) ?? { ...submission, at: settled.at };
+    fresh = { ...run, state: run.keep && status.verdict === 'done' ? 'idle' : status.verdict, settled,
+      assignment: { ...unaccepted(assignment), status: 'submitted', submission: ref,
+        submissions: assignment.submissions.some(s => s.ref === ref) ? assignment.submissions : [...assignment.submissions, submitted] } };
     return fresh;
   });
-  if (!fresh?.settled?.notice) return pendingDelivery;
-  const delivery = deliver(fresh.parent, fresh.settled.notice);
-  // Append-once delivery survives a crash after inbox append but before either acknowledgement.
-  const acknowledged = { ...fresh.settled, notified: true };
-  writeJson(event, acknowledged);
-  updateRun(id, current => current.settled?.hash === status.hash ? { ...current, settled: acknowledged } : undefined);
-  // No external router command may stand between the durable notice and its parent.
-  if (isNew) { try { reviewed(fresh, status); } catch { /* routing evidence is best effort */ } }
+  const delivery = flushSettlement(id) ?? pendingDelivery;
+  if (isNew && fresh) { try { reviewed(fresh, status); } catch { /* routing evidence is best effort */ } }
   return delivery;
 }
 
-/**
- * A settled run whose result is back to IN PROGRESS took more work after settling (usually an
- * amendment). It is running again, so waits, Stop-hook nudges and capacity cover it; its parent
- * hears once per settled result. Returns the run as it now stands.
- */
+/** A new draft after submission invalidates acceptance and becomes active work, also for kept members. */
 export function reopen(run: RunMeta): RunMeta {
-  if (!run.settled || run.keep || !['done', 'failed', 'blocked'].includes(run.state)) return run;
+  if (!run.settled || run.state === 'stopped' || (run.state === 'running' && run.assignment?.status === 'active')) return run;
   const line = progressLine(resultPath(run.id));
   if (!line) return run;
-  const fresh = updateRun(run.id, current => current.state === run.state && current.settled?.hash === run.settled?.hash
-    && progressLine(resultPath(run.id)) ? { ...current, state: 'running' } : undefined) ?? run;
-  if (fresh.state === 'running' && claim(run.id, `reopened-${run.settled.hash}`)) {
+  const fresh = updateRun(run.id, current => {
+    if (current.state !== run.state || current.settled?.hash !== run.settled?.hash || !progressLine(resultPath(run.id))) return undefined;
+    const assignment = currentAssignment(current);
+    return { ...current, state: 'running', assignment: { ...unaccepted(assignment), revision: assignment.revision + 1, status: 'active' } };
+  }) ?? run;
+  if (fresh.state === 'running' && claim(run.id, `reopened-${run.settled.ref ?? run.settled.hash}`)) {
     deliver(fresh.parent, {
       id: newId('m'), at: new Date().toISOString(), kind: 'reopened', from: fromRun(fresh),
       text: `is working again after settling ${run.settled.status}: ${line}`,
@@ -266,6 +326,6 @@ export function takeUnread(mailbox: string): Mail[] {
 export function format(mail: Mail): string {
   const who = label(mail.from);
   if (mail.kind === 'message') return `[message] from ${who}:\n${mail.text}`;
-  if (mail.kind === 'amendment') return `[amendment] from ${who} (part of your packet):\n${mail.text}`;
+  if (mail.kind === 'amendment' || mail.kind === 'assignment') return `[${mail.kind}] from ${who} (part of your packet):\n${mail.text}`;
   return `[${mail.kind}] ${who}: ${mail.text}${mail.result ? `\n  result: ${mail.result}` : ''}`;
 }

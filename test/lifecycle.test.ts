@@ -68,6 +68,7 @@ if (args[0] === 'worker' || args[0] === 'exec' || args[0] === 'run') {
   const inbox = path.join(p.CREW_HOME,'mail','codex-' + thread,'inbox.jsonl');
   log({queue:thread, visible:fs.existsSync(inbox)?fs.readFileSync(inbox,'utf8'):''});
 } else if (args[0] === '--bg') {
+  if(p.SHIM_DELAY_LAUNCH)Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,Number(p.SHIM_DELAY_LAUNCH));
   const previous=fs.existsSync(p.SHIM_SESSIONS)?fs.readFileSync(p.SHIM_SESSIONS,'utf8').trim().split('\\n').filter(Boolean).map(l=>JSON.parse(l)).findLast(r=>r.sessionId===args[args.indexOf('--resume')+1]):undefined;
   const settings = args.includes('--settings') ? JSON.parse(args[args.indexOf('--settings')+1]) : {env:previous.settingsEnv};
   const session = args.includes('--resume') && !p.SHIM_COPY_RESUME ? args[args.indexOf('--resume')+1] : require('node:crypto').randomUUID();
@@ -391,17 +392,38 @@ if(a[0]==='pane'&&a[1]==='split'){
     assert.equal(store.listRuns().length, 1);
   });
 
-  it('reserves capacity across simultaneous routed launches', async () => {
+  it('ignores legacy capacity across simultaneous routed launches', async () => {
     const router = join(dir, 'router');
     writeFileSync(router, `#!${process.execPath}\nprocess.stdin.resume(); process.stdin.on('end',()=>setTimeout(()=>console.log(JSON.stringify({selected:{model:'sonnet',thinking:'low'},strategy:'jev'})),200));\n`, { mode: 0o755 });
     writeFileSync(env.CREW_CONFIG!, JSON.stringify({ router: { enabled: true, command: router }, capacity: { claude: { max: 1, overflow: 'gpt-6.1-sol@low' } }, trust: { roots: [] } }));
     const args = ['spawn', '--role', 'builder', '--cwd', dir, '--json', '--', 'WAIT_FOR_MAIL'];
     const runs: RunMeta[] = (await Promise.all([cli(args), cli(args)])).map(out => JSON.parse(out));
-    assert.deepEqual(runs.map(r => r.route.host).sort(), ['claude', 'codex']);
-    assert.equal(runs.find(r => r.route.host === 'codex')?.route.strategy, 'overflow');
+    assert.deepEqual(runs.map(r => r.route.host).sort(), ['claude', 'claude']);
+    assert.ok(runs.every(r => r.route.strategy === 'jev'));
   });
 
   for (const model of ['gpt-6.1-sol@low', 'sonnet@low', 'opencode/provider/fixture']) {
+    it(`accepts and assigns a new outcome to a retained ${model} member with prior evidence intact`, async () => {
+      const run: RunMeta = JSON.parse(await cli(['spawn', '--role', 'advisor', '--keep', '--model', model, '--cwd', dir, '--json', '--', 'initial outcome'],
+        { SHIM_HOST: model.startsWith('opencode/') ? 'opencode' : 'codex' }));
+      await until(() => store.readRun(run.id)?.state === 'idle' && !existsSync(join(store.runDir(run.id), '.fixture-active')));
+      const first = store.readRun(run.id)!;
+      const submission = first.assignment!.submission!;
+      const oldResult = await cli(['read', run.id, '--submission', submission]);
+      await cli(['accept', run.id, submission]);
+      const packet = join(dir, 'next-outcome.md'); writeFileSync(packet, 'a genuinely new outcome');
+      await cli(['assign', run.id, '--packet', packet], { SHIM_HOST: first.route.host });
+      await until(() => store.readRun(run.id)?.state === 'idle' && store.readRun(run.id)?.assignment!.id !== first.assignment!.id);
+      const second = store.readRun(run.id)!;
+      assert.equal(second.sessionId, first.sessionId);
+      assert.equal(second.assignmentHistory![0]!.accepted!.submission, submission);
+      assert.equal(await cli(['read', run.id, '--submission', submission]), oldResult);
+      assert.match(await cli(['read', run.id]), /genuinely new outcome/);
+      await assert.rejects(cli(['accept', run.id, submission]), /stale/);
+      await cli(['accept', run.id, second.assignment!.submission!]);
+      await cli(['stop', run.id]);
+    });
+
     it(`resumes a retained ${model} session for a new amendment without changing ownership`, async () => {
       const run: RunMeta = JSON.parse(await cli(['spawn', '--role', 'advisor', '--keep', '--model', model, '--cwd', dir, '--json', '--', 'initial assignment'],
         { SHIM_HOST: model.startsWith('opencode/') ? 'opencode' : 'codex' }));
@@ -412,7 +434,7 @@ if(a[0]==='pane'&&a[1]==='split'){
       assert.match(await cli(['amend', run.id, 'a second assignment'], { SHIM_HOST: first.route.host }), /headless-resume$/);
       await until(() => /resumed/.test(store.readRun(run.id)?.settled?.status ?? ''));
       assert.equal(store.readRun(run.id)?.sessionId, first.sessionId);
-      assert.equal(store.readRun(run.id)?.state, 'running');
+      assert.equal(store.readRun(run.id)?.state, 'idle');
       assert.equal(store.unread(run.id).mails.length, 0);
       assert.match(readFileSync(store.resultPath(run.id), 'utf8'), /a second assignment/);
       assert.equal(hostCalls().filter(c => c.worker).length, 2);
@@ -479,7 +501,7 @@ if(a[0]==='pane'&&a[1]==='split'){
     const original = fixtureRun(); result('DONE: crash recovery');
     mail.settle(original.id);
     const settled = store.readRun(original.id)!.settled!;
-    const event = join(store.runDir(original.id), `.settled-${settled.hash}`);
+    const event = join(store.runDir(original.id), `.settled-${settled.ref ?? settled.hash}`);
     // A claim/outbox was durable, but the process died before metadata/delivery acknowledgement.
     store.writeJson(event, { ...settled, notified: false });
     store.writeRun(original);
@@ -491,6 +513,22 @@ if(a[0]==='pane'&&a[1]==='split'){
     mail.settle(original.id);
     assert.equal(mail.takeUnread(parent.mailbox).length, 0);
     assert.equal(store.readRun(original.id)?.settled?.notified, true);
+  });
+
+  it('retries pending idle member mail after a first resume attempt finds its host busy', async () => {
+    const run: RunMeta = JSON.parse(await cli(['spawn', '--role', 'advisor', '--keep', '--model', 'gpt-6.1-sol@low', '--cwd', dir, '--json', '--', 'initial assignment']));
+    await until(() => store.readRun(run.id)?.state === 'idle' && !store.alive(store.readRun(run.id)?.pid));
+    const exited = store.readRun(run.id)!.pid!;
+    store.updateRun(run.id, current => ({ ...current, pid: process.pid })); // positive busy probe, same idle assignment
+    await cli(['msg', run.id, 'idle retry advice']);
+    await sleep(200);
+    assert.equal(store.unread(run.id).mails.length, 1);
+    assert.equal(store.readRun(run.id)!.turn, undefined);
+    store.updateRun(run.id, current => ({ ...current, pid: exited }));
+    await watch(parent.mailbox, 20, 1500);
+    await until(() => store.unread(run.id).mails.length === 0 && store.readRun(run.id)?.state === 'idle');
+    assert.equal(hostCalls().filter(call => call.worker).length, 2);
+    await cli(['stop', run.id]);
   });
 
   it('reports a resumed worker that exits with unread mail instead of retrying forever', async () => {
@@ -591,7 +629,7 @@ if(a[0]==='pane'&&a[1]==='split'){
     const settled = store.readRun(run.id)!.settled!;
     rmSync(store.mailDir(parent.mailbox), { recursive: true, force: true }); // crash before parent append
     store.updateRun(run.id, current => ({ ...current, settled: { ...settled, notified: false } }));
-    store.writeJson(join(store.runDir(run.id), `.settled-${settled.hash}`), { ...settled, notified: false });
+    store.writeJson(join(store.runDir(run.id), `.settled-${settled.ref ?? settled.hash}`), { ...settled, notified: false });
     result('IN PROGRESS: subsequent assignment');
     assert.equal(mail.settle(run.id), 'queued');
     assert.equal(mail.takeUnread(parent.mailbox)[0]?.text.includes('committed phase'), true);
@@ -644,6 +682,24 @@ if(a[0]==='pane'&&a[1]==='split'){
     assert.match(firstConfig, /\.advisor/);
     assert.match(firstConfig, /sandbox_mode = "workspace-write"/);
     assert.match(firstConfig, /network_access = true\n\[unrelated\]\nkeep = true/);
+  });
+
+  it('closes a late host launch when retirement races its recorded reservation', async () => {
+    const launching = cli(['spawn', '--role', 'advisor', '--keep', '--model', 'sonnet@low', '--cwd', dir, '--json', '--', 'initial outcome'], { SHIM_DELAY_LAUNCH: '500' });
+    await until(() => store.listRuns().length === 1);
+    const reserved = store.listRuns()[0]!;
+    await cli(['stop', reserved.id]);
+    const launched: RunMeta = JSON.parse(await launching);
+    assert.equal(launched.state, 'stopped');
+    assert.ok(hostCalls().some(call => call.stop === launched.bgId));
+    assert.equal(store.readRun(launched.id)!.state, 'stopped');
+  });
+
+  it('refuses new descendants after their retained parent is retired', async () => {
+    const run = fixtureRun({ role: 'advisor', keep: true, state: 'stopped', sessionId: 'root', threadId: 'root' });
+    await assert.rejects(cli(['spawn', '--role', 'builder', '--model', 'gpt-6.1-sol@low', '--cwd', dir, '--json', '--', 'new child'], { CREW_RUN: run.id }), /retired parent/);
+    assert.equal(store.listRuns().length, 1);
+    assert.equal(hostCalls().filter(call => call.worker).length, 0);
   });
 
   it('marks a missing executable launch failed without an unhandled spawn error', async () => {

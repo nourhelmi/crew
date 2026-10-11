@@ -223,7 +223,9 @@ crew spawn --role advisor --keep --name billing --packet p.md # a CoS teammate
 crew wait                       # until a child settles, stalls or needs a dialog, or mail arrives
 crew dashboard                  # local browser view of workstreams and live agent output
 crew msg billing "…"            # follow-up or answer (advice)
-crew amend billing "…"          # scope, authority, done-when or a new assignment: appended to its packet
+crew amend billing "…"          # scope, authority or done-when on the current assignment
+crew accept billing <ref>       # exact submitted outcome; grade stays routing quality
+crew assign billing --packet next.md # distinct outcome, same retained member and preserved history
 crew grade api bad "missed the migration"                      # your verdict; routing learns from it
 crew inbox · crew ls · crew read api · crew stop api
 crew route --role builder --task "…"                           # where would this go?
@@ -301,6 +303,16 @@ agent-router keeps a per-model, per-role track record that fades with age and sh
 evidence builds up (`agent-router outcomes stats` shows it). The advisor skill does both steps as
 part of normal review.
 
+Retained members use `idle` after DONE; BLOCKED and FAIL keep their attention states.
+A submitted result is not accepted automatically. `crew ls --json` and `crew read <run> --json`
+show the current assignment, immutable submission refs and prior assignment history.
+`crew accept <run> <submission-ref>` is parent-only and rejects stale refs after amendments,
+drafts or replacement results. `crew grade` remains routing quality. Use `crew assign <run>
+--packet <file>` for a distinct outcome and `crew amend` for a revision of the current outcome.
+`crew read <run> --submission <ref>` reads historical submitted Markdown, including after
+a later assignment replaces `result.md`. Idle retained names remain reserved until `crew stop`.
+
+
 ## Configuration
 
 `~/.config/crew/config.json`:
@@ -310,8 +322,7 @@ part of normal review.
   "defaults": { "advisor": "claude-opus-5-5@high", "builder": "gpt-6.1-sol@high", "checker": "gpt-6.1-sol@xhigh" },
   "router":   { "enabled": true, "command": "agent-router", "timeoutMs": 90000 },
   "args":     { "claude": ["--permission-mode", "auto"], "codex": [] },
-  "trust":    { "roots": [] },
-  "capacity": { "claude": { "max": 2, "overflow": "gpt-6.1-sol@high" } }
+  "trust":    { "roots": [] }
 }
 ```
 
@@ -319,10 +330,8 @@ part of normal review.
   falls back to your roster's first launchable model for it, then to the built-in default.
 - **`args`** are appended to every child of that host. Codex children otherwise inherit your Codex
   config (approvals and sandbox). crew never adds bypass flags; put them here if you want them.
-- **`capacity`** (opt-in, empty by default) caps live crew runs per host. Every session on a host
-  shares one subscription's rate limits, and a router that picks one spawn at a time can't see four
-  Opus lanes burning the same 5-hour window. A routed spawn past the cap goes to the `overflow`
-  model; a `--model` pin stays put, with a warning.
+Legacy `capacity` config is ignored without changing the user's config. Routing selects models;
+crew imposes no team-size or capacity limit.
 
 ## Dashboard
 
@@ -381,7 +390,7 @@ result file can appear before Crew settles the run. The observer never changes e
 - **Native subagents:** a Claude Code subagent can only run opus, sonnet, haiku or fable, and it
   inherits its parent's model by default. So inside a crew run, crew's hook refuses native
   subagents except the read-only `Explore` and `Plan`, and work goes through `crew spawn`, where it
-  is routed, capped and graded. In the first sweep, Opus child advisors had run 60 native makers,
+  is routed and graded. In the first sweep, Opus child advisors had run 60 native makers,
   every one on Opus. Codex children, whose native agents inherit Sol, are asked but not forced.
   To keep Claude's native subagents off Opus everywhere, set `CLAUDE_CODE_SUBAGENT_MODEL=sonnet` and
   `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` in the `env` of `~/.claude/settings.json`. The variable
@@ -454,7 +463,7 @@ Unix socket IPC still requires the host's permitted outside-sandbox path or user
 
 Nothing beyond the subscriptions you already have. crew makes no model calls of its own; the
 optional router makes one small Jev call per routed spawn. Mind your rate-limit windows when you
-run many lanes at once, which is what `capacity` is for.
+run many lanes at once.
 </details>
 
 <details>

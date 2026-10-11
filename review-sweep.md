@@ -35,7 +35,7 @@ Claude background resumption needs special handling: `--bg` owns its UUID and ig
 | Stop resurrects a run or leaves exec descendants alive | Stop wins over settlement/resume; signal owned process group | Stop/late-result and descendant checks |
 | Pane closure is acknowledged before it succeeds | Parent watcher confirms lookup/close and retries transport failure | Close-retry and real CLI fixture journey |
 | Explicit stop hides host errors | Preserve stop intent and report unconfirmed host stop; allow retry | Herdr and Claude stop-failure fixtures |
-| Concurrent routed spawns reuse name/capacity | Reserve after asynchronous routing under spawn lock | Same-name and capacity fan-out fixtures |
+| Concurrent routed spawns reuse a retained name | Reserve after asynchronous routing under spawn lock | Same-name and retained-idle fixtures |
 | Missing executable creates unhandled async error | Await spawn/error; mark failure; close log descriptor | Missing executable fixture |
 | OpenCode sees foreign run mail or never retries wake | Bind mailbox to session ownership; retry rejected prompt | Plugin fixtures |
 | Keepalive fires every sweep | Space by last successful nudge | Cold transcript fixture |

@@ -1,9 +1,9 @@
 import { randomBytes } from 'node:crypto';
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { loadRoster, rosterDefaults } from './roster.ts';
-import type { Config, Mail, RunMeta } from './types.ts';
+import type { Assignment, Config, Mail, RunMeta } from './types.ts';
 
 export const home = (): string => process.env.CREW_HOME || join(homedir(), '.crew');
 export const configPath = (): string => process.env.CREW_CONFIG || join(homedir(), '.config', 'crew', 'config.json');
@@ -13,7 +13,6 @@ const DEFAULT_CONFIG: Config = {
   router: { enabled: true, command: 'agent-router', timeoutMs: 90_000 },
   args: { claude: ['--permission-mode', 'auto'], codex: [], opencode: [] },
   trust: { roots: [] },
-  capacity: {},
 };
 
 export function loadConfig(): Config {
@@ -27,7 +26,6 @@ export function loadConfig(): Config {
     router: { ...DEFAULT_CONFIG.router, ...user.router },
     args: { ...DEFAULT_CONFIG.args, ...user.args },
     trust: { roots: (user.trust?.roots ?? DEFAULT_CONFIG.trust.roots).map(root => root.replace(/^~(?=\/|$)/, homedir())) },
-    capacity: { ...DEFAULT_CONFIG.capacity, ...user.capacity },
   };
 }
 
@@ -60,12 +58,53 @@ export const briefPath = (id: string): string => join(runDir(id), 'brief.md');
 export const readRun = (id: string): RunMeta | undefined => readJson<RunMeta>(join(runDir(id), 'meta.json'));
 export const writeRun = (meta: RunMeta): void => writeJson(join(runDir(meta.id), 'meta.json'), meta);
 
+/** Packet changes span metadata, packet and inbox. One intent under the existing run mutex
+ * recovers a crashed assign/amend before another metadata mutation can observe completion. */
+export interface PacketChange {
+  assignment: Assignment;
+  assignmentHistory?: Assignment[];
+  amendment?: NonNullable<RunMeta['amendment']>;
+  packet: string;
+  notice: Mail;
+  draft?: string;
+}
+const packetChangePath = (id: string): string => join(runDir(id), 'packet-change.json');
+
+function applyPacketChange(meta: RunMeta, change: PacketChange): RunMeta {
+  writeFileSync(packetPath(meta.id), change.packet, { mode: 0o600 });
+  if (change.draft !== undefined) writeFileSync(resultPath(meta.id), change.draft, { mode: 0o600 });
+  let delivered = false;
+  try { delivered = readFileSync(join(mailDir(meta.id), 'inbox.jsonl'), 'utf8').split('\n').some(line => {
+    try { return JSON.parse(line).id === change.notice.id; } catch { return false; }
+  }); } catch { /* first mail */ }
+  if (!delivered) appendMail(meta.id, change.notice);
+  const { amendment: _, ...rest } = meta;
+  return { ...rest, state: 'running', assignment: change.assignment,
+    ...(change.assignmentHistory ? { assignmentHistory: change.assignmentHistory } : {}),
+    ...(change.amendment ? { amendment: change.amendment } : {}) };
+}
+
+/** Call only within updateRun's patch; updateRun removes the intent after the metadata commit. */
+export function changePacket(meta: RunMeta, change: PacketChange): RunMeta {
+  writeJson(packetChangePath(meta.id), change);
+  return applyPacketChange(meta, change);
+}
+
 export function updateRun(id: string, patch: (meta: RunMeta) => RunMeta | undefined): RunMeta | undefined {
   return withLock(`run-${id}`, () => {
-    const meta = readRun(id);
+    let meta = readRun(id);
     if (!meta) return undefined;
+    const intent = readJson<PacketChange>(packetChangePath(id));
+    if (intent) {
+      meta = applyPacketChange(meta, intent);
+      writeRun(meta);
+      unlinkSync(packetChangePath(id));
+    }
     const next = patch(meta);
-    if (next) writeRun(next);
+    if (next) {
+      writeRun(next);
+      try { unlinkSync(packetChangePath(id)); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; }
+    }
     return next ?? meta;
   });
 }
@@ -78,12 +117,15 @@ export function listRuns(): RunMeta[] {
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
+/** Retained identities reserve their names until explicitly retired. */
+export const retained = (run: RunMeta): boolean => run.state !== 'stopped' && (run.keep || run.state === 'running');
+
 /** Resolve a run by id or by name; the newest live run wins a name clash. */
 export function findRun(ref: string): RunMeta | undefined {
   const direct = readRun(ref);
   if (direct) return direct;
   const named = listRuns().filter(run => run.name === ref);
-  return named.findLast(run => run.state === 'running') ?? named.at(-1);
+  return named.findLast(retained) ?? named.at(-1);
 }
 
 // ---- mail ------------------------------------------------------------------

@@ -12,7 +12,7 @@ export interface Route {
   host: Host;
   model: string;
   effort: Effort;
-  strategy: 'pinned' | 'jev' | 'fallback' | 'default' | 'overflow';
+  strategy: 'pinned' | 'jev' | 'fallback' | 'default';
   reason?: string;
 }
 
@@ -33,7 +33,34 @@ export interface Address {
   herdrSession?: string;
 }
 
-export type RunState = 'running' | 'done' | 'blocked' | 'failed' | 'stalled' | 'stopped';
+export type RunState = 'idle' | 'running' | 'done' | 'blocked' | 'failed' | 'stalled' | 'stopped';
+
+export interface Acceptance {
+  submission: string;
+  at: string;
+  by: string;
+}
+
+export interface Submission {
+  ref: string;
+  hash: string;
+  packetHash: string;
+  revision: number;
+  at: string;
+  status: string;
+  result: string;
+  accepted?: Acceptance;
+}
+
+export interface Assignment {
+  id: string;
+  revision: number;
+  createdAt: string;
+  status: 'active' | 'submitted' | 'accepted';
+  submission?: string;
+  submissions: Submission[];
+  accepted?: Acceptance;
+}
 
 export interface RunMeta {
   id: string;
@@ -60,7 +87,9 @@ export interface RunMeta {
   turn?: number;
   /** Last mail batch for which a headless turn actually launched; failed turns need new mail or explicit resume. */
   resumedMail?: string;
-  settled?: { hash: string; at: string; status: string; notice?: Mail; notified?: boolean };
+  assignment?: Assignment;
+  assignmentHistory?: Assignment[];
+  settled?: { ref?: string; hash: string; at: string; status: string; notice?: Mail; notified?: boolean };
   /** An amendment requires a fresh result, even after the child consumes its inbox. */
   amendment?: { number: number; resultHash?: string };
   /** Set while herdr reports the child blocked on a dialog. */
@@ -71,7 +100,7 @@ export interface RunMeta {
   grade?: { good: boolean; at: string; note?: string };
 }
 
-export type MailKind = 'message' | 'amendment' | 'settled' | 'reopened' | 'stalled' | 'waiting';
+export type MailKind = 'message' | 'assignment' | 'amendment' | 'settled' | 'reopened' | 'stalled' | 'waiting';
 
 export interface Mail {
   id: string;
@@ -95,9 +124,4 @@ export interface Config {
   args: Record<Host, string[]>;
   /** Opt-in: every checkout under these roots is trusted by both CLIs (no folder-trust dialogs). */
   trust: { roots: string[] };
-  /**
-   * Opt-in per-host cap on live crew runs. They share one subscription's rate limits, which a
-   * point-in-time router can't see being burned. A routed spawn over the cap goes to `overflow`.
-   */
-  capacity: Partial<Record<Host, { max: number; overflow: string }>>;
 }

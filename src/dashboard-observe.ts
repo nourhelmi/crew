@@ -22,6 +22,8 @@ export interface DashboardNode {
   status?: string;
   waitingSince?: string;
   checks?: string;
+  assignment?: RunMeta['assignment'];
+  assignmentHistory?: RunMeta['assignmentHistory'];
 }
 
 export interface Workstream {
@@ -67,7 +69,7 @@ const MAX_TEXT = 24_000;
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const SAFE_ID = /^[a-zA-Z0-9_-]+$/;
 const HOSTS = new Set(['codex', 'claude', 'opencode']);
-const STATES = new Set(['running', 'done', 'blocked', 'failed', 'stalled', 'stopped']);
+const STATES = new Set(['idle', 'running', 'done', 'blocked', 'failed', 'stalled', 'stopped']);
 const record = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
 const string = (v: unknown): string => typeof v === 'string' ? v : '';
 const limited = (s: string): string => s.length > MAX_TEXT ? `${s.slice(0, MAX_TEXT)}\n[Output shortened]` : s;
@@ -161,11 +163,21 @@ export function parseOutput(text: string, source: DashboardDetail['source']): Ou
   return events;
 }
 
+function validAssignment(value: unknown): boolean {
+  const a = record(value);
+  return SAFE_ID.test(string(a.id)) && Number.isInteger(a.revision) && Number(a.revision) >= 0
+    && ['active', 'submitted', 'accepted'].includes(string(a.status)) && Array.isArray(a.submissions)
+    && a.submissions.every(s => { const submission = record(s); return SAFE_ID.test(string(submission.ref))
+      && typeof submission.result === 'string' && typeof submission.hash === 'string'; });
+}
+
 function validRun(value: Record<string, unknown>, id: string): value is Record<string, unknown> & RunMeta {
   return value.id === id && typeof value.name === 'string' && ['advisor', 'builder', 'checker'].includes(string(value.role))
     && typeof value.cwd === 'string' && typeof value.createdAt === 'string' && Number.isFinite(Date.parse(value.createdAt))
     && STATES.has(string(value.state)) && HOSTS.has(string(record(value.route).host)) && typeof record(value.route).model === 'string'
-    && HOSTS.has(string(record(value.parent).host)) && SAFE_ID.test(string(record(value.parent).mailbox));
+    && HOSTS.has(string(record(value.parent).host)) && SAFE_ID.test(string(record(value.parent).mailbox))
+    && (value.assignment === undefined || validAssignment(value.assignment))
+    && (value.assignmentHistory === undefined || (Array.isArray(value.assignmentHistory) && value.assignmentHistory.every(validAssignment)));
 }
 
 /** A projection only: no mailbox cursors, settlement, processes, host RPCs, or writes. */
@@ -234,6 +246,8 @@ export class DashboardObserver {
         model: run.route.model, effort: run.route.effort, cwd: run.cwd, state: run.state, launcher: run.launcher,
         ...(run.threadId || run.sessionId ? { sessionId: run.threadId || run.sessionId } : {}),
         createdAt: run.createdAt, updatedAt: updated.get(run.id)!,
+        ...(run.assignment ? { assignment: run.assignment } : {}),
+        ...(run.assignmentHistory ? { assignmentHistory: run.assignmentHistory } : {}),
         ...(run.settled?.status ? { status: run.settled.status } : {}),
         ...(run.waitingSince ? { waitingSince: run.waitingSince } : {}), ...(run.checks ? { checks: run.checks } : {}),
       });

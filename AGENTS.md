@@ -30,7 +30,7 @@
   and the Stop hook. Runs also hear mail through their PostToolUse hooks.
 - Settlement follows the packet, not the first DONE: a terminal status settles only once the child
   has read every amendment, and a settled run whose result returns to IN PROGRESS is reopened
-  (`reopen` in `src/mail.ts`), so waits, nudges and capacity cover it again.
+  (`reopen` in `src/mail.ts`), so waits and nudges cover it again.
 - Hooks run in every Claude/Codex session on the machine: per-tool-call hooks must exit in the
   shell guard (`$CREW_RUN` unset) before starting node.
 - Codex: hook trust is keyed on the command string, so hook commands must stay version-stable
@@ -43,6 +43,6 @@
   own idle sessions from their crew inbox (the TUI serves no port, so nothing outside can push).
 - Work goes through `crew spawn`. Inside a crew run, the Claude PreToolUse hook refuses native
   subagents other than read-only Explore/Plan: they inherit the run's model and skip routing,
-  capacity and grading.
+  grading.
 - Routing evidence is only a reviewed verdict: a `--checks` checker's `As found:` line or the
   parent's `crew grade`. A run's own DONE never is. Tests point `router.command` at a fake router.
