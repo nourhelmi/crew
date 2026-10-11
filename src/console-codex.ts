@@ -2,7 +2,6 @@ import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:c
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { createInterface } from 'node:readline';
 import type { ConsoleAnswer, ConsoleRequest, ConsoleState, CommandState } from './console-types.ts';
 import type { ConsoleHostAdapter, HostEvent, HostOptions } from './console-host.ts';
 
@@ -15,6 +14,8 @@ const string = (value: unknown): string => typeof value === 'string' ? value : '
 const array = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
 const message = (error: unknown): string => error instanceof Error ? error.message : String(error);
 const TIMEOUT = 30_000;
+const MAX_TEXT = 24_000, MAX_HISTORY = 10_000, MAX_EVENTS = 1000;
+const MAX_FRAME_BYTES = 4 * 1024 * 1024, MAX_EARLY_BYTES = 4 * 1024 * 1024;
 
 class Rejected extends Error {}
 class TransportError extends Error {
@@ -28,6 +29,7 @@ interface PendingAnswer {
   itemId: string;
   request: ConsoleRequest;
   blocking: boolean;
+  bytes: number;
   results?: Map<string, unknown>;
   replying?: { resolve(): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> };
 }
@@ -84,14 +86,19 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
   const pending = new Map<number, PendingRpc>();
   const requests = new Map<string, PendingAnswer>();
   const requestKeys = new Map<RpcId, string>();
+  let requestBytes = 0;
   const commands = new Map<string, Promise<CommandState>>();
   const events = new Map<string, HostEvent>();
   const terminalTurns = new Set<string>();
   const early: ObjectValue[] = [];
+  let earlyBytes = 0;
   const turnWaiters = new Map<string, Set<() => void>>();
   const instance = randomUUID();
   let requestSequence = 0;
-  const setState = (next: ConsoleState, error?: string) => { state = next; callbacks.state(next, error); };
+  const setState = (next: ConsoleState, error?: string) => {
+    if (dead && next !== 'disconnected' && next !== 'closed') return;
+    state = next; callbacks.state(next, error);
+  };
   const identity = () => callbacks.identity({ sessionId, ...(turnId ? { turnId } : {}) });
   const currentState = () => setState([...requests.values()].some(request => request.blocking) ? 'waiting' : turnId ? 'running' : 'idle');
   const serialize = <T>(action: () => Promise<T>): Promise<T> => {
@@ -104,6 +111,7 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
     if (!request) return;
     requests.delete(id);
     requestKeys.delete(request.rpcId);
+    requestBytes -= request.bytes;
     if (request.replying) { clearTimeout(request.replying.timer); request.replying.reject(new TransportError(error, true)); }
     callbacks.cancelRequest(id);
   }
@@ -113,6 +121,7 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
     for (const call of pending.values()) { clearTimeout(call.timer); call.reject(new TransportError(error, true)); }
     pending.clear();
     for (const id of requests.keys()) cancel(id, error);
+    events.clear(); early.length = 0; earlyBytes = 0; terminalTurns.clear();
     for (const waiters of turnWaiters.values()) for (const wake of waiters) wake();
     turnWaiters.clear();
     if (!closing) setState('disconnected', error);
@@ -140,7 +149,9 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
     });
   }
   function emit(key: string, event: HostEvent): void {
-    const keyed = { ...event, key };
+    if (dead || closing) return;
+    if (!events.has(key) && events.size >= MAX_EVENTS) { disconnect('crew: Codex turn event limit exceeded'); return; }
+    const keyed = { ...event, text: event.text.slice(-MAX_TEXT), ...(event.kind === 'tool' ? { title: event.title.slice(0, 2000) } : {}), key };
     events.set(key, keyed);
     callbacks.event(keyed);
   }
@@ -179,12 +190,13 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
     }
     currentState();
   }
-  function serverRequest(id: RpcId, method: string, params: ObjectValue): void {
+  function serverRequest(id: RpcId, method: string, params: ObjectValue, bytes: number): void {
     if (params.threadId !== sessionId || (params.turnId && params.turnId !== turnId) || !turnId) {
       void write({ id, error: { code: -32600, message: 'Request does not belong to the current turn' } }).catch(() => {});
       return;
     }
     if (requestKeys.has(id)) return;
+    if (requests.size >= MAX_EVENTS || requestBytes + bytes > MAX_FRAME_BYTES) { disconnect('crew: Codex pending request limit exceeded'); return; }
     // Per-connection, per-occurrence IDs prevent old browser answers being applied
     // after resume or when a provider reuses an RPC ID in a later prompt.
     const key = `codex:${instance}:${++requestSequence}:${typeof id}:${id}`;
@@ -223,7 +235,8 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
     } else {
       void write({ id, error: { code: -32601, message: `Unsupported console request: ${method}` } }).catch(() => {}); return;
     }
-    requests.set(key, { rpcId: id, turnId, itemId: string(params.itemId), request, blocking: request.kind === 'approval' || params.isBlocking !== false, ...(request.kind === 'approval' ? { results } : {}) });
+    requests.set(key, { rpcId: id, turnId, itemId: string(params.itemId), request, bytes, blocking: request.kind === 'approval' || params.isBlocking !== false, ...(request.kind === 'approval' ? { results } : {}) });
+    requestBytes += bytes;
     requestKeys.set(id, key);
     callbacks.request(request); currentState();
   }
@@ -235,6 +248,7 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
       const turn = object(params.turn), id = string(turn.id);
       if (!id) return;
       terminalTurns.add(id);
+      if (terminalTurns.size > MAX_HISTORY) terminalTurns.delete(terminalTurns.values().next().value!);
       for (const wake of turnWaiters.get(id) || []) wake();
       turnWaiters.delete(id);
       if (turnId !== id) return;
@@ -281,6 +295,7 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
     }
   }
   function receive(line: string): void {
+    if (dead || closing) return;
     try {
       const value = JSON.parse(line) as unknown, wire = object(value);
       if (!Object.keys(wire).length) throw new Error('invalid message');
@@ -293,9 +308,16 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
         else call.reject(new TransportError('crew: invalid Codex response; delivery is unknown', true));
         return;
       }
-      if (!ready) { early.push(wire); return; }
-      const method = string(wire.method), params = object(wire.params);
-      if (typeof wire.id === 'number' || typeof wire.id === 'string') serverRequest(wire.id, method, params);
+      const method = string(wire.method);
+      if (method.startsWith('item/reasoning/') || method.startsWith('rawResponse')
+        || ((method === 'item/started' || method === 'item/completed') && object(object(wire.params).item).type === 'reasoning')) return;
+      if (!ready) {
+        earlyBytes += Buffer.byteLength(line);
+        if (early.length >= MAX_HISTORY || earlyBytes > MAX_EARLY_BYTES) { disconnect('crew: Codex startup event buffer limit exceeded'); return; }
+        early.push(wire); return;
+      }
+      const params = object(wire.params);
+      if (typeof wire.id === 'number' || typeof wire.id === 'string') serverRequest(wire.id, method, params, Buffer.byteLength(line));
       else notification(method, params);
     } catch { disconnect('crew: invalid Codex app-server message'); }
   }
@@ -318,9 +340,23 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
       child.stdin.on('error', () => disconnect('crew: Codex app-server stdin closed'));
       // stderr may include credentials and host diagnostics. Drain it without publishing it.
       child.stderr.resume();
-      const lines = createInterface({ input: child.stdout });
-      lines.on('line', receive);
-      lines.on('close', () => disconnect('crew: Codex app-server stdout closed'));
+      // readline buffers an unbounded unterminated line. Enforce the frame bound
+      // before JSON parsing; setEncoding also handles UTF-8 split across chunks.
+      let buffer = '';
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (chunk: string) => {
+        if (dead || closing) return;
+        buffer += chunk;
+        for (let newline = buffer.indexOf('\n'); newline >= 0; newline = buffer.indexOf('\n')) {
+          const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
+          if (Buffer.byteLength(line) > MAX_FRAME_BYTES) { buffer = ''; disconnect('crew: Codex app-server frame limit exceeded'); return; }
+          if (line.trim()) receive(line);
+          if (dead) { buffer = ''; return; }
+        }
+        if (Buffer.byteLength(buffer) > MAX_FRAME_BYTES) { buffer = ''; disconnect('crew: Codex app-server frame limit exceeded'); }
+      });
+      child.stdout.on('end', () => { buffer = ''; disconnect('crew: Codex app-server stdout closed'); });
+      child.stdout.on('error', () => { buffer = ''; disconnect('crew: Codex app-server stdout failed'); });
       await rpc('initialize', { clientInfo: { name: 'crew_console', title: 'Crew console', version: '0.13.0' }, capabilities: { experimentalApi: true } });
       await write({ method: 'initialized' });
       let roots: string[] = [];
@@ -345,6 +381,7 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
       turnId = active ? string(active.id) || undefined : undefined;
       identity(); // Supervisor persists this synchronously before any input is accepted.
       ready = true; currentState();
+      earlyBytes = 0;
       for (const wire of early.splice(0)) receive(JSON.stringify(wire));
       if (dead) throw new Error('crew: Codex disconnected during startup');
     } catch (error) {
@@ -382,6 +419,12 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
     send(text, requestId, interrupt = false) {
       const existing = commands.get(requestId); if (existing) return existing;
       callbacks.command(requestId, 'queued');
+      // Retain accepted IDs for idempotency. Refuse new IDs at the bound rather
+      // than evicting an old ID and accidentally replaying its input later.
+      if (commands.size >= MAX_HISTORY) {
+        callbacks.command(requestId, 'failed', 'crew: Codex command history limit reached; resume with a new connection');
+        return Promise.resolve('failed');
+      }
       const result = serialize(async (): Promise<CommandState> => {
         let inputAttempted = false;
         try {

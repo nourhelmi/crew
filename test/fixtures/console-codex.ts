@@ -15,7 +15,18 @@ const event = (method: string, params: object = {}) => notify(method, { threadId
 const finish = (status = 'completed', items: object[] = []) => { event('turn/completed', { turn: turn(turnId, status, items) }); turnId = ''; };
 function publish(text: string): void {
   const settings = scenario();
-  if (text === 'events') {
+  if (text === 'long-stream') {
+    event('item/started', { item: { id: 'cmd', type: 'commandExecution', command: 'long output', status: 'inProgress' } });
+    event('item/commandExecution/outputDelta', { itemId: 'cmd', delta: 'old'.repeat(10_000) });
+    event('item/commandExecution/outputDelta', { itemId: 'cmd', delta: 'new'.repeat(10_000) });
+    event('item/agentMessage/delta', { itemId: 'answer', delta: 'old'.repeat(10_000) });
+    event('item/agentMessage/delta', { itemId: 'answer', delta: 'new'.repeat(10_000) });
+    finish();
+  } else if (text === 'event-flood') {
+    for (let i = 0; i < 1001; i++) event('item/agentMessage/delta', { itemId: `answer-${i}`, delta: 'x' });
+    finish();
+  } else if (text === 'oversized-frame') process.stdout.write('x'.repeat(4 * 1024 * 1024 + 1));
+  else if (text === 'events') {
     event('item/started', { item: { id: 'answer', type: 'agentMessage', text: '' } });
     event('item/agentMessage/delta', { itemId: 'answer', delta: 'hel' });
     event('item/agentMessage/delta', { itemId: 'answer', delta: 'lo' });
@@ -54,7 +65,10 @@ input.on('line', line => {
     return;
   }
   const response = (result: object) => send({ id: wire.id, result });
-  if (wire.method === 'initialize') { response({ userAgent: 'fake' }); return; }
+  if (wire.method === 'initialize') {
+    if (settings.startupFlood) for (let i = 0; i < 129; i++) notify('warning', { threadId: 'before-thread', message: 'x'.repeat(32_768) });
+    response({ userAgent: 'fake' }); return;
+  }
   if (wire.method === 'initialized') return;
   if (wire.method === 'config/read') { response({ config: { sandbox_workspace_write: { writable_roots: settings.configuredRoots || [], network_access: true } }, origins: {}, layers: null }); return; }
   if (wire.method === 'thread/start' || wire.method === 'thread/resume') {

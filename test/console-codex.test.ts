@@ -155,6 +155,42 @@ test('assistant/tool deltas upsert by stable key and filter all reasoning and fo
   assert.deepEqual(f.identities.at(-1), { sessionId: 'thread-new' });
 });
 
+test('stream accumulators retain only the bounded latest output with stable event keys', async t => {
+  const f = fixture(t); await f.host.start();
+  await f.host.send('long-stream', 'long'); await until(() => f.states.at(-1)?.state === 'idle');
+  assert.ok(f.events.length >= 5);
+  assert.ok(f.events.every(event => event.text.length <= 24_000));
+  const assistant = f.events.filter(event => event.kind === 'assistant');
+  const tool = f.events.filter((event): event is Extract<HostEvent, { kind: 'tool' }> => event.kind === 'tool');
+  assert.equal(assistant.at(-1)?.text, 'new'.repeat(8000));
+  assert.equal(tool.at(-1)?.text, 'new'.repeat(8000));
+  assert.equal(new Set(assistant.map(event => event.key)).size, 1);
+  assert.equal(new Set(tool.map(event => event.key)).size, 1);
+});
+
+test('unterminated oversized provider frames and startup notification floods disconnect within bounds', async t => {
+  const f = fixture(t); await f.host.start(); await f.host.send('oversized-frame', 'oversized');
+  await until(() => f.states.at(-1)?.state === 'disconnected');
+  assert.match(f.states.at(-1)?.error || '', /frame limit/);
+  const flooded = fixture(t, {}, { startupFlood: true });
+  await assert.rejects(flooded.host.start(), /buffer limit/);
+  assert.equal(flooded.wires().some(wire => wire.method === 'thread/start'), false);
+});
+
+test('per-turn event overflow stays disconnected and command cache limits preserve idempotency', async t => {
+  const f = fixture(t); await f.host.start(); await f.host.send('event-flood', 'flood');
+  await until(() => f.states.at(-1)?.state === 'disconnected');
+  assert.match(f.states.at(-1)?.error || '', /turn event limit/);
+  assert.equal(f.events.length, 1000);
+  const cache = fixture(t);
+  await Promise.all(Array.from({ length: 10_000 }, (_, i) => cache.host.send('offline', `request-${i}`)));
+  assert.equal(await cache.host.send('over limit', 'extra'), 'failed');
+  assert.match(cache.commands.at(-1)?.error || '', /history limit/);
+  const count = cache.commands.length;
+  assert.equal(await cache.host.send('repeated', 'request-0'), 'failed');
+  assert.equal(cache.commands.length, count);
+});
+
 test('active sends steer the exact turn and repeated client request ids never duplicate input', async t => {
   const f = fixture(t); await f.host.start();
   const first = await Promise.all([f.host.send('first', 'one'), f.host.send('second', 'two')]);
