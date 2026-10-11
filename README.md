@@ -363,8 +363,10 @@ supported approvals and questions appear alongside the team's delegation tree.
 
 Delivery states distinguish queued, delivered, failed and uncertain input. A lost connection
 does not mean the provider never received a message; ambiguous delivery is not automatically
-replayed. Retrying a request uses its existing ID. Access defaults to the host's configuration;
-workspace or full access is an explicit launch choice.
+replayed. Retrying a request uses its existing ID. Access defaults to the host's configuration.
+Codex also supports an explicit workspace sandbox. Claude's permission modes do not provide
+equivalent filesystem confinement, so its workspace option is unavailable. Full access is
+an explicit choice on either host.
 
 Each console root has its own supervisor and provider connection. Closing the browser or
 restarting the web listener leaves those sessions running; reconnecting restores their
@@ -463,10 +465,10 @@ Verified end to end on Claude Code 2.1 and Codex 0.157:
 <details>
 <summary><b>Why not just use subagents?</b></summary>
 
-crew does, for same-host makers: Claude's `Agent` tool and Codex's `spawn_agent`, each with an
-`advisor-maker` agent that can't stop before writing its result. Subagents can't cross to the other
-CLI, though, and they aren't teammates you can see, message or keep for a whole workstream. crew
-covers everything else.
+Native subagents are useful for read-only lookups. Makers, checkers and advisor outcome owners
+go through `crew spawn` so routing, durable results, retained assignments and cross-host mail
+work consistently. An advisor can also implement and verify work directly when delegation
+would add overhead.
 </details>
 
 <details>
@@ -479,8 +481,9 @@ spawn uses the role defaults in your config, and `--model` always pins.
 <details>
 <summary><b>Does crew bypass permissions or sandboxes?</b></summary>
 
-Never. It adds no bypass flags; children inherit your approvals and sandbox. The only things it
-pre-approves are outside-sandbox requests for its own `crew` command in Codex, and the git dir,
+Normal launches inherit the configured permissions. The console's **Full access** option is
+an explicit bypass choice; it is never the default. The installer pre-approves outside-sandbox
+requests for its own `crew` command in Codex, and the git dir,
 `~/.crew` and `~/.advisor` as writable roots for children. The installer grants shared state and
 checkpoint directories to roots too. An approval rule does not unsandbox an ordinary tool call;
 Unix socket IPC still requires the host's permitted outside-sandbox path or user-selected Full access.
