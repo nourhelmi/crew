@@ -7,7 +7,7 @@ const dir = process.env.CLAUDE_FIXTURE_DIR!;
 const mode = process.env.CLAUDE_FIXTURE_MODE;
 const args = process.argv.slice(2);
 const sessionId = args.find(a => a.startsWith('--session-id=') || a.startsWith('--resume='))!.split('=')[1]!;
-writeFileSync(join(dir, 'launched.json'), JSON.stringify({ args, cwd: process.cwd(), sessionId,
+writeFileSync(join(dir, 'launched.json'), JSON.stringify({ args, cwd: process.cwd(), sessionId, pid: process.pid,
   crewRun: process.env.CREW_RUN ?? null, config: process.env.CLAUDE_CONFIG_DIR, home: process.env.CREW_HOME,
   stateEvents: process.env.CLAUDE_CODE_SDK_READS_SESSION_STATE, inheritedAuth: process.env.ANTHROPIC_API_KEY ?? null }));
 const output = (value: unknown) => process.stdout.write(JSON.stringify(value) + '\n');

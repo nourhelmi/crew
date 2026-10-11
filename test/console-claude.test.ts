@@ -9,6 +9,7 @@ import type { TestContext } from 'node:test';
 import { createClaudeHost } from '../src/console-claude.ts';
 import type { HostEvent, HostIdentity, HostOptions } from '../src/console-host.ts';
 import type { ConsoleRequest, ConsoleState, CommandState } from '../src/console-types.ts';
+import { processExists, processMatches } from '../src/console-process.ts';
 
 type Json = Record<string, any>;
 async function until(predicate: () => boolean): Promise<void> {
@@ -45,7 +46,11 @@ function fixture(t: TestContext, overrides: { mode?: string; identity?: HostIden
     }, ...(overrides.identity ? { identity: overrides.identity } : {}), ...(overrides.args ? { args: overrides.args } : {}),
   };
   const host = createClaudeHost(options);
-  t.after(async () => { await host.close(); rmSync(dir, { recursive: true, force: true }); });
+  t.after(async () => {
+    await host.close();
+    for (const identity of identities) if (identity.provider) assert.equal(processExists(identity.provider.pid), false);
+    rmSync(dir, { recursive: true, force: true });
+  });
   const input = (): Json[] => readFileSync(join(dir, 'input.ndjson'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
   const users = () => input().filter(value => value.type === 'user');
   const emit = (value: Json) => appendFileSync(join(dir, 'output.ndjson'), JSON.stringify(value) + '\n');
@@ -62,6 +67,8 @@ it('starts without sending a prompt, persists UUID identity, and resumes exactly
   assert.equal(f.users().length, 0);
   assert.equal(f.states.at(-1)?.state, 'idle');
   const launch = f.launched();
+  const provider = f.identities.find(identity => identity.provider)?.provider;
+  assert.ok(provider); assert.equal(provider.pid, launch.pid); assert.equal(provider.group, true); assert.ok(processMatches(provider));
   assert.equal(launch.sessionId, id); assert.equal(launch.crewRun, null);
   assert.equal(launch.inheritedAuth, 'fixture-only'); assert.equal(launch.stateEvents, '1');
   assert.equal(launch.cwd, realpathSync(f.dir));
