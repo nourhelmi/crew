@@ -14,6 +14,7 @@ import type { LiveOptions } from './live.ts';
 import { scenarios } from './scenarios.ts';
 import type { Report } from './scenarios.ts';
 import { unexecuted } from './score.ts';
+import { setupIsolatedHookTrust } from './hook-trust.ts';
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -212,6 +213,9 @@ export async function runConsoleLive(options: LiveOptions): Promise<{ report: Re
     execFileSync('git', ['-C', workspace, '-c', 'user.name=Eval', '-c', 'user.email=eval@invalid', 'commit', '-qm', 'synthetic inputs'], { env });
     try { execFileSync(join(base, 'bin/codex'), ['login', 'status'], { env, timeout: 10_000, stdio: 'pipe' }); }
     catch { throw new Error('Isolated Codex login status failed; explicit auth unavailable or unsupported. No provider run executed.'); }
+    const hookTrust = await setupIsolatedHookTrust({ base, workspace, env, codexBin: codex,
+      vettedHooksFile: join(checkout, 'codex/hooks.json'), signal: controller.signal });
+    privateEvidence['hooks-trust.json'] = JSON.stringify(hookTrust, null, 2);
     const server = spawn(join(base, 'bin/crew'), ['console', '--port', '0'], { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     serverPid = server.pid;
     let serverError: Error | undefined;
@@ -254,7 +258,7 @@ export async function runConsoleLive(options: LiveOptions): Promise<{ report: Re
     capture.files = captured.files; capture.receipts = captured.receipts; capture.runs = captured.runs;
     providerEvidence();
     report = scoreConsoleCapture(capture, options.model, Date.now() - startedAt);
-    report.evidencePaths.push('contracts.json', 'console-server.log');
+    report.evidencePaths.push('contracts.json', 'console-server.log', 'hooks-trust.json');
   } catch (error) {
     recoverOwnedLaunch();
     const cause = controller.signal.aborted ? controller.signal.reason : error;

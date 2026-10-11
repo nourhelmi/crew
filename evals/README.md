@@ -135,6 +135,25 @@ Codex stdio app-server in isolated homes. This adapter currently covers only
 `advisor-tiny-repair`; its default case is that repair. CLI defaults and coverage
 remain unchanged.
 
+Console setup uses Codex 0.160.1's `hooks/list` and `config/batchWrite` protocol,
+without an app-server hook-trust bypass flag. A separate owned stdio setup server
+initializes without starting a thread or model turn. Every listed hook must match
+this checkout's vetted `codex/hooks.json` bytes and exact source path, event,
+command, matcher, timeout and async fields. Only those keys/current hashes are
+written under `hooks.state` in the isolated `CODEX_HOME/config.toml`; a second list
+must show every same hook enabled/trusted. Missing, foreign, changed or disabled
+hooks block setup. No global configuration or product adapter trust is changed.
+
+`setupIsolatedHookTrust` from `evals/hook-trust.ts` is reusable by an owned private
+harness. Pass `{base, workspace, env, codexBin, vettedHooksFile, signal?}` with a
+fully isolated environment, canonical `base/home` and `base/codex` directories,
+a canonical workspace below `base`, and this imported checkout's explicit
+`codex/hooks.json` path as `vettedHooksFile`. The copied file must be a regular
+byte-exact copy. The helper closes its setup server before returning reviewed
+before/after metadata; the console runner retains it as `hooks-trust.json`.
+Fake RPC regression tests establish these validation and cleanup mechanics;
+root-owned live calls establish installed-provider behavior.
+
 ```sh
 npm run eval:live -- \
   --surface console-api \

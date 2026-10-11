@@ -43,17 +43,26 @@ if(argv[0]==='--version'){console.log('codex synthetic-only');process.exit(0);}
 if(!argv.includes('app-server')||argv.at(-1)!=='stdio://')process.exit(8);
 if((fs.statSync(path.join(process.env.CODEX_HOME,'auth.json')).mode&0o777)!==0o600)process.exit(9);
 const thread='synthetic-provider-thread',mode=${JSON.stringify(mode)};
-fs.writeFileSync(${JSON.stringify(join(dir, 'locator.json'))},JSON.stringify({home:process.env.HOME,codexHome:process.env.CODEX_HOME,base:process.env.EVAL_BASE,pid:process.pid}));
+fs.appendFileSync(${JSON.stringify(join(dir, 'server-pids.jsonl'))},String(process.pid)+'\\n');
 const log=value=>fs.appendFileSync(${JSON.stringify(join(dir, 'provider.jsonl'))},JSON.stringify(value)+'\\n');
 const send=value=>process.stdout.write(JSON.stringify(value)+'\\n');
 const notify=(method,params)=>send({method,params});
-let count=0;
+let count=0,trusted=false;
 process.on('SIGTERM',()=>{if(mode!=='hang')process.exit(0);});
 rl.createInterface({input:process.stdin}).on('line',line=>{
  const m=JSON.parse(line);if(!m.id)return;log({method:m.method,params:m.params});
  if(m.method==='initialize'){send({id:m.id,result:{userAgent:'synthetic-only'}});return;}
+ if(m.method==='hooks/list'){
+  const sourcePath=path.join(process.env.CODEX_HOME,'hooks.json');const groups=JSON.parse(fs.readFileSync(sourcePath,'utf8')).hooks;
+  const hooks=Object.entries(groups).flatMap(([event,entries])=>entries.flatMap(group=>group.hooks.map((hook,index)=>({key:event+'-'+index,eventName:event[0].toLowerCase()+event.slice(1),handlerType:hook.type,command:hook.command,matcher:group.matcher??null,timeoutSec:hook.timeout,async:hook.async??false,sourcePath,source:'user',pluginId:null,isManaged:false,currentHash:'synthetic-hash-'+event,enabled:trusted,trustStatus:trusted?'trusted':'untrusted'}))));
+  send({id:m.id,result:{data:[{cwd:process.cwd(),hooks,errors:[],warnings:[]}]}});return;
+ }
+ if(m.method==='config/batchWrite'){fs.writeFileSync(m.params.filePath,JSON.stringify(m.params.edits[0].value));trusted=true;send({id:m.id,result:{}});return;}
  if(m.method==='config/read'){send({id:m.id,result:{config:{sandbox_workspace_write:{writable_roots:[process.env.EVAL_BASE],network_access:true}}}});return;}
- if(m.method==='thread/start'||m.method==='thread/resume'){send({id:m.id,result:{thread:{id:thread,turns:[],status:{type:'idle'}}}});return;}
+ if(m.method==='thread/start'||m.method==='thread/resume'){
+  fs.writeFileSync(${JSON.stringify(join(dir, 'locator.json'))},JSON.stringify({home:process.env.HOME,codexHome:process.env.CODEX_HOME,base:process.env.EVAL_BASE,pid:process.pid}));
+  send({id:m.id,result:{thread:{id:thread,turns:[],status:{type:'idle'}}}});return;
+ }
  if(m.method==='turn/start'){
   const turnId='turn-'+(++count);send({id:m.id,result:{turn:{id:turnId,status:'inProgress'}}});
   notify('turn/started',{threadId:thread,turn:{id:turnId,status:'inProgress'}});
@@ -90,6 +99,9 @@ describe('actual console HTTP runner with a credential-free fake provider', () =
       assert.equal(capture.streams.some((s: { connection: number }) => s.connection === 1), true);
       assert.equal(capture.streams.some((s: { connection: number }) => s.connection === 2), true);
       assert.ok(capture.receipts.some((r: { args: string[] }) => r.args.includes('app-server')));
+      const trust = JSON.parse(readFileSync(join(directory, 'hooks-trust.json'), 'utf8'));
+      assert.equal(trust.after.length, 5);
+      assert.ok(trust.after.every((h: { enabled: boolean; trustStatus: string }) => h.enabled && h.trustStatus === 'trusted'));
       const inspect = (path: string): void => {
         for (const entry of readdirSync(path, { withFileTypes: true })) {
           const file = join(path, entry.name);
@@ -101,6 +113,9 @@ describe('actual console HTTP runner with a credential-free fake provider', () =
       const { home, codexHome, base, pid } = JSON.parse(readFileSync(join(dir, 'locator.json'), 'utf8'));
       for (const path of [home, codexHome, base]) assert.equal(existsSync(path), false, path);
       assert.throws(() => process.kill(pid, 0), /ESRCH/);
+      for (const serverPid of readFileSync(join(dir, 'server-pids.jsonl'), 'utf8').trim().split('\n').map(Number)) {
+        assert.throws(() => process.kill(serverPid, 0), /ESRCH/);
+      }
       const cleanup = JSON.parse(readFileSync(join(directory, 'cleanup.json'), 'utf8'));
       assert.equal(cleanup.closeReceipt.command.state, 'delivered');
       for (const pid of [cleanup.serverPid, ...cleanup.supervisorGroups]) assert.throws(() => process.kill(pid, 0), /ESRCH/);
