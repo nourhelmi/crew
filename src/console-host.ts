@@ -1,8 +1,9 @@
 import type { ConsoleAnswer, ConsoleCapabilities, ConsoleEvent, ConsoleLaunch, ConsoleRequest, ConsoleState, CommandState } from './console-types.ts';
+import type { OwnedProcess } from './console-process.ts';
 
 /** Private provider seam. The supervisor owns persistence; adapters own provider pipes. */
 export type HostEvent = ConsoleEvent extends infer E ? E extends ConsoleEvent ? Omit<E, 'id' | 'sequence' | 'at'> & { key?: string } : never : never;
-export interface HostIdentity { sessionId: string; turnId?: string }
+export interface HostIdentity { sessionId: string; turnId?: string; provider?: OwnedProcess }
 export interface HostCallbacks {
   identity(identity: HostIdentity): void;
   state(state: ConsoleState, error?: string): void;

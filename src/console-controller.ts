@@ -52,7 +52,7 @@ const requestId = (value: unknown): string => {
   if (typeof value !== 'string' || !SAFE_CONSOLE_ID.test(value)) throw new ConsoleError('requestId must be a stable safe identifier (1–128 characters).');
   return value;
 };
-function launchInput(value: unknown, providers: ConsoleProvider[]): ConsoleLaunch {
+function launchInput(value: unknown, providers: ConsoleProvider[], prior?: ConsoleLaunch): ConsoleLaunch {
   const v = object(value); only(v, ['requestId', 'title', 'cwd', 'mode', 'host', 'model', 'effort', 'access', 'prompt']);
   const id = requestId(v.requestId); const prompt = text(v.prompt, 'Prompt');
   if (v.host !== 'codex' && v.host !== 'claude') throw new ConsoleError('Choose Codex or Claude Code.');
@@ -63,21 +63,21 @@ function launchInput(value: unknown, providers: ConsoleProvider[]): ConsoleLaunc
   if (!isAbsolute(cwd)) throw new ConsoleError('Project directory must be absolute.');
   let project: string;
   try { project = realpathSync(cwd); accessSync(project, constants.R_OK | constants.X_OK); }
-  catch { throw new ConsoleError('Project directory is not available.'); }
-  if (!directoryExists(project)) throw new ConsoleError('Project directory must be a directory.');
+  catch { if (prior?.cwd === cwd) project = cwd; else throw new ConsoleError('Project directory is not available.'); }
+  if (!prior && !directoryExists(project)) throw new ConsoleError('Project directory must be a directory.');
   // A real directory, not a command or arbitrary provider argument.
   const provider = providers.find(p => p.id === v.host);
-  if (!provider?.available) throw new ConsoleError(provider?.reason ?? 'Provider is unavailable.', 409, 'PROVIDER_UNAVAILABLE');
-  if (v.host === 'claude' && access === 'workspace') throw new ConsoleError('Claude CLI cannot enforce general workspace filesystem confinement. Choose host default or explicit full access.', 409, 'UNSUPPORTED_ACCESS');
+  if (!prior && !provider?.available) throw new ConsoleError(provider?.reason ?? 'Provider is unavailable.', 409, 'PROVIDER_UNAVAILABLE');
+  if (!prior && v.host === 'claude' && access === 'workspace') throw new ConsoleError('Claude CLI cannot enforce general workspace filesystem confinement. Choose host default or explicit full access.', 409, 'UNSUPPORTED_ACCESS');
   let model: string | undefined;
   if (v.model !== undefined) {
     model = text(v.model, 'Model', 160);
-    if (!provider.models.some(m => m.id === model)) throw new ConsoleError('Choose a configured provider model.');
+    if (!prior && !provider!.models.some(m => m.id === model)) throw new ConsoleError('Choose a configured provider model.');
   }
   let effort: string | undefined;
   if (v.effort !== undefined) {
     effort = text(v.effort, 'Effort', 16);
-    if (!model || !provider.models.find(m => m.id === model)?.efforts?.includes(effort)) throw new ConsoleError('Choose a supported effort for the selected model.');
+    if (!prior && (!model || !provider!.models.find(m => m.id === model)?.efforts?.includes(effort))) throw new ConsoleError('Choose a supported effort for the selected model.');
   }
   return { requestId: id, cwd: project, host: v.host, mode: v.mode, prompt, access,
     ...(v.title !== undefined ? { title: text(v.title, 'Title', 160) } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
@@ -136,8 +136,10 @@ export class ConsoleController {
   detail(id: string, before?: string) { return consoleDetail(id, before, this.root); }
   update(id?: string): ConsoleUpdate { return { sessions: consoleSessions(this.root), detail: id ? this.detail(id) ?? null : null }; }
   async launch(value: unknown): Promise<ConsoleMutation> {
-    const launch = launchInput(value, this.providers());
-    const id = `s-${createHash('sha256').update(launch.requestId).digest('hex').slice(0, 24)}`;
+    const incomingId = requestId(object(value).requestId);
+    const id = `s-${createHash('sha256').update(incomingId).digest('hex').slice(0, 24)}`;
+    const prior = readMeta(id, this.root);
+    const launch = launchInput(value, prior ? [] : this.providers(), prior?.launch);
     return await withLockAsync(`console-launch-${createHash('sha256').update(this.root + id).digest('hex')}`, async () => {
       const intent: ConsoleIntent = { kind: 'launch', payload: launch };
       if (readMeta(id, this.root)) {

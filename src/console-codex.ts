@@ -4,6 +4,8 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { ConsoleAnswer, ConsoleRequest, ConsoleState, CommandState } from './console-types.ts';
 import type { ConsoleHostAdapter, HostEvent, HostOptions } from './console-host.ts';
+import { recordProcess } from './console-process.ts';
+import type { OwnedProcess } from './console-process.ts';
 
 // Wire shapes verified against `codex app-server generate-ts --experimental` (0.160.1).
 // Keep the small consumed subset here; generated bindings are not a runtime dependency.
@@ -79,6 +81,7 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
   const callbacks = options.callbacks;
   let child: ChildProcessWithoutNullStreams | undefined;
   let sessionId = '', turnId: string | undefined;
+  let provider: OwnedProcess | undefined;
   let dead = false, closing = false, ready = false, nextId = 0;
   let startPromise: Promise<void> | undefined, closePromise: Promise<void> | undefined, stopPromise: Promise<void> | undefined;
   let sequence = Promise.resolve();
@@ -99,7 +102,7 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
     if (dead && next !== 'disconnected' && next !== 'closed') return;
     state = next; callbacks.state(next, error);
   };
-  const identity = () => callbacks.identity({ sessionId, ...(turnId ? { turnId } : {}) });
+  const identity = () => callbacks.identity({ sessionId, ...(turnId ? { turnId } : {}), ...(provider ? { provider } : {}) });
   const currentState = () => setState([...requests.values()].some(request => request.blocking) ? 'waiting' : turnId ? 'running' : 'idle');
   const serialize = <T>(action: () => Promise<T>): Promise<T> => {
     const result = sequence.then(action);
@@ -359,6 +362,7 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
       child.stdout.on('error', () => { buffer = ''; disconnect('crew: Codex app-server stdout failed'); });
       await rpc('initialize', { clientInfo: { name: 'crew_console', title: 'Crew console', version: '0.13.0' }, capabilities: { experimentalApi: true } });
       await write({ method: 'initialized' });
+      provider = recordProcess(child.pid!, false);
       let roots: string[] = [];
       if (access === 'workspace' || configured.roots.length) {
         const effective = object(object(await rpc('config/read', { cwd: options.launch.cwd, includeLayers: false })).config);

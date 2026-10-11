@@ -231,3 +231,46 @@ test('failed team retirement is explicit, retryable and never reopens a delibera
     assert.equal(retry.session.state, 'closed'); assert.equal(retry.command.state, 'delivered');
   } finally { await f.cleanup(); }
 });
+
+test('supervisor SIGKILL recovery stops its proven surviving provider group before exact-session resume', async () => {
+  const f = await fixture();
+  const { processExists, terminateOwnedProcess } = await import('../src/console-process.ts');
+  const handles: import('../src/console-process.ts').OwnedProcess[] = [];
+  try {
+    process.env.CONSOLE_FIXTURE_ORPHAN = '1';
+    const result = await f.controller.launch(f.launch('hold')); const id = result.session.id;
+    const original = readMeta(id, f.root)!.identity!; handles.push(original.provider!);
+    assert.ok(original.provider); assert.ok(processExists(original.provider.pid));
+    const child = f.children[0]!; const exited = once(child, 'exit'); child.kill('SIGKILL'); await exited;
+    assert.ok(processExists(original.provider.pid), 'provider deliberately survives supervisor SIGKILL');
+    const meta = readMeta(id, f.root)!; meta.heartbeat = Date.now() - 20_000; writeJson(metaPath(id, f.root), meta);
+    const view = readView(id, f.root)!; view.session.createdAt = new Date(Date.now() - 20_000).toISOString(); writeJson(viewPath(id, f.root), view);
+    const resumed = await f.controller.action(id, { requestId: 'safe-recover', action: 'resume', revision: view.session.revision });
+    assert.equal(resumed.command.state, 'delivered');
+    const replacement = readMeta(id, f.root)!.identity!; handles.push(replacement.provider!);
+    assert.equal(replacement.sessionId, original.sessionId);
+    assert.notEqual(replacement.provider!.pid, original.provider.pid);
+    assert.equal(processExists(original.provider.pid), false);
+    assert.equal(f.calls(id).filter(c => c.method === 'start').length, 2);
+  } finally { for (const handle of handles) if (handle) await terminateOwnedProcess(handle); await f.cleanup(); }
+});
+
+test('orphan ownership mismatch refuses a second provider process and never signals the unrelated live PID', async () => {
+  const f = await fixture();
+  const { processExists, terminateOwnedProcess } = await import('../src/console-process.ts');
+  let owned: import('../src/console-process.ts').OwnedProcess | undefined;
+  try {
+    process.env.CONSOLE_FIXTURE_ORPHAN = '1';
+    const result = await f.controller.launch(f.launch('hold')); const id = result.session.id;
+    owned = readMeta(id, f.root)!.identity!.provider!;
+    const child = f.children[0]!; const exited = once(child, 'exit'); child.kill('SIGKILL'); await exited;
+    const meta = readMeta(id, f.root)!;
+    meta.heartbeat = Date.now() - 20_000; meta.identity!.provider = { ...owned, fingerprint: 'not-the-recorded-process' }; writeJson(metaPath(id, f.root), meta);
+    const view = readView(id, f.root)!; view.session.createdAt = new Date(Date.now() - 20_000).toISOString(); writeJson(viewPath(id, f.root), view);
+    const refused = await f.controller.action(id, { requestId: 'unsafe-recover', action: 'resume', revision: view.session.revision });
+    assert.equal(refused.command.state, 'uncertain'); assert.match(refused.command.error!, /ownership changed/);
+    assert.equal(f.calls(id).filter(c => c.method === 'start').length, 1);
+    assert.ok(processExists(owned.pid));
+    assert.equal(f.controller.detail(id)!.session.state, 'disconnected');
+  } finally { if (owned) await terminateOwnedProcess(owned); await f.cleanup(); }
+});

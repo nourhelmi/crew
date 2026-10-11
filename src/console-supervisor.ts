@@ -9,6 +9,7 @@ import type { ConsoleHostAdapter, HostCallbacks, HostEvent, HostFactory } from '
 import type { ConsoleAnswer, ConsoleCommand, ConsoleEvent, ConsoleState } from './console-types.ts';
 import { home, mailDir, readJson, unread, withLock, writeJson } from './store.ts';
 import { retireRoot } from './retire.ts';
+import { terminateOwnedProcess } from './console-process.ts';
 
 /** One detached owner owns every provider pipe and durable view write. HTTP listeners own none. */
 export class ConsoleSupervisor {
@@ -99,6 +100,8 @@ export class ConsoleSupervisor {
     this.persist();
   }
   private finish(receipt: ConsoleReceipt, state: ConsoleCommand['state'], error?: string): void {
+    const live = readReceipt(this.id, receipt.requestId, this.root)?.command;
+    error ??= live?.state === state ? live.error : undefined;
     receipt.phase = 'complete'; receipt.command = { requestId: receipt.requestId, state, ...(error ? { error: error.slice(0, 2000) } : {}) };
     writeJson(receiptPath(this.id, receipt.requestId, this.root), receipt);
     this.command(receipt.requestId, state, error);
@@ -113,7 +116,7 @@ export class ConsoleSupervisor {
       identity: identity => {
         if (!live()) return;
         if (this.meta.identity && this.meta.identity.sessionId !== identity.sessionId) throw new ConsoleError('Provider changed the exact recorded session identity.', 409, 'IDENTITY_MISMATCH');
-        this.meta.identity = identity; this.heartbeat();
+        this.meta.identity = { ...identity, ...(identity.provider ? {} : this.meta.identity?.provider ? { provider: this.meta.identity.provider } : {}) }; this.heartbeat();
       },
       state: (state, error) => {
         if (!live()) return;
@@ -139,6 +142,7 @@ export class ConsoleSupervisor {
   private async connect(): Promise<void> {
     this.generation++; const previous = this.adapter; this.adapter = undefined;
     if (previous) await previous.close();
+    else if (this.meta.identity?.provider) await terminateOwnedProcess(this.meta.identity.provider);
     this.clearRequests(); this.eventKeys.clear(); this.state('starting');
     let factory = this.factory;
     if (!factory) factory = this.meta.launch.host === 'codex' ? (await import('./console-codex.ts')).createCodexHost : (await import('./console-claude.ts')).createClaudeHost;
@@ -203,8 +207,9 @@ export class ConsoleSupervisor {
         this.finish(receipt, 'failed', error.message);
       } else {
         const message = (error instanceof Error ? error.message : 'Provider operation failed.').slice(0, 2000);
-        this.finish(receipt, 'uncertain', message);
-        this.state('disconnected', message);
+        const confirmed = readReceipt(this.id, receipt.requestId, this.root)?.command.state;
+        this.finish(receipt, confirmed === 'failed' ? 'failed' : 'uncertain', message);
+        if (confirmed !== 'failed') this.state('disconnected', message);
       }
     }
   }
@@ -245,6 +250,10 @@ export class ConsoleSupervisor {
     }
     try { await this.adapter?.close(); }
     catch (error) { failures.push(error instanceof Error ? error.message : 'Root provider close failed.'); }
+    if (!this.adapter && this.meta.identity?.provider) {
+      try { await terminateOwnedProcess(this.meta.identity.provider); }
+      catch (error) { failures.push(error instanceof Error ? error.message : 'Recorded root provider stop failed.'); }
+    }
     if (failures.length) {
       this.state('failed', failures.join('\n'));
       throw new ConsoleError(`Team retirement failed: ${failures.join('\n')}`, 409, 'RETIREMENT_FAILED');
