@@ -95,6 +95,22 @@ describe('retained assignments and exact acceptance', () => {
     result('DONE'); mail.settle('a-test'); assert.notEqual(ref(), first);
   });
 
+  it('refuses a new assignment when submitted bytes or packet changed before a sweep', () => {
+    for (const change of ['IN PROGRESS: repair', 'DONE: replacement', 'missing', 'packet', 'snapshot']) {
+      fixture(); result('DONE: original'); mail.settle('a-test'); const first = ref();
+      accept(parent, 'advisor', first);
+      const current = store.readRun('a-test')!;
+      if (change === 'missing') rmSync(store.resultPath('a-test'));
+      else if (change === 'packet') writeFileSync(store.packetPath('a-test'), 'changed scope\n');
+      else if (change === 'snapshot') writeFileSync(current.assignment!.submissions[0]!.result, '# Status\nDONE: altered\n');
+      else result(change);
+      assert.throws(() => mail.assign(parent, 'advisor', 'next outcome'), /stale/);
+      assert.equal(store.readRun('a-test')!.assignment!.id, 'initial');
+      assert.equal(store.readRun('a-test')!.assignmentHistory, undefined);
+      rmSync(store.home(), { recursive: true, force: true });
+    }
+  });
+
   it('keeps routing quality separate and restores idle after an advisory turn with unchanged submission', async () => {
     fixture(); result('DONE'); mail.settle('a-test'); const first = ref();
     const { grade } = await import('../src/outcome.ts');
@@ -211,4 +227,3 @@ describe('retained assignments and exact acceptance', () => {
     assert.equal(readFileSync(process.env.CREW_CONFIG!, 'utf8'), config);
   });
 });
-

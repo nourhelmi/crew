@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { activeDescendants, candidate, currentAssignment, packetMail, snapshot, unaccepted } from './assignment.ts';
+import { activeDescendants, candidate, currentAssignment, packetHash, packetMail, snapshot, unaccepted } from './assignment.ts';
 import { agentStatus, prompt } from './herdr.ts';
 import { requestResume } from './resume.ts';
 import { pushCodex, registeredSocket } from './codex-mail.ts';
@@ -144,6 +144,11 @@ export function assign(from: Address, runRef: string, text: string): { run: RunM
     const previous = currentAssignment(current);
     if (previous.status === 'active' || current.state === 'running' || activeDescendants(current.id).length || packetMail(current)) {
       throw new Error('crew: current work must settle before a new assignment; revise it with crew amend');
+    }
+    const submitted = previous.submissions.find(s => s.ref === previous.submission);
+    if (!submitted || submitted.revision !== previous.revision || readResult(resultPath(current.id))?.hash !== submitted.hash
+      || readResult(submitted.result)?.hash !== submitted.hash || packetHash(current.id) !== submitted.packetHash) {
+      throw new Error('crew: current submission is stale; settle the changed result before assigning a new outcome');
     }
     const id = newId('task');
     const assignment = { id, revision: 0, createdAt: notice.at, status: 'active' as const, submissions: [] };
