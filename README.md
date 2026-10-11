@@ -531,6 +531,8 @@ node scripts/install.ts   # after changing skills or hooks, bump `version` in bo
 `npm run eval` checks behavioral scorers against fixtures and runs in CI. The opt-in
 `npm run eval:live` exercises real CoS/advisor workflows in isolated temporary homes;
 see [behavior evals](evals/README.md) for setup, evidence and proof boundaries.
+Use `--surface console-api` to exercise a real two-turn advisor session through the
+console's HTTP/SSE interface. Browser interaction checks remain separate from API proof.
 
 [AGENTS.md](AGENTS.md) lists the invariants: zero runtime dependencies, tests that never touch
 your real Claude, Codex or herdr state, and user entry points as skills rather than host-specific
