@@ -5,7 +5,7 @@
 <p align="center">
   <b>Run an engineering team of AI coding agents across Claude Code and Codex.</b><br>
   An advisor leads. Builders, checkers and teammates run on whichever CLI their model needs,<br>
-  and they spawn, wake and message each other natively. No orchestration server, no database, no runtime dependencies.
+  and they spawn, wake and message each other natively. No hosted service, no database, no runtime dependencies.
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@
   <a href="#quickstart">Quickstart</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#the-team">The team</a> ·
-  <a href="#dashboard">Dashboard</a> ·
+  <a href="#console">Web console</a> ·
   <a href="#commands">Commands</a> ·
   <a href="#routing">Routing</a> ·
   <a href="#configuration">Configuration</a> ·
@@ -59,7 +59,7 @@ and a few plain files in `~/.crew`.
 | **Native wake, no polling** | Children settle through hooks. Parents wake the way their host already wakes. |
 | **Teams that talk** | Kept teammates message each other and the lead, whichever CLI each one runs on. |
 | **Visible by default** | In herdr, every agent is a named pane that splits away from its parent and closes when it's done. |
-| **A browser view of the whole crew** | `crew dashboard` shows delegation, agent output, packets, results and mail, including work started outside herdr. |
+| **One place to run the whole crew** | `crew console` launches CoS/advisor roots, keeps their conversations, and shows the team's output, missions and results. |
 | **Plain files** | State is JSON you can `cat`. Races are settled by exclusive-create claim files. |
 
 ## Quickstart
@@ -82,8 +82,9 @@ The advisor decides what to do itself and what to delegate. Inside [herdr](https
 crew appears in panes beside it; anywhere else, children run as `claude --bg` sessions and
 `codex exec` runs.
 
-For a browser view of the workstream, run `crew dashboard` and open the printed local URL.
-Select any member to follow its output. See the [dashboard](#dashboard) below.
+To work entirely in the browser, run `crew console` and open the printed local URL.
+Choose a project, CoS or advisor, and an installed host; describe the outcome and launch.
+Talk to the root and inspect its team from the [web console](#console).
 
 **Requirements:** macOS or Linux, Node.js ≥ 24 (crew runs its TypeScript directly), and
 [Claude Code](https://code.claude.com) and/or the [Codex CLI](https://github.com/openai/codex),
@@ -221,7 +222,8 @@ crew spawn --role builder --packet api.md --name api          # routed: the mode
 crew spawn --role checker --checks api --packet review.md        # its verdict on api's work teaches routing
 crew spawn --role advisor --keep --name billing --packet p.md # a CoS teammate
 crew wait                       # until a child settles, stalls or needs a dialog, or mail arrives
-crew dashboard                  # local browser view of workstreams and live agent output
+crew console                    # launch sessions, talk to roots, and inspect the whole team
+crew dashboard                  # compatible entry to the same local console
 crew msg billing "…"            # follow-up or answer (advice)
 crew amend billing "…"          # scope, authority or done-when on the current assignment
 crew accept billing <ref>       # exact submitted outcome; grade stays routing quality
@@ -333,44 +335,70 @@ a later assignment replaces `result.md`. Idle retained names remain reserved unt
 Legacy `capacity` config is ignored without changing the user's config. Routing selects models;
 crew imposes no team-size or capacity limit.
 
-## Dashboard
+<a id="dashboard"></a>
 
-See what each agent is doing while the lead waits. The browser view follows the whole crew,
-with a delegation map on the left and the selected member's output on the right.
-
-![Crew dashboard showing a Codex builder and Claude checker, with the selected builder's output](assets/dashboard.png)
-
-*The running dashboard with sample data. No live workstream content is included in this image.*
+## Console
 
 ```sh
-crew dashboard
+crew console
+crew console --port 0          # choose an available port
 ```
 
-Open the printed local URL (default `http://127.0.0.1:4317`).
-Use `crew dashboard --port 0` for an available port, or `--port 4320` to choose one.
-It works from an ordinary terminal or either desktop app; it does not need to run inside Herdr.
+Open the printed local URL (default `http://127.0.0.1:4317`). `crew dashboard` remains
+a compatible entry point. Run it from an ordinary terminal or either desktop app; Herdr
+is optional. The installed Codex and Claude CLIs supply authentication and model execution.
 
-The dashboard groups Crew members by their root session, follows nested delegation, and shows
-each member's output, public activity, packet, result, and mail history. Select **Output → Expand**
-to follow one member. Output follows the tail until you scroll up; **Follow output** returns to it.
-The page reconnects automatically, and `?run=<run-id>` links directly to a member.
+Launch a **CoS** for coordinated advisor-owned outcomes, or an **advisor** for a workstream
+whose lead chooses how much to do directly. Select the project, host and model, then send
+the task. The conversation stays with that root. Public assistant messages, tool activity,
+supported approvals and questions appear alongside the team's delegation tree.
 
-This is a read-only observer. It does not consume inboxes, attach to or resume agents, settle
-runs, or invoke host CLIs. Closing the page or stopping the server leaves the workstream alone.
-The server binds only to `127.0.0.1`, rejects cross-site requests, and serves no write endpoints.
+| Action | Codex root | Claude root |
+| --- | --- | --- |
+| Message while idle | Starts a turn | Starts a turn |
+| Message while working | Steers the active turn | Queues the next input |
+| Interrupt and send | Interrupts, then sends new input | Interrupts, then sends new input |
+| Approvals and questions | Answer supported host requests | Answer supported host requests |
+| Resume after disconnection | Uses the recorded owned thread | Uses the recorded owned session |
 
-Codex and Claude members use their recorded native session transcripts when available, including
-agents running inside Herdr. Captured `codex exec --json` output is the fallback. Public messages,
-tool calls and tool results update as complete records are written, with a one-second refresh;
-hidden reasoning and harness context are omitted. This is a transcript viewer, not a terminal
-emulator: it does not reproduce TUI redraws, stream unpersisted tokens, or accept terminal input.
-Unsupported or missing sources are shown explicitly. Recent output is bounded, and reconnecting
-loads the current tail rather than claiming a complete historical recording.
+Delivery states distinguish queued, delivered, failed and uncertain input. A lost connection
+does not mean the provider never received a message; ambiguous delivery is not automatically
+replayed. Retrying a request uses its existing ID. Access defaults to the host's configuration;
+workspace or full access is an explicit launch choice.
 
-Run status is Crew's recorded state, not a live process assertion. Root sessions are labelled
-separately because they have no Crew run status; output shows the source's last-write time. A
-result file can appear before Crew settles the run. The observer never changes either state.
-`CREW_HOME`, `CODEX_HOME`, and `CLAUDE_CONFIG_DIR` select the corresponding local stores.
+Each console root has its own supervisor and provider connection. Closing the browser or
+restarting the web listener leaves those sessions running; reconnecting restores their
+conversation and pending requests. Interrupt stops a turn, while closing a session deliberately
+retires its root. The console only resumes identities it created and recorded.
+
+```mermaid
+flowchart LR
+    U[You in the browser] --> W[Local web console]
+    W --> S[Owned root supervisor]
+    S <--> H[Codex or Claude root]
+    H --> A[Advisor outcome owners]
+    A --> B[Optional builders and checkers]
+    H --> F[(Plain files: events, missions, results)]
+    A --> F
+    B --> F
+    F --> O[Read-only team observer]
+    O --> W
+```
+
+Select any member to inspect public output, its mission or packet, result, accepted submission
+and mail history. These reads never consume inboxes or settle runs. The tree shows delegation;
+the CoS owns scheduling dependencies in its checkpoint. Raw team output stays in the browser
+instead of being copied into the root's context.
+
+Work started outside the console remains visible and **view-only**. Existing background or
+exec children can need approval in their original host; the console identifies that attention
+without presenting an approval control it cannot deliver. Member output comes from recorded
+native transcripts or captured exec output, with bounded recent history and explicit source
+limitations. Hidden reasoning and injected harness context are omitted.
+
+The listener binds only to `127.0.0.1`. Writes require an exact same-origin request and a
+per-server capability; the browser cannot send arbitrary provider RPC, shell arguments or
+environment settings. `CREW_HOME`, `CODEX_HOME`, and `CLAUDE_CONFIG_DIR` select local stores.
 
 ## Under the hood
 
