@@ -90,6 +90,8 @@ test('managed roots launch once, stream durable public chat, survive listener re
     const firstEvents = f.controller.detail(id)!.events;
     const duplicate = await app.post('/api/console/sessions', f.launch()).then(r => r.json()) as ConsoleMutation;
     assert.equal(duplicate.session.id, id); assert.equal(f.starts(), 1);
+    const reloadedController = new ConsoleController({ root: f.root, receiptWaitMs: 0, providers: () => { throw new Error('Duplicate launch must not consult provider availability'); } });
+    assert.equal((await reloadedController.launch(f.launch())).session.id, id);
     assert.equal((await app.post('/api/console/sessions', f.launch('changed'))).status, 409);
     await new Promise<void>(r => app.app.close(() => r())); app = await f.server();
     assert.deepEqual(f.controller.detail(id)!.events, firstEvents);
@@ -167,6 +169,8 @@ test('concurrent idempotent messages, failure receipts and descendant/mail obser
     const pair = await Promise.all([f.controller.message(id, input), f.controller.message(id, input)]);
     assert.equal(pair[0]!.command.state, 'delivered'); assert.equal(pair[1]!.command.state, 'delivered');
     assert.equal(f.calls(id).filter(c => c.requestId === 'concurrent').length, 1);
+    await f.controller.message(id, { requestId: '__proto__', text: 'hold' });
+    assert.ok(Object.hasOwn(readView(id, f.root)!.commands, '__proto__'));
     const identity = readMeta(id, f.root)!.identity!.sessionId;
     const mailbox = `codex-${identity}`;
     const child: RunMeta = { id: 'b-fixture', name: 'child', role: 'builder', route: { host: 'codex', model: 'fixture', effort: 'high', strategy: 'pinned' }, cwd: f.root, keep: false, parent: { mailbox, host: 'codex', threadId: identity }, launcher: 'exec', createdAt: new Date().toISOString(), state: 'running' };

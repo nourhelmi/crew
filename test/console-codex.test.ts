@@ -8,6 +8,8 @@ import { test, type TestContext } from 'node:test';
 import { createCodexHost } from '../src/console-codex.ts';
 import type { HostEvent, HostIdentity, HostOptions } from '../src/console-host.ts';
 import type { CommandState, ConsoleRequest, ConsoleState } from '../src/console-types.ts';
+import { processMatches } from '../src/console-process.ts';
+import type { OwnedProcess } from '../src/console-process.ts';
 
 type Wire = { kind: string; pid?: number; args?: string[]; env?: Record<string, string>; method?: string; id?: string | number; params: Record<string, unknown>; result?: unknown; error?: unknown };
 async function until(check: () => boolean): Promise<void> {
@@ -22,13 +24,14 @@ function fixture(t: TestContext, changes: Partial<HostOptions> = {}, settings: o
   writeFileSync(executable, `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(resolve('test/fixtures/console-codex.ts'))} "$@"\n`);
   chmodSync(executable, 0o755);
   const identities: HostIdentity[] = [], states: { state: ConsoleState; error?: string }[] = [], events: HostEvent[] = [], requests: ConsoleRequest[] = [], cancelled: string[] = [], commands: { id: string; state: CommandState; error?: string }[] = [], timeline: string[] = [];
+  const providers: OwnedProcess[] = [];
   const host = createCodexHost({
     launch: { requestId: 'launch', cwd: home, mode: 'cos', host: 'codex', prompt: 'DO_NOT_REPLAY' },
     instructions: 'Actual crew CoS contract',
     env: { PATH: process.env.PATH, HOME: home, CREW_HOME: join(home, 'crew'), CREW_CONFIG: join(home, 'config'), CREW_ROSTER: join(home, 'roster'), CODEX_HOME: join(home, 'codex-home'), ADVISOR_STATE_DIR: join(home, 'advisor'), CREW_RUN: 'MUST_NOT_INHERIT', FAKE_CODEX_LOG: log, FAKE_CODEX_SCENARIO: scenarioPath },
     executable,
     callbacks: {
-      identity(value) { identities.push(value); timeline.push(`identity:${value.sessionId}:${value.turnId || ''}`); },
+      identity(value) { const { provider, ...logical } = value; identities.push(logical); if (provider) providers.push(provider); timeline.push(`identity:${value.sessionId}:${value.turnId || ''}`); },
       state(state, error) { states.push({ state, ...(error ? { error } : {}) }); },
       event(value) { events.push(value); },
       request(value) { requests.push(value); },
@@ -46,7 +49,7 @@ function fixture(t: TestContext, changes: Partial<HostOptions> = {}, settings: o
     if (pid) assert.throws(() => process.kill(pid, 0), /ESRCH/);
     rmSync(home, { recursive: true, force: true });
   });
-  return { host, home, wires, identities, states, events, requests, cancelled, commands, timeline, scenario: (value: object) => writeFileSync(scenarioPath, JSON.stringify(value)) };
+  return { host, home, wires, identities, providers, states, events, requests, cancelled, commands, timeline, scenario: (value: object) => writeFileSync(scenarioPath, JSON.stringify(value)) };
 }
 
 test('Codex starts stdio experimental protocol, persists identity, and sends the human prompt separately', async t => {
@@ -62,6 +65,9 @@ test('Codex starts stdio experimental protocol, persists identity, and sends the
   for (const field of ['sandbox', 'approvalPolicy', 'config', 'input']) assert.equal(field in start.params, false);
   assert.equal(JSON.stringify(f.wires()).includes('DO_NOT_REPLAY'), false);
   assert.deepEqual(f.identities, [{ sessionId: 'thread-new' }]);
+  assert.equal(f.providers[0]!.pid, f.wires()[0]!.pid);
+  assert.equal(f.providers[0]!.group, false);
+  assert.ok(processMatches(f.providers[0]!));
   assert.equal(await f.host.send('first human prompt', 'human-1'), 'delivered');
   const send = f.wires().find(w => w.method === 'turn/start')!;
   assert.deepEqual(send.params, { threadId: 'thread-new', clientUserMessageId: 'human-1', input: [{ type: 'text', text: 'first human prompt', text_elements: [] }] });
