@@ -278,3 +278,29 @@ test('orphan ownership mismatch refuses a second provider process and never sign
     assert.equal(f.controller.detail(id)!.session.state, 'disconnected');
   } finally { if (owned) await terminateOwnedProcess(owned); await f.cleanup(); }
 });
+
+test('owned mailbox wakes prefer foreground waiters and never queue a consumed pointer behind an active Claude turn', async () => {
+  const f = await fixture();
+  try {
+    const { markWaiter, unread } = await import('../src/store.ts');
+    const result = await f.controller.launch(f.launch('hold', 'claude-mail', 'claude')); const id = result.session.id;
+    const mailbox = `claude-${readMeta(id, f.root)!.identity!.sessionId}`;
+    const unmark = markWaiter(mailbox);
+    appendMail(mailbox, { id: 'read-while-busy', at: new Date().toISOString(), from: { mailbox: 'b-fixture', host: 'codex' }, kind: 'message', text: 'advice' });
+    await new Promise(r => setTimeout(r, 300));
+    assert.equal(f.calls(id).filter(c => typeof c.text === 'string' && c.text.startsWith('[crew]')).length, 0);
+    unread(mailbox).commit(); unmark();
+    await f.controller.action(id, { requestId: 'interrupt-mail', action: 'interrupt', revision: f.controller.detail(id)!.session.revision });
+    await f.controller.message(id, { requestId: 'continue-mail', text: 'complete' });
+    await waitFor(() => f.controller.detail(id)?.session.state === 'idle');
+    await new Promise(r => setTimeout(r, 300));
+    assert.equal(f.calls(id).filter(c => typeof c.text === 'string' && c.text.startsWith('[crew]')).length, 0);
+    const unmarkIdle = markWaiter(mailbox);
+    appendMail(mailbox, { id: 'waiter-batch', at: new Date().toISOString(), from: { mailbox: 'b-fixture', host: 'codex' }, kind: 'message', text: 'new advice' });
+    await new Promise(r => setTimeout(r, 300));
+    assert.equal(f.calls(id).filter(c => typeof c.text === 'string' && c.text.startsWith('[crew]')).length, 0);
+    unmarkIdle();
+    await waitFor(() => f.calls(id).some(c => typeof c.text === 'string' && c.text.startsWith('[crew]')));
+    assert.equal(f.calls(id).filter(c => typeof c.text === 'string' && c.text.startsWith('[crew]')).length, 1);
+  } finally { await f.cleanup(); }
+});

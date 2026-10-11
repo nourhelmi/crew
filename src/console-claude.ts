@@ -3,6 +3,7 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { ConsoleHostAdapter, HostOptions } from './console-host.ts';
 import type { ConsoleAnswer, ConsoleRequest, ConsoleState, CommandState } from './console-types.ts';
+import { recordProcess } from './console-process.ts';
 
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as ObjectValue : {};
@@ -392,6 +393,7 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
       });
       await control({ subtype: 'initialize', hooks: null });
       if (failure || closing) throw failure ?? new Error('Claude closed during initialization');
+      cb.identity({ sessionId, provider: recordProcess(child.pid!, process.platform !== 'win32') });
       ready = true;
       setState(requests.size ? 'waiting' : busy ? 'running' : 'idle');
     } catch (error) {

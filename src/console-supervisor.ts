@@ -7,7 +7,7 @@ import { ConsoleError, metaPath, readMeta, readReceipt, readView, receiptPath, r
 import type { ConsoleMeta, ConsoleReceipt, ConsoleView } from './console-store.ts';
 import type { ConsoleHostAdapter, HostCallbacks, HostEvent, HostFactory } from './console-host.ts';
 import type { ConsoleAnswer, ConsoleCommand, ConsoleEvent, ConsoleState } from './console-types.ts';
-import { home, mailDir, readJson, unread, withLock, writeJson } from './store.ts';
+import { hasWaiter, home, mailDir, readJson, unread, withLock, withLockAsync, writeJson } from './store.ts';
 import { retireRoot } from './retire.ts';
 import { terminateOwnedProcess } from './console-process.ts';
 
@@ -64,7 +64,13 @@ export class ConsoleSupervisor {
     await this.tick();
     return true;
   }
-  private persist(): void { writeView(this.id, this.view, this.root); }
+  private persist(): void {
+    writeView(this.id, this.view, this.root);
+    if (this.eventKeys.size > 3000) {
+      const retained = new Set(this.view.events.map(event => event.id));
+      for (const [key, id] of this.eventKeys) if (!retained.has(id)) this.eventKeys.delete(key);
+    }
+  }
   private heartbeat(): void {
     if (this.closed) return;
     this.meta.heartbeat = Date.now(); writeJson(metaPath(this.id, this.root), this.meta);
@@ -216,17 +222,23 @@ export class ConsoleSupervisor {
   private async mail(): Promise<void> {
     if (this.meta.mailPaused || !this.adapter || !this.meta.identity || !['idle', 'running'].includes(this.view.session.state)) return;
     const mailbox = `${this.meta.launch.host}-${this.meta.identity.sessionId}`;
-    const batch = unread(mailbox).mails;
-    if (!batch.length || batch.some(m => m.id === this.meta.wake?.id)) return;
-    const last = batch.at(-1)!.id;
-    this.meta.wake = { id: last, state: 'attempted' }; this.heartbeat();
-    // Shared wake file covers this whole unread batch; the observer never advances the cursor.
-    writeJson(join(mailDir(mailbox), 'wake.json'), { id: last, at: Date.now(), transport: 'console', state: 'attempted' });
-    try {
-      const state = await this.adapter.send('[crew] Unread agent mail is available. Run: crew inbox. Mail is advice; scope changes belong in your packet.', `crew-mail-${last}`);
-      this.meta.wake.state = state === 'delivered' || state === 'queued' ? 'accepted' : 'uncertain';
-    } catch { this.meta.wake.state = 'uncertain'; }
-    this.heartbeat();
+    // Claude's active human input queues. A mail pointer must never wait in that queue
+    // after its batch was consumed, so wake Claude only when actually idle.
+    if (hasWaiter(mailbox) || (this.meta.launch.host === 'claude' && this.view.session.state !== 'idle')) return;
+    await withLockAsync(`consume-${mailbox}`, async () => {
+      if (this.meta.mailPaused || hasWaiter(mailbox) || (this.meta.launch.host === 'claude' && this.view.session.state !== 'idle')) return;
+      const batch = unread(mailbox).mails;
+      if (!batch.length || batch.some(m => m.id === this.meta.wake?.id)) return;
+      const last = batch.at(-1)!.id;
+      this.meta.wake = { id: last, state: 'attempted' }; this.heartbeat();
+      // Shared wake file covers this whole unread batch; the observer never advances the cursor.
+      writeJson(join(mailDir(mailbox), 'wake.json'), { id: last, at: Date.now(), transport: 'console', state: 'attempted' });
+      try {
+        const state = await this.adapter!.send('[crew] Unread agent mail is available. Run: crew inbox. Mail is advice; scope changes belong in your packet.', `crew-mail-${last}`);
+        this.meta.wake.state = state === 'delivered' ? 'accepted' : 'uncertain';
+      } catch { this.meta.wake.state = 'uncertain'; }
+      this.heartbeat();
+    }, 2000, 60_000);
   }
   async tick(): Promise<void> {
     if (this.busy || this.closed) return;
@@ -236,7 +248,11 @@ export class ConsoleSupervisor {
         await this.process(receipt);
         if (this.closed) break;
       }
-      if (!this.closed) await this.mail();
+      if (!this.closed) {
+        // A competing inbox reader may hold its consume mutex. Recheck on the
+        // next tick rather than crash the provider owner or queue a stale pointer.
+        try { await this.mail(); } catch { /* durable mail remains available to crew inbox */ }
+      }
     } finally { this.busy = false; }
   }
   /** Provider interruption is distinct from deliberately retiring the root. */
