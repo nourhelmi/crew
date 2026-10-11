@@ -22,6 +22,8 @@ setInterval(()=>{},1000);`);
     assert.equal(processExists(handle.pid), false);
     assert.equal(processExists(nativePid), true);
     if (verified) {
+      await assert.rejects(terminateOwnedProcess({ ...handle, group: false }), /lacks an owned process group/);
+      assert.equal(processExists(nativePid), true, 'legacy leader-only proof cannot authorize recovery');
       await terminateOwnedProcess(handle);
       assert.equal(processExists(nativePid), false, 'recorded wrapper death must not hide its native host');
     } else {

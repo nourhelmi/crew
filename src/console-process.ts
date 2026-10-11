@@ -52,6 +52,7 @@ export function processMatches(handle: OwnedProcess): boolean {
 }
 /** Explicit recovery may stop the recorded orphan, never an unrelated recycled PID. */
 export async function terminateOwnedProcess(handle: OwnedProcess): Promise<void> {
+  if (!handle.group && process.platform !== 'win32') throw new Error('Legacy provider ownership lacks an owned process group. Close it through its original supervisor; recovery is blocked to avoid orphaned native hosts.');
   const grouped = handle.group && process.platform !== 'win32';
   const alive = (): boolean => grouped ? groupMembers(handle.pid).length > 0 : processExists(handle.pid);
   const verify = (): void => {
