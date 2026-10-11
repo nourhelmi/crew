@@ -1,9 +1,11 @@
-import { scenarios } from './scenarios.ts';
+import { consoleAssertions, scenarios } from './scenarios.ts';
 import type { CaseResult, Observation, Scenario } from './scenarios.ts';
 
 export function score(observation: Observation, durationMs = 0): CaseResult {
   const scenario = scenarios.find(s => s.id === observation.case)!;
-  const assertions = scenario.assertions.map(id => {
+  const ids = observation.surface === 'console-api' && observation.case === 'advisor-tiny-repair'
+    ? [...scenario.assertions, ...consoleAssertions] : scenario.assertions;
+  const assertions = ids.map(id => {
     const fact = observation.facts[id];
     const status = !fact ? 'not-executed' : fact.holds && fact.paths.length > 0 ? 'pass' : 'fail';
     return { id, status, evidence: fact?.paths ?? [], detail: fact?.detail ?? 'No captured evidence; not evaluated.' } as const;

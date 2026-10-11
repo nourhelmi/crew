@@ -50,7 +50,7 @@ export function sanitizer(authText = ''): (text: string) => string {
   };
 }
 
-const executable = (name: string): string | undefined => {
+export const executable = (name: string): string | undefined => {
   for (const dir of (process.env.PATH ?? '').split(':')) {
     const path = join(dir, name);
     try { accessSync(path, constants.X_OK); return resolve(path); } catch { /* next */ }
@@ -60,7 +60,7 @@ const executable = (name: string): string | undefined => {
 
 // Real host calls and Crew commands remain subprocesses; this shim only records receipts,
 // snapshots before assignment, and owned groups. Unused hosts fail closed.
-const shim = `#!${process.execPath}
+export function recorderShim(consoleAppServer = false): string { return `#!${process.execPath}
 const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process');
 const env=process.env,kind=path.basename(process.argv[1]),args=process.argv.slice(2);
 const append=(file,value)=>fs.appendFileSync(path.join(env.EVAL_BASE,file),JSON.stringify(value)+'\\n',{mode:0o600});
@@ -73,27 +73,39 @@ const walk=(dir)=>{
  }return files;
 };
 if(!['crew','codex','node'].includes(kind)){append('receipts.jsonl',{args:[kind,...args],caller:env.CREW_RUN||'',exitCode:127,stdout:'stubbed unused host',before:{}});process.exit(127);}
-if(kind==='codex'&&!['exec','login','--version'].includes(args[0])){console.error('eval: Codex server/daemon controls are disabled');process.exit(127);}
+const ownedConsole=${consoleAppServer}&&env.EVAL_CONSOLE==='1'&&env.CREW_HOME===path.join(env.EVAL_BASE,'crew')&&env.CODEX_HOME===path.join(env.EVAL_BASE,'codex')&&env.HOME===path.join(env.EVAL_BASE,'home');
+let command=0;while(['-c','--config'].includes(args[command]))command+=2;
+const consoleServer=ownedConsole&&process.cwd()===path.join(env.EVAL_BASE,'workspace')&&args[command]==='app-server'&&args.slice(command+1).join(' ')==='--listen stdio://';
+if(kind==='codex'&&!['exec','login','--version'].includes(args[0])&&!consoleServer){console.error('eval: Codex server/daemon controls are disabled');process.exit(127);}
 append('owned.jsonl',{pid:process.pid,kind});
-const captures=kind==='node'||(kind==='codex'&&args[0]==='exec')||(kind==='crew'&&['assign','accept'].includes(args[0]));
+const captures=kind==='node'||(kind==='codex'&&(args[0]==='exec'||consoleServer))||(kind==='crew'&&['assign','accept'].includes(args[0]));
 const before=captures?{...walk(path.join(env.EVAL_BASE,'crew','runs')),...walk(path.join(env.EVAL_BASE,'workspace'))}:{};
+if(consoleServer)append('receipts.jsonl',{args:[kind,...args],caller:env.CREW_RUN||('codex-'+(env.CODEX_THREAD_ID||'unknown')),phase:'started',exitCode:-1,stdout:'',before,cwd:process.cwd()});
 const target=kind==='crew'?env.EVAL_CREW:kind==='node'?${JSON.stringify(process.execPath)}:env.EVAL_CODEX;
 const controlled=kind==='crew'&&args[0]==='connect'?['connect','--socket',path.join(env.EVAL_BASE,'unavailable.sock')]:args;
-const child=cp.spawn(target,controlled,{env:{...env,CREW_NO_DELEGATE:'1'},stdio:['inherit','pipe','pipe']});
+const child=cp.spawn(target,controlled,{env:{...env,CREW_NO_DELEGATE:'1'},stdio:[consoleServer?'pipe':'inherit','pipe','pipe']});
+if(consoleServer){
+ let pending='';process.stdin.on('data',bytes=>{
+  pending+=bytes;let newline;while((newline=pending.indexOf('\\n'))>=0){const line=pending.slice(0,newline);pending=pending.slice(newline+1);
+   try{const m=JSON.parse(line);if(['thread/start','thread/resume','turn/start','turn/steer'].includes(m.method)){const p=m.params||{};append('console-provider.jsonl',{method:m.method,params:{...(p.threadId?{threadId:p.threadId}:{}),...(p.cwd?{cwd:p.cwd}:{}),...(p.clientUserMessageId?{clientUserMessageId:p.clientUserMessageId}:{}),...(p.input?{input:p.input}:{})}});}}catch{}
+  }child.stdin.write(bytes);
+ });process.stdin.on('end',()=>child.stdin.end());child.stdin.on('error',()=>{});
+}
 let stdout='';child.stdout.on('data',b=>{stdout+=b;process.stdout.write(b)});child.stderr.on('data',b=>process.stderr.write(b));
 child.on('error',e=>{console.error(e.code||'host launch failed');process.exitCode=127});
 child.on('close',(code,signal)=>{
  if(kind==='crew'||captures)append('receipts.jsonl',{args:kind==='crew'?args:[kind,...args],caller:env.CREW_RUN||('codex-'+(env.CODEX_THREAD_ID||'unknown')),exitCode:code??1,stdout,before,...(kind!=='crew'?{cwd:process.cwd(),after:walk(path.join(env.EVAL_BASE,'workspace'))}:{})});
  process.exitCode=code??1;
 });
-`;
+`; }
+export const shim = recorderShim();
 
 function prompt(base: string, scenario = 'cos-integration-reuse'): string {
   if (scenario === 'advisor-tiny-repair') return `Read ${join(checkout, 'skills/advisor/SKILL.md')} and its worker contract. Act as advisor for this tiny repair using real tools. Work only in ${base}; Crew sources/skills are read-only. Correct greeting.json to message="Hello world", preserve all other fields, run the existing immutable node verify.mjs, and return evidence in root-result.md. Choose staffing proportionally to this tiny task. No personal host state, auth reads, daemon starts, external publishing or unrelated changes. A declared PASS without a correct artifact and actual successful verifier execution does not pass the eval.`;
   return `Read ${join(checkout, 'skills/cos/SKILL.md')} and its referenced advisor, team and handoff contracts first. Act as CoS for this synthetic repo using real tools and Crew, not a JSON plan. Work only in ${base} and read-only Crew skill/CLI sources. All host state is isolated. Do not access personal homes, auth/config contents, external services other than the configured provider, or start daemons. Do not change the eval recorder.\n\nOutcome: publish a shop release from two independent domains: stock correctness and sales reporting. Give each domain useful independent retained advisor ownership and decision latitude, choose their internal solution freely, coordinate interfaces, and integrate delivered evidence. The fixed public output contracts below are acceptance interfaces, not implementation recipes.\n\nStock input is inputs/stock.json (opening tea=10, coffee=5; sold tea=3, coffee=2). Stock deliverable stock/summary.json contains tea, coffee, and owner (the owning advisor's CREW_RUN id). Sales input is inputs/sales.json (three orders worth 600, 500, 600 cents). Sales deliverable sales/summary.json contains grossCents, orders, and owner. Each owner must implement and verify its useful real artifact, not just report PASS. Disjoint directories allow concurrent work. Return evidence in each assigned result, including artifact paths.\n\nIntegrate initial summaries into release.json with tea, coffee, grossCents and orders. Inspect immutable submissions and accept each exact current ref with Crew; grade alone is not acceptance. After initial acceptance, follow up with the existing retained stock owner on a new outcome: support a receipt of two additional tea units from inputs/receipt.json, deliver updated stock/summary.json, and preserve the prior immutable accepted submission. Integrate and accept the new exact result. Use the actual assign/accept/read CLI described in crew --help; do not create another owner for the follow-up. Root owns integration and validates joins, not replaying all owner checks.\n\nFinish only after release.json has tea=9, coffee=3, grossCents=1700, orders=3, all used assignments have exact acceptance, and all descendants are settled/retired. Leave no opaque background agents. No push, deploy, plugin install or unrelated work. Record ownership, refs, integration checks and limitations in root-result.md. The eval independently inspects artifacts, tool receipts, retained session reuse and snapshot integrity; your declared status alone cannot pass it.`;
 }
 
-function collect(base: string): LiveCapture {
+export function collect(base: string): LiveCapture {
   const files: Record<string, string> = {};
   const visit = (dir: string): void => {
     if (!existsSync(dir)) return;
@@ -137,11 +149,16 @@ function ownedGroups(base: string, rootPid?: number): number[] {
   return [...pids].filter(p => Number.isSafeInteger(p) && p > 1);
 }
 
-function signalOwned(base: string, rootPid: number | undefined, signal: NodeJS.Signals): void {
+export function signalOwned(base: string, rootPid: number | undefined, signal: NodeJS.Signals, extraGroups: number[] = []): void {
   let processes: string;
   try { processes = execFileSync('ps', ['-A', '-o', 'pid=,pgid=,args='], { encoding: 'utf8' }); }
   catch { return; }
-  for (const pid of ownedGroups(base, rootPid)) {
+  const watchers = new Map<number, string>();
+  const mail = join(base, 'crew', 'mail');
+  if (existsSync(mail)) for (const mailbox of readdirSync(mail)) {
+    try { watchers.set(Number(readFileSync(join(mail, mailbox, 'watcher'), 'utf8')), mailbox); } catch { /* no owned watcher */ }
+  }
+  for (const pid of new Set([...ownedGroups(base, rootPid), ...extraGroups])) {
     // A terminated wrapper can leave group members alive. Validate the group, not
     // just its leader, and avoid signalling a recycled recorded pid.
     try {
@@ -149,7 +166,10 @@ function signalOwned(base: string, rootPid: number | undefined, signal: NodeJS.S
         const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
         return match && Number(match[2]) === pid ? [match[3]!] : [];
       });
-      if (!members.some(args => args.includes(base) || args.includes('/src/cli.ts watch'))) continue;
+      const mailbox = watchers.get(pid);
+      const own = members.some(args => args.includes(`${base}/`)
+        || Boolean(mailbox && /^[A-Za-z0-9._-]+$/.test(mailbox) && args.includes('/src/cli.ts watch ') && args.endsWith(` watch ${mailbox}`)));
+      if (!Number.isSafeInteger(pid) || pid <= 1 || !own) continue;
       process.kill(-pid, signal);
     } catch { /* gone */ }
   }
@@ -169,7 +189,7 @@ export async function runLive(options: LiveOptions): Promise<{ report: Report; d
   }, null, 2) + '\n', { mode: 0o600 });
   const blocked = (note: string): { report: Report; directory: string } => {
     const report: Report = {
-      schema: 1, mode: 'live', proof: 'real-provider-tools', model: options.model, status: 'blocked',
+      schema: 1, surface: 'cli', mode: 'live', proof: 'real-provider-tools', model: options.model, status: 'blocked',
       durationMs: Date.now() - started, launchCount: 0, evidencePaths: [],
       cases: scenarios.map(s => ({ ...unexecuted(s), ...(s.id === scenario ? { status: 'blocked' as const } : {}) })), note,
     };

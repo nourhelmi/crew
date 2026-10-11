@@ -34,10 +34,14 @@ export const scenarios = [
 
 export type Scenario = (typeof scenarios)[number];
 export type CaseId = Scenario['id'];
-export type AssertionId = Scenario['assertions'][number];
+export const consoleAssertions = ['console-identity', 'console-delivery', 'console-idempotency',
+  'console-reconnect', 'second-human-input', 'nonce-artifact'] as const;
+export type EvalSurface = 'fixtures' | 'cli' | 'console-api';
+export type AssertionId = Scenario['assertions'][number] | (typeof consoleAssertions)[number];
 export type EvidenceKind = 'artifact' | 'tool' | 'runtime' | 'review';
 export interface Observation {
   case: CaseId;
+  surface?: 'cli' | 'console-api';
   /** Populated from captured artifacts/receipts, never the model's declared PASS. */
   facts: Partial<Record<AssertionId, { holds: boolean; kind: EvidenceKind; paths: string[]; detail: string }>>;
   launchCount: number;
@@ -57,6 +61,7 @@ export interface CaseResult {
 }
 export interface Report {
   schema: 1;
+  surface: EvalSurface;
   mode: 'fixtures' | 'live';
   proof: 'scorer-fixtures-only' | 'real-provider-tools';
   model: string | null;

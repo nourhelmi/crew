@@ -95,7 +95,7 @@ export function scoreCapture(capture: LiveCapture, model: string, durationMs: nu
     'Every launched descendant is accounted for; all used assignments accepted.');
   const evaluated = score({ case: 'cos-integration-reuse', facts, launchCount: capture.runs.length }, durationMs);
   return {
-    schema: 1, mode: 'live', proof: 'real-provider-tools', model,
+    schema: 1, surface: 'cli', mode: 'live', proof: 'real-provider-tools', model,
     status: evaluated.status === 'pass' ? 'pass' : 'fail', durationMs, launchCount: capture.runs.length,
     evidencePaths: ['capture.json', 'root.jsonl', 'workspace/release.json'],
     cases: [evaluated, ...scenarios.filter(s => s.id !== evaluated.case).map(unexecuted)],
@@ -135,7 +135,7 @@ export function scoreTinyCapture(capture: LiveCapture, model: string, durationMs
   };
   const result = score({ case: 'advisor-tiny-repair', facts, launchCount: capture.runs.length }, durationMs);
   return {
-    schema: 1, mode: 'live', proof: 'real-provider-tools', model, status: result.status === 'pass' ? 'pass' : 'fail',
+    schema: 1, surface: 'cli', mode: 'live', proof: 'real-provider-tools', model, status: result.status === 'pass' ? 'pass' : 'fail',
     durationMs, launchCount: capture.runs.length, evidencePaths: ['capture.json', 'root.jsonl', 'workspace/greeting.json'],
     cases: [result, ...scenarios.filter(s => s.id !== result.case).map(unexecuted)],
     note: 'Observed direct advisor repair and immutable verifier execution. Other catalog cases were not executed.',

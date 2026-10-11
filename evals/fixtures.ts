@@ -1,6 +1,7 @@
 import { scenarios } from './scenarios.ts';
 import type { Observation, Report } from './scenarios.ts';
 import { score } from './score.ts';
+import { checkConsoleFixtures } from './console-fixtures.ts';
 
 /** Synthetic observations are scorer examples, not recordings of model work. */
 export function fixture(scenario: (typeof scenarios)[number]): Observation {
@@ -14,6 +15,7 @@ export function fixture(scenario: (typeof scenarios)[number]): Observation {
 
 export function runFixtures(): Report {
   const started = Date.now();
+  checkConsoleFixtures();
   const cases = scenarios.map(scenario => {
     const positive = fixture(scenario);
     const result = score(positive);
@@ -32,9 +34,9 @@ export function runFixtures(): Report {
     return result;
   });
   return {
-    schema: 1, mode: 'fixtures', proof: 'scorer-fixtures-only', model: null, status: 'pass',
+    schema: 1, surface: 'fixtures', mode: 'fixtures', proof: 'scorer-fixtures-only', model: null, status: 'pass',
     durationMs: Date.now() - started, launchCount: 0, evidencePaths: [],
     cases: cases.map(c => ({ ...c, launchCount: 0 })),
-    note: 'Positive, counterexample and missing-evidence scorer checks only. No model, provider, Crew launch or E2E behavior was exercised.',
+    note: 'Positive, counterexample and missing-evidence scorer checks, including console capture counterexamples, only. No model, provider, Crew launch or E2E behavior was exercised.',
   };
 }

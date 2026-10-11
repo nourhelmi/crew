@@ -11,7 +11,7 @@ npm run eval -- --out /tmp/crew-eval-reports
 npm run eval -- --list
 ```
 
-Fixture reports say `mode: fixtures`, `proof: scorer-fixtures-only`, `model: null`,
+Fixture reports say `surface: fixtures`, `mode: fixtures`, `proof: scorer-fixtures-only`, `model: null`,
 and `launchCount: 0`. Fixture PASS means the scorers accepted examples and rejected
 counterexamples, not that CoS/advisor behavior happened. The assertions deliberately
 have evidence locators and do not consume a model's declared PASS.
@@ -35,6 +35,7 @@ credentials themselves in arguments. The copy is mode0600 in temporary CODEX_HOM
 
 ```sh
 npm run eval:live -- \
+  --surface cli \
   --case cos-integration-reuse \
   --model gpt-6.1-sol \
   --codex-auth-file /absolute/path/to/authorized/auth.json \
@@ -42,6 +43,7 @@ npm run eval:live -- \
   --out /absolute/path/to/eval-evidence
 
 npm run eval:live -- \
+  --surface cli \
   --case advisor-tiny-repair \
   --model gpt-6.1-sol \
   --codex-auth-file /absolute/path/to/authorized/auth.json \
@@ -121,7 +123,59 @@ not filesystem write attribution; review overlapping tool traces and owner check
 when assessing verification quality.
 
 The recorder is an evaluation aid, not a security boundary against a malicious model.
-No browser journeys are affected by this CLI-only suite. Root integration should run
+No browser journeys are exercised by the CLI surface. Root integration should run
 repo checks and these opt-in provider probes on the integrated revision. Keep the saved
 contract/revision provenance alongside evidence when evaluating a release; this child implementation
 alone does not claim that a live model passed.
+
+## Console API surface
+
+The same explicit live opt-in can run the actual Crew HTTP console with an owned
+Codex stdio app-server in isolated homes. This adapter currently covers only
+`advisor-tiny-repair`; its default case is that repair. CLI defaults and coverage
+remain unchanged.
+
+```sh
+npm run eval:live -- \
+  --surface console-api \
+  --case advisor-tiny-repair \
+  --model gpt-6.1-sol \
+  --codex-auth-file /absolute/path/to/authorized/auth.json \
+  --timeout 300 \
+  --out /absolute/path/to/eval-evidence
+```
+
+The runner starts `crew console --port 0`, reads the bootstrap capability, and
+sends same-origin mutations through HTTP. It replays the launch and second-input
+request IDs, captures two separate SSE connections, and checks preserved event IDs,
+ordering and bytes. Independently recorded provider stdin requests must show one
+thread start and exactly two input starts with their actual request IDs and text;
+deduplicated UI history cannot hide duplicate provider work. The second human input contains a new random nonce generated
+only after the first turn finishes; a separately inspected `followup.json` must
+contain it and the repaired greeting. Echoing a nonce in assistant prose cannot pass.
+
+Private snapshots of the runner's own `CREW_HOME/console/sessions/<id>` bind the
+managed root, actual provider thread and delivered command states. A recorded shell
+`node verify.mjs` invocation must have the actual `CODEX_THREAD_ID`, successful exit
+and exact immutable verifier/instruction/greeting bytes before and after execution.
+Normalized native console tool events are scored directly; the adapter never
+fabricates exec `item.completed` events. Default `npm run eval` also checks synthetic
+console captures for wrong identity, receipt without delivery, duplicate work,
+missing/echoed verifier, incorrect bytes, stale history and stale/wrong nonce artifacts.
+
+Console reports identify `surface: console-api` and retain HTTP receipts, SSE
+updates, public conversation details, private identity/command snapshots, real
+subprocess receipts and source/contract/scorer hashes in `contracts.json`. Hashes
+cover actual working-tree bytes, including dirty sources. Saved files are sanitized
+and mode0600; the bootstrap token and copied auth/home never enter retained evidence.
+The only extra recorder allowance is an isolated owned `app-server --listen stdio://`
+with the eval's exact homes and workspace. CLI recorder daemon restrictions stay in
+place. Cleanup explicitly closes the managed session through HTTP, then stops only
+verified owned process groups and removes the private sandbox on errors, timeouts
+and signals as well as success.
+
+This is **console API proof**, with credential-free fake-provider integration tests
+establishing adapter mechanics. It does not prove browser interaction, Claude
+behavior, CoS console delegation, or another catalog case. Real provider and browser
+verification must run on the integrated revision; fake-provider tests cannot stand
+in for those checks.
