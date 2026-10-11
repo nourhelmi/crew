@@ -31,7 +31,7 @@
     "crew": "./bin/crew"
   },
   "scripts": {
-    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
+    "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "setup": "node --disable-warning=ExperimentalWarning scripts/install.ts",
     "eval": "node --disable-warning=ExperimentalWarning scripts/eval.ts",
