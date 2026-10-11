@@ -44,7 +44,7 @@ const factory = (options: HostOptions): ConsoleHostAdapter => {
       if (text === 'approval') {
         pending.add('approval-1'); options.callbacks.request({ id: 'approval-1', kind: 'approval', title: 'Execute tool?', description: 'Fixture approval', options: [{ id: 'allow', label: 'Allow' }, { id: 'deny', label: 'Deny' }] });
       } else if (text === 'question') {
-        pending.add('question-1'); options.callbacks.request({ id: 'question-1', kind: 'question', title: 'Choose', questions: [{ id: 'color', question: 'Which color?', options: [{ label: 'Blue' }] }] });
+        pending.add('question-1'); options.callbacks.request({ id: 'question-1', kind: 'question', title: 'Choose', questions: [{ id: process.env.CONSOLE_FIXTURE_QUESTION_ID ?? 'color', question: 'Which color?', options: [{ label: 'Blue' }] }] });
       } else if (text !== 'hold') timer = setTimeout(() => complete(text, requestId), 70);
       return 'delivered';
     },

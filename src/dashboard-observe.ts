@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import type { Host, Role, RunMeta, RunState } from './types.ts';
 import { consoleSessions, readMeta } from './console-store.ts';
+import type { ConsoleState } from './console-types.ts';
 
 export interface DashboardNode {
   id: string;
@@ -16,6 +17,8 @@ export interface DashboardNode {
   effort?: string;
   cwd: string;
   state: RunState | 'untracked';
+  /** Managed root lifecycle, distinct from retained Crew member state. */
+  consoleState?: ConsoleState;
   launcher?: RunMeta['launcher'];
   sessionId?: string;
   createdAt: string;
@@ -237,7 +240,7 @@ export class DashboardObserver {
       if (identity) managedMailboxes.set(`${session.host}-${identity.sessionId}`, session.rootNodeId);
       this.nodes.set(session.rootNodeId, {
         id: session.rootNodeId, workstreamId: session.rootNodeId, name: session.title, role: 'root', host: session.host,
-        cwd: session.cwd, state: session.state === 'closed' ? 'stopped' : session.state === 'failed' ? 'failed'
+        cwd: session.cwd, consoleState: session.state, state: session.state === 'closed' ? 'stopped' : ['failed', 'disconnected'].includes(session.state) ? 'failed'
           : session.state === 'waiting' ? 'blocked' : ['running', 'starting'].includes(session.state) ? 'running' : 'idle',
         ...(session.model ? { model: session.model } : {}), ...(session.effort ? { effort: session.effort } : {}),
         ...(identity ? { sessionId: identity.sessionId } : {}), createdAt: session.createdAt, updatedAt: session.updatedAt,
@@ -303,9 +306,12 @@ export class DashboardObserver {
     if (!path && node.role !== 'root' && existsSync(join(dir, 'exec.log'))) { path = join(dir, 'exec.log'); source = 'exec-log'; }
     const output = path ? readTail(path, true) : { text: '', truncated: false };
     const all = parseOutput(output.text, source);
-    const packet = node.role === 'root' ? { text: '', truncated: false } : readTail(join(dir, 'packet.md'));
+    const managed = node.consoleState ? consoleSessions(this.roots.crew).find(s => s.rootNodeId === node.id) : undefined;
+    const packet = managed ? { text: readMeta(managed.id, this.roots.crew)?.launch.prompt ?? '', truncated: false }
+      : node.role === 'root' ? { text: '', truncated: false } : readTail(join(dir, 'packet.md'));
     const result = node.role === 'root' ? { text: '', truncated: false } : readTail(join(dir, 'result.md'));
-    const mail = readTail(join(this.roots.crew, 'mail', id, 'inbox.jsonl'), true);
+    const mailbox = managed && node.sessionId ? `${node.host}-${node.sessionId}` : id;
+    const mail = readTail(join(this.roots.crew, 'mail', mailbox, 'inbox.jsonl'), true);
     const warnings = [output.error, packet.error, result.error, mail.error].filter((s): s is string => Boolean(s));
     if (packet.truncated) warnings.push('Only the end of this large packet is shown.');
     if (result.truncated) warnings.push('Only the end of this large result is shown.');

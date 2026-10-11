@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { ConsoleAnswer, ConsoleRequest, ConsoleState, CommandState } from './console-types.ts';
 import type { ConsoleHostAdapter, HostEvent, HostOptions } from './console-host.ts';
-import { recordProcess } from './console-process.ts';
+import { recordProcess, terminateOwnedProcess } from './console-process.ts';
 import type { OwnedProcess } from './console-process.ts';
 
 // Wire shapes verified against `codex app-server generate-ts --experimental` (0.160.1).
@@ -128,7 +128,7 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
     for (const waiters of turnWaiters.values()) for (const wake of waiters) wake();
     turnWaiters.clear();
     if (!closing) setState('disconnected', error);
-    void shutdown();
+    void shutdown().catch(error => setState('disconnected', message(error)));
   }
   function write(value: object): Promise<void> {
     if (!child || dead || closing || !child.stdin.writable) return Promise.reject(new TransportError('crew: Codex app-server is disconnected', false));
@@ -337,7 +337,7 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
       if (options.launch.model) args.push('-c', `model=${JSON.stringify(options.launch.model)}`);
       if (options.launch.effort) args.push('-c', `model_reasoning_effort=${JSON.stringify(options.launch.effort)}`);
       args.push('app-server', '--listen', 'stdio://');
-      child = spawn(options.executable || 'codex', args, { cwd: options.launch.cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+      child = spawn(options.executable || 'codex', args, { cwd: options.launch.cwd, env, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
       child.on('error', error => disconnect(`crew: cannot launch Codex app-server: ${error.message}`));
       child.on('exit', () => disconnect('crew: Codex app-server exited'));
       child.stdin.on('error', () => disconnect('crew: Codex app-server stdin closed'));
@@ -362,7 +362,7 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
       child.stdout.on('error', () => { buffer = ''; disconnect('crew: Codex app-server stdout failed'); });
       await rpc('initialize', { clientInfo: { name: 'crew_console', title: 'Crew console', version: '0.13.0' }, capabilities: { experimentalApi: true } });
       await write({ method: 'initialized' });
-      provider = recordProcess(child.pid!, false);
+      provider = recordProcess(child.pid!, process.platform !== 'win32');
       let roots: string[] = [];
       if (access === 'workspace' || configured.roots.length) {
         const effective = object(object(await rpc('config/read', { cwd: options.launch.cwd, includeLayers: false })).config);
@@ -389,7 +389,10 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
       for (const wire of early.splice(0)) receive(JSON.stringify(wire));
       if (dead) throw new Error('crew: Codex disconnected during startup');
     } catch (error) {
-      if (!dead) disconnect(message(error));
+      if (!child) {
+        callbacks.command(options.launch.requestId, 'failed', message(error));
+        setState('failed', message(error)); dead = true;
+      } else if (!dead) disconnect(message(error));
       await shutdown();
       throw error;
     }
@@ -409,12 +412,21 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
     } finally { clearTimeout(timer); waiters.delete(wake); if (!waiters.size) turnWaiters.delete(id); }
   }
   async function shutdown(): Promise<void> {
+    if (provider) return stopPromise ??= (async () => {
+      await terminateOwnedProcess(provider);
+      if (child && child.exitCode === null && child.signalCode === null) await new Promise<void>(resolve => child!.once('close', resolve));
+    })();
     if (!child || child.exitCode !== null || child.signalCode !== null) return;
     const owned = child;
     return stopPromise ??= new Promise<void>(resolveClosed => {
-      const timer = setTimeout(() => owned.kill('SIGKILL'), 1000);
+      const kill = (signal: NodeJS.Signals): void => {
+        if (process.platform !== 'win32' && owned.pid) {
+          try { process.kill(-owned.pid, signal); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+        } else owned.kill(signal);
+      };
+      const timer = setTimeout(() => kill('SIGKILL'), 1000);
       owned.once('close', () => { clearTimeout(timer); resolveClosed(); });
-      owned.kill('SIGTERM');
+      kill('SIGTERM');
     });
   }
   return {
@@ -465,7 +477,7 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
           if (!answer.option || !request.results?.has(answer.option)) throw new Error('crew: invalid Codex approval decision');
           result = request.results.get(answer.option);
         } else {
-          const answers: Record<string, { answers: string[] }> = {};
+          const answers: Record<string, { answers: string[] }> = Object.create(null);
           for (const question of request.request.questions) {
             const value = answer.answers?.[question.id];
             const values = typeof value === 'string' ? [value] : value;

@@ -23,6 +23,7 @@ export class ConsoleSupervisor {
   private timer: ReturnType<typeof setInterval> | undefined;
   private busy = false;
   private closed = false;
+  private closePromise: Promise<void> | undefined;
   private generation = 0;
   private recoveryRequestId: string | undefined;
   private factory: HostFactory | undefined;
@@ -146,15 +147,22 @@ export class ConsoleSupervisor {
     };
   }
   private async connect(): Promise<void> {
-    this.generation++; const previous = this.adapter; this.adapter = undefined;
+    const generation = ++this.generation;
+    const current = (): void => {
+      if (this.closed || this.meta.retiring || generation !== this.generation) throw new ConsoleError('Session was retired during provider connection.', 409, 'SESSION_RETIRED');
+    };
+    current(); const previous = this.adapter; this.adapter = undefined;
     if (previous) await previous.close();
     else if (this.meta.identity?.provider) await terminateOwnedProcess(this.meta.identity.provider);
+    current();
     this.clearRequests(); this.eventKeys.clear(); this.state('starting');
     let factory = this.factory;
     if (!factory) factory = this.meta.launch.host === 'codex' ? (await import('./console-codex.ts')).createCodexHost : (await import('./console-claude.ts')).createClaudeHost;
+    current();
     this.adapter = factory({ launch: this.meta.launch, instructions: this.meta.instructions, args: this.meta.args,
       env: { ...rootEnv(), CREW_HOME: this.root, CREW_CONSOLE_SESSION: this.id }, callbacks: this.callbacks(this.generation), ...(this.meta.identity ? { identity: this.meta.identity } : {}) });
     await this.adapter.start();
+    current();
   }
   private validateAnswer(answer: ConsoleAnswer): void {
     const pending = this.view.requests.find(r => r.id === answer.pendingRequestId);
@@ -256,7 +264,10 @@ export class ConsoleSupervisor {
     } finally { this.busy = false; }
   }
   /** Provider interruption is distinct from deliberately retiring the root. */
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    return this.closePromise ??= this.retire().finally(() => { if (!this.closed) this.closePromise = undefined; });
+  }
+  private async retire(): Promise<void> {
     if (this.closed) return;
     this.generation++; this.clearRequests(); this.meta.mailPaused = true; this.meta.retiring = true; this.heartbeat();
     const failures: string[] = [];

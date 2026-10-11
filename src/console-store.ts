@@ -119,7 +119,7 @@ export function consoleDetail(id: string, before?: string, root = home()): Conso
   if (before !== undefined && !/^\d{1,16}$/.test(before)) throw new ConsoleError('Invalid history cursor.');
   const events = view.events.filter(e => before === undefined || e.sequence < Number(before)).slice(-100);
   const more = events.length && view.events.some(e => e.sequence < events[0]!.sequence);
-  return { session, events, requests: session.state === 'disconnected' || session.state === 'closed' ? [] : view.requests,
+  return { session, events, commands: Object.values(view.commands).slice(-100), requests: session.state === 'disconnected' || session.state === 'closed' ? [] : view.requests,
     ...(more ? { before: String(events[0]!.sequence) } : {}) };
 }
 export function writeView(id: string, view: ConsoleView, root = home()): void {

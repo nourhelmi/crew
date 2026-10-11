@@ -83,6 +83,8 @@ export interface ConsoleDetail {
   session: ConsoleSession;
   events: ConsoleEvent[];
   requests: ConsoleRequest[];
+  /** Recent public delivery outcomes, including actions/answers without chat rows. */
+  commands?: ConsoleCommand[];
   /** Opaque cursor for older conversation events; absence means all available history is shown. */
   before?: string;
 }

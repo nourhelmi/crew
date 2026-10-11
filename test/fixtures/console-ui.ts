@@ -4,10 +4,10 @@
  */
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
-import type { ConsoleBootstrap, ConsoleDetail, ConsoleEvent, ConsoleMutation, ConsoleSession } from '../../src/console-types.ts';
+import type { ConsoleBootstrap, ConsoleCapabilities, ConsoleDetail, ConsoleEvent, ConsoleMutation, ConsoleSession } from '../../src/console-types.ts';
 import type { DashboardSnapshot } from '../../src/dashboard-observe.ts';
 const at = new Date().toISOString();
-const capabilities = {activeInput:'steer' as const, interrupt:true, approvals:true, questions:true, accessModes:['default','workspace','full']};
+const capabilities: ConsoleCapabilities = {activeInput:'steer', interrupt:true, approvals:true, questions:true, accessModes:['default','workspace','full']};
 const sessions: ConsoleSession[] = [{id:'session-1',title:'Ship the Crew console',cwd:'/fixture/crew',mode:'cos',host:'codex',model:'gpt-test',access:'workspace',state:'running',revision:1,createdAt:at,updatedAt:at,rootNodeId:'managed-root',capabilities,pendingRequests:0}];
 const details = new Map<string, ConsoleDetail>();
 const events: ConsoleEvent[] = Array.from({length:42}, (_,i) => ({id:'event-'+i,sequence:i,at,kind:i % 2 ? 'assistant' : 'user',text:i % 2 ? `Review ${i}: confirmed the API and delivery contract.\nKeep the selected member output alongside the root conversation.` : `Task ${i}: inspect the current implementation and report the evidence.`,...(i % 2 ? {streaming:false} : {})} as ConsoleEvent));

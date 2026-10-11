@@ -26,7 +26,7 @@ const elapsed = at => {
   return m < 1 ? 'Just now' : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.floor(m/60)}h ago` : `${Math.floor(m/1440)}d ago`;
 };
 const time = at => at && Number.isFinite(Date.parse(at)) ? new Date(at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
-const status = n => n.waitingSince ? 'Needs attention' : ({idle:n.assignment?.status === 'accepted' ? 'Idle · accepted' : n.assignment?.status === 'submitted' ? 'Idle · submitted' : 'Retained idle',running:'Running',done:'Result ready',blocked:'Blocked',failed:'Failed',stalled:'Stalled',stopped:'Stopped',untracked:'Root session'}[n.state] || n.state);
+const status = n => n.consoleState ? ({starting:'Starting',running:'Running',idle:'Idle',waiting:'Needs your answer',interrupted:'Interrupted',disconnected:'Disconnected',failed:'Failed',closed:'Closed'}[n.consoleState] || n.consoleState) : n.waitingSince ? 'Needs attention' : ({idle:n.assignment?.status === 'accepted' ? 'Idle · accepted' : n.assignment?.status === 'submitted' ? 'Idle · submitted' : 'Retained idle',running:'Running',done:'Result ready',blocked:'Blocked',failed:'Failed',stalled:'Stalled',stopped:'Stopped',untracked:'Root session'}[n.state] || n.state);
 const attention = n => n.waitingSince || ['blocked','failed','stalled'].includes(n.state);
 const badge = n => `<span class="cw-status ${attention(n) ? 'attention' : n.state === 'running' ? '' : 'waiting'}"><span class="cw-dot"></span>${esc(status(n))}</span>`;
 const host = n => `<span class="cw-host ${n.host==='claude' ? 'claude' : ''}" aria-label="${esc(hostName(n.host))}">${n.host==='claude' ? '✳' : n.host==='codex' ? '›_' : 'o'}</span>`;
@@ -231,7 +231,17 @@ const selectedSession = () => bootstrap?.sessions.find(s => s.id === state.sessi
 const activeTurn = s => s && ['running','starting','waiting'].includes(s.state);
 const setError = (id, text) => { el(id).hidden = !text; el(id).textContent = text || ''; };
 
-async function api(path, body) {
+let capabilityRefresh = null;
+async function refreshCapability() {
+  if (!capabilityRefresh) capabilityRefresh = (async () => {
+    const next = await api('/api/console');
+    if (!next.token || !bootstrap) throw new Error('Reconnect to recover console controls.');
+    bootstrap.token = next.token;
+  })().finally(() => { capabilityRefresh = null; });
+  return capabilityRefresh;
+}
+
+async function api(path, body, refreshed = false) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
   try {
@@ -239,6 +249,12 @@ async function api(path, body) {
       headers:body ? {'Content-Type':'application/json', 'X-Crew-Token':bootstrap.token} : {}, ...(body ? {body:JSON.stringify(body)} : {})});
     let value;
     try { value = await response.json(); } catch { throw Object.assign(new Error('The server returned an unreadable response.'), {uncertain:!!body}); }
+    if (body && response.status === 403 && value.code === 'FORBIDDEN' && !refreshed) {
+      // Rejection precedes controller effects. Recover a rotated listener token
+      // and retry exactly this durable operation, including its original ID.
+      await refreshCapability();
+      return await api(path, body, true);
+    }
     if (!response.ok) throw Object.assign(new Error(value.error || `Request failed (${response.status}).`), {code:value.code, status:response.status, uncertain:!!body && response.status >= 500});
     return value;
   } catch (error) {
@@ -359,6 +375,9 @@ function acceptConsoleDetail(next) {
   for (const event of next.events) if (event.command && pending.has(event.command.requestId)) {
     Object.assign(pending.get(event.command.requestId), {state:event.command.state, error:event.command.error});
   }
+  for (const command of next.commands || []) if (pending.has(command.requestId)) {
+    Object.assign(pending.get(command.requestId), {state:command.state, error:command.error});
+  }
   persistPending();
   renderSession(); renderSessions(); renderConversation(); renderRequests();
 }
@@ -417,7 +436,7 @@ function renderRequests() {
       const body = {requestId:requestId(), pendingRequestId:r.id};
       if (r.kind === 'approval') body.option = event.submitter?.value;
       else {
-        body.answers = {};
+        body.answers = Object.create(null);
         for (const [qi,q] of r.questions.entries()) {
           const fields = card.querySelectorAll('fieldset')[qi];
           const picks = [...fields.querySelectorAll('input:checked')].map(i => i.value);

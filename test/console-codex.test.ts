@@ -66,7 +66,7 @@ test('Codex starts stdio experimental protocol, persists identity, and sends the
   assert.equal(JSON.stringify(f.wires()).includes('DO_NOT_REPLAY'), false);
   assert.deepEqual(f.identities, [{ sessionId: 'thread-new' }]);
   assert.equal(f.providers[0]!.pid, f.wires()[0]!.pid);
-  assert.equal(f.providers[0]!.group, false);
+  assert.equal(f.providers[0]!.group, process.platform !== 'win32');
   assert.ok(processMatches(f.providers[0]!));
   assert.equal(await f.host.send('first human prompt', 'human-1'), 'delivered');
   const send = f.wires().find(w => w.method === 'turn/start')!;
@@ -74,6 +74,15 @@ test('Codex starts stdio experimental protocol, persists identity, and sends the
   assert.ok(f.timeline.indexOf('identity:thread-new:') < f.timeline.indexOf('command:human-1:queued'));
   assert.deepEqual(f.identities.at(-1), { sessionId: 'thread-new', turnId: 'turn-1' });
   assert.equal(f.states.at(-1)?.state, 'running');
+});
+
+test('unsupported configuration fails the launch definitively before provider dispatch', async t => {
+  const f = fixture(t, { args: ['--dangerously-bypass-hook-trust'] });
+  await assert.rejects(f.host.start(), /unsupported/);
+  assert.deepEqual(f.wires(), []);
+  assert.deepEqual(f.identities, []);
+  assert.equal(f.commands.find(c => c.id === 'launch')?.state, 'failed');
+  assert.equal(f.states.at(-1)?.state, 'failed');
 });
 
 test('Codex resumes only the supplied identity, discovers the current turn, and never replays history', async t => {
@@ -273,6 +282,16 @@ test('questions normalize and answer using the exact questions/answers protocol 
   await assert.rejects(f.host.answer({ requestId: 'invalid', pendingRequestId: request.id, answers: {} }), /missing answer/);
   await f.host.answer({ requestId: 'answer', pendingRequestId: request.id, answers: { choice: ['One', 'free text'] } });
   assert.deepEqual(f.wires().find(w => !w.method && 'result' in w)!.result, { answers: { choice: { answers: ['One', 'free text'] } } });
+});
+
+test('provider question identifiers remain own data keys through the native answer response', async t => {
+  const f = fixture(t, {}, { questionId: '__proto__' });
+  await f.host.start(); await f.host.send('question', 'ask');
+  await until(() => f.requests.length === 1);
+  await f.host.answer({ requestId: 'answer', pendingRequestId: f.requests[0]!.id, answers: JSON.parse('{"__proto__":"Two"}') });
+  const response = f.wires().find(w => !w.method && 'result' in w)!.result as { answers: Record<string, { answers: string[] }> };
+  assert.deepEqual(Object.keys(response.answers), ['__proto__']);
+  assert.deepEqual(response.answers['__proto__'], { answers: ['Two'] });
 });
 
 test('nonblocking questions preserve running state and secret questions fail closed', async t => {

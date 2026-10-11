@@ -3,7 +3,8 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { ConsoleHostAdapter, HostOptions } from './console-host.ts';
 import type { ConsoleAnswer, ConsoleRequest, ConsoleState, CommandState } from './console-types.ts';
-import { recordProcess } from './console-process.ts';
+import { recordProcess, terminateOwnedProcess } from './console-process.ts';
+import type { OwnedProcess } from './console-process.ts';
 
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as ObjectValue : {};
@@ -30,6 +31,7 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
   const cb = options.callbacks;
   const sessionId = options.identity?.sessionId ?? randomUUID();
   let child: ChildProcessWithoutNullStreams | undefined;
+  let provider: OwnedProcess | undefined;
   let startPromise: Promise<void> | undefined;
   let closePromise: Promise<void> | undefined;
   let interruptPromise: Promise<void> | undefined;
@@ -396,7 +398,8 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
       });
       await control({ subtype: 'initialize', hooks: null });
       if (failure || closing) throw failure ?? new Error('Claude closed during initialization');
-      cb.identity({ sessionId, provider: recordProcess(child.pid!, process.platform !== 'win32') });
+      provider = recordProcess(child.pid!, process.platform !== 'win32');
+      cb.identity({ sessionId, provider });
       ready = true;
       setState(requests.size ? 'waiting' : busy ? 'running' : 'idle');
     } catch (error) {
@@ -501,7 +504,11 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
           cb.command(ack.requestId, 'uncertain', error.message); ack.reject(error);
         }
         for (const input of queue.splice(0)) cb.command(input.requestId, 'failed', error.message);
-        if (child && child.exitCode === null && child.signalCode === null) {
+        if (provider) {
+          await terminateOwnedProcess(provider);
+          if (child && child.exitCode === null && child.signalCode === null) await new Promise<void>(resolve => child!.once('close', resolve));
+        }
+        else if (child && child.exitCode === null && child.signalCode === null) {
           const ownedChild = child;
           await new Promise<void>((resolve, reject) => {
             const timer = setTimeout(() => { kill('SIGKILL'); }, 1_000);

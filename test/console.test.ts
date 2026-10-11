@@ -85,6 +85,8 @@ test('managed roots launch once, stream durable public chat, survive listener re
     const id = result.session.id; assert.equal(result.command.state, 'delivered');
     assert.equal(f.starts(), 1);
     assert.ok(f.observer.snapshot().nodes.some(n => n.id === result.session.rootNodeId && n.role === 'root'));
+    assert.equal(f.observer.detail(result.session.rootNodeId)!.packet, 'first');
+    assert.doesNotMatch(JSON.stringify(f.observer.detail(result.session.rootNodeId)), /Initialize your own advisor checkpoint/);
     await waitFor(() => f.controller.detail(id)?.session.state === 'idle');
     const identity = readMeta(id, f.root)!.identity!.sessionId;
     const firstEvents = f.controller.detail(id)!.events;
@@ -111,10 +113,30 @@ test('managed roots launch once, stream durable public chat, survive listener re
     const session = f.controller.detail(id)!.session;
     const close = await app.post(`/api/console/sessions/${id}/actions`, { requestId: 'close1', action: 'close', revision: session.revision }).then(r => r.json()) as ConsoleMutation;
     assert.equal(close.session.state, 'closed'); assert.equal(close.command.state, 'delivered');
+    assert.equal(f.controller.detail(id)!.commands!.find(c => c.requestId === 'close1')!.state, 'delivered');
     assert.equal((await app.post(`/api/console/sessions/${id}/messages`, { requestId: 'late', text: 'late' })).status, 409);
     assert.equal((await app.post(`/api/console/sessions/${id}/actions`, { requestId: 'resumeclosed', action: 'resume', revision: close.session.revision })).status, 409);
     assert.equal(f.observer.snapshot().nodes.find(n => n.id === session.rootNodeId)!.state, 'stopped');
   } finally { await f.cleanup(); }
+});
+
+test('listener shutdown ends attached SSE sockets promptly while the managed root continues', async () => {
+  const f = await fixture();
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try {
+    const launched = await f.controller.launch(f.launch('hold'));
+    const app = await f.server();
+    const stream = await fetch(app.origin + `/api/events?session=${launched.session.id}`);
+    reader = stream.body!.getReader(); await reader.read();
+    await Promise.race([
+      new Promise<void>((resolve, reject) => app.app.close(error => error ? reject(error) : resolve())),
+      new Promise<never>((_resolve, reject) => { const timer = setTimeout(() => reject(new Error('Listener did not stop with attached SSE')), 1500); timer.unref(); }),
+    ]);
+    assert.equal(f.controller.detail(launched.session.id)!.session.state, 'running');
+    assert.equal(f.children[0]!.exitCode, null);
+    const message = await f.controller.message(launched.session.id, { requestId: 'listener-stopped-message', text: 'complete' });
+    assert.equal(message.command.state, 'delivered');
+  } finally { await reader?.cancel(); await f.cleanup(); }
 });
 
 test('interrupt cancels pending requests, stale answers fail, explicit resume retains recorded provider identity', async () => {
@@ -136,6 +158,7 @@ test('interrupt cancels pending requests, stale answers fail, explicit resume re
     assert.equal(starts[0]!.envHasCrewRun, false);
     await f.controller.message(id, { requestId: 'question', text: 'question' });
     await f.controller.answer(id, { requestId: 'answer', pendingRequestId: 'question-1', answers: { color: 'Blue' } });
+    assert.equal(f.controller.detail(id)!.commands!.find(c => c.requestId === 'answer')!.state, 'delivered');
     assert.deepEqual(f.controller.detail(id)!.requests, []);
     await assert.rejects(f.controller.action(id, { requestId: 'staleaction', action: 'close', revision: 0 }), /Session changed/);
   } finally { await f.cleanup(); }
@@ -177,6 +200,7 @@ test('concurrent idempotent messages, failure receipts and descendant/mail obser
     writeJson(join(f.root, 'runs', child.id, 'meta.json'), child);
     appendMail(mailbox, { id: 'mail1', at: new Date().toISOString(), from: { mailbox: child.id, host: 'codex' }, kind: 'message', text: 'agent advice' });
     const snapshot = f.observer.snapshot(); assert.equal(snapshot.nodes.find(n => n.id === child.id)!.parentId, result.session.rootNodeId);
+    assert.equal(f.observer.detail(result.session.rootNodeId)!.messages[0]!.text, 'agent advice');
     f.observer.detail(child.id);
     await waitFor(() => f.calls(id).some(c => typeof c.text === 'string' && c.text.startsWith('[crew]')));
     assert.equal(f.calls(id).filter(c => typeof c.text === 'string' && c.text.startsWith('[crew]')).length, 1);
@@ -204,6 +228,7 @@ test('interrupt suspends child-mail wakes while close retires only the recorded 
     await new Promise(r => setTimeout(r, 400));
     assert.equal(f.calls(id).filter(c => typeof c.text === 'string' && c.text.startsWith('[crew]')).length, 0);
     assert.equal(f.controller.detail(id)!.session.state, 'interrupted');
+    assert.equal(f.observer.snapshot().nodes.find(n => n.id === result.session.rootNodeId)!.consoleState, 'interrupted');
     assert.equal(JSON.parse(readFileSync(join(f.root, 'runs', 'b-owned', 'meta.json'), 'utf8')).state, 'running');
     await f.controller.message(id, { requestId: 'continue', text: 'hold' });
     await waitFor(() => f.calls(id).some(c => typeof c.text === 'string' && c.text.startsWith('[crew]')));
