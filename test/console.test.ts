@@ -209,7 +209,8 @@ test('interrupt suspends child-mail wakes while close retires only the recorded 
     for (const child of ['b-owned', 'b-grandchild']) assert.equal(JSON.parse(readFileSync(join(f.root, 'runs', child, 'meta.json'), 'utf8')).state, 'stopped');
     assert.equal(JSON.parse(readFileSync(join(f.root, 'runs', 'b-unrelated', 'meta.json'), 'utf8')).state, 'running');
     const { spawn } = await import('../src/spawn.ts');
-    await assert.rejects(spawn({ mailbox, host: 'codex', threadId: identity }, { role: 'builder', name: 'late', task: 'late', cwd: f.root, keep: false, model: 'codex/fixture', effort: 'high' }), /retired parent/);
+    delete process.env.CREW_RUN; process.env.CODEX_THREAD_ID = identity;
+    await assert.rejects(spawn({ role: 'builder', name: 'late', task: 'late', cwd: f.root, keep: false, model: 'codex/fixture', effort: 'high' }), /retired parent/);
     assert.ok(readFileSync(join(f.root, 'runs', 'b-owned', 'meta.json')));
   } finally { await f.cleanup(); }
 });
