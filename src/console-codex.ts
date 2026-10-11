@@ -360,7 +360,7 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
       });
       child.stdout.on('end', () => { buffer = ''; disconnect('crew: Codex app-server stdout closed'); });
       child.stdout.on('error', () => { buffer = ''; disconnect('crew: Codex app-server stdout failed'); });
-      await rpc('initialize', { clientInfo: { name: 'crew_console', title: 'Crew console', version: '0.13.0' }, capabilities: { experimentalApi: true } });
+      await rpc('initialize', { clientInfo: { name: 'crew_console', title: 'Crew console', version: '0.14.0' }, capabilities: { experimentalApi: true } });
       await write({ method: 'initialized' });
       provider = recordProcess(child.pid!, process.platform !== 'win32');
       let roots: string[] = [];
