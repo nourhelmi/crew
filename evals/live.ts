@@ -1,5 +1,5 @@
 import { spawn, execFileSync } from 'node:child_process';
-import { accessSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -69,20 +69,21 @@ const walk=(dir)=>{
  for(const e of fs.readdirSync(dir,{withFileTypes:true})){
   const p=path.join(dir,e.name);if(e.isSymbolicLink())continue;
   if(e.isDirectory())Object.assign(files,walk(p));
-  else if(e.isFile()&&/\\.(json|md)$/.test(e.name)&&fs.statSync(p).size<200000)files[path.relative(env.EVAL_BASE,p)]=fs.readFileSync(p,'utf8');
+  else if(e.isFile()&&/\\.(json|md|mjs)$/.test(e.name)&&fs.statSync(p).size<200000)files[path.relative(env.EVAL_BASE,p)]=fs.readFileSync(p,'utf8');
  }return files;
 };
-if(kind!=='crew'&&kind!=='codex'){append('receipts.jsonl',{args:[kind,...args],caller:env.CREW_RUN||'',exitCode:127,stdout:'stubbed unused host',before:{}});process.exit(127);}
+if(!['crew','codex','node'].includes(kind)){append('receipts.jsonl',{args:[kind,...args],caller:env.CREW_RUN||'',exitCode:127,stdout:'stubbed unused host',before:{}});process.exit(127);}
 if(kind==='codex'&&!['exec','login','--version'].includes(args[0])){console.error('eval: Codex server/daemon controls are disabled');process.exit(127);}
 append('owned.jsonl',{pid:process.pid,kind});
-const before=kind==='crew'&&['assign','accept'].includes(args[0])?{...walk(path.join(env.EVAL_BASE,'crew','runs')),...walk(path.join(env.EVAL_BASE,'workspace'))}:{};
-const target=kind==='crew'?env.EVAL_CREW:env.EVAL_CODEX;
+const captures=kind==='node'||(kind==='codex'&&args[0]==='exec')||(kind==='crew'&&['assign','accept'].includes(args[0]));
+const before=captures?{...walk(path.join(env.EVAL_BASE,'crew','runs')),...walk(path.join(env.EVAL_BASE,'workspace'))}:{};
+const target=kind==='crew'?env.EVAL_CREW:kind==='node'?${JSON.stringify(process.execPath)}:env.EVAL_CODEX;
 const controlled=kind==='crew'&&args[0]==='connect'?['connect','--socket',path.join(env.EVAL_BASE,'unavailable.sock')]:args;
 const child=cp.spawn(target,controlled,{env:{...env,CREW_NO_DELEGATE:'1'},stdio:['inherit','pipe','pipe']});
 let stdout='';child.stdout.on('data',b=>{stdout+=b;process.stdout.write(b)});child.stderr.on('data',b=>process.stderr.write(b));
 child.on('error',e=>{console.error(e.code||'host launch failed');process.exitCode=127});
 child.on('close',(code,signal)=>{
- if(kind==='crew')append('receipts.jsonl',{args,caller:env.CREW_RUN||('codex-'+(env.CODEX_THREAD_ID||'unknown')),exitCode:code??1,stdout,before});
+ if(kind==='crew'||captures)append('receipts.jsonl',{args:kind==='crew'?args:[kind,...args],caller:env.CREW_RUN||('codex-'+(env.CODEX_THREAD_ID||'unknown')),exitCode:code??1,stdout,before,...(kind!=='crew'?{cwd:process.cwd(),after:walk(path.join(env.EVAL_BASE,'workspace'))}:{})});
  process.exitCode=code??1;
 });
 `;
@@ -188,7 +189,7 @@ export async function runLive(options: LiveOptions): Promise<{ report: Report; d
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Object.keys(parsed).length) return blocked('Auth JSON has no credentials.');
   } catch { return blocked('Explicit auth source unavailable or invalid JSON. No provider run executed.'); }
   const sanitize = sanitizer(auth);
-  const base = mkdtempSync(join(tmpdir(), 'crew-live-eval-'));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'crew-live-eval-')));
   const env: NodeJS.ProcessEnv = { ...isolatedEnv(base), EVAL_BASE: base, EVAL_CREW: join(checkout, 'bin', 'crew'), EVAL_CODEX: codex };
   let rootPid: number | undefined;
   let failure = '';
@@ -198,13 +199,14 @@ export async function runLive(options: LiveOptions): Promise<{ report: Report; d
   try {
     for (const key of ['HOME', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'TMPDIR', 'CREW_HOME', 'ADVISOR_STATE_DIR']) mkdirSync(env[key]!, { recursive: true });
     mkdirSync(join(base, 'bin')); mkdirSync(join(base, 'home', '.local', 'bin'), { recursive: true });
-    for (const tool of ['crew', 'codex', 'herdr', 'claude', 'opencode', 'agent-router']) writeFileSync(join(base, 'bin', tool), shim, { mode: 0o700 });
+    for (const tool of ['crew', 'codex', 'node', 'herdr', 'claude', 'opencode', 'agent-router']) writeFileSync(join(base, 'bin', tool), shim, { mode: 0o700 });
     symlinkSync(join(base, 'bin', 'crew'), join(base, 'home', '.local', 'bin', 'crew'));
     writeFileSync(join(base, 'codex', 'auth.json'), auth, { mode: 0o600 });
     writeFileSync(join(base, 'codex', 'hooks.json'), readFileSync(join(checkout, 'codex', 'hooks.json')));
     const model = options.model.replace(/^codex\//, '');
     const args = ['-s', 'workspace-write', '--dangerously-bypass-hook-trust', '-c', 'approval_policy="never"',
-      '-c', `sandbox_workspace_write.writable_roots=${JSON.stringify([base])}`, '-c', 'shell_environment_policy.inherit="all"',
+      '-c', `sandbox_workspace_write.writable_roots=${JSON.stringify([base])}`, '-c', 'sandbox_workspace_write.network_access=true',
+      '-c', 'shell_environment_policy.inherit="all"',
       '-c', 'check_for_update_on_startup=false'];
     writeFileSync(env.CREW_CONFIG!, JSON.stringify({ router: { enabled: false, command: join(base, 'bin', 'agent-router') },
       defaults: { advisor: `codex/${model}@low`, builder: `codex/${model}@low`, checker: `codex/${model}@low` },

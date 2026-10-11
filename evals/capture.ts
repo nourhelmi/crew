@@ -16,6 +16,8 @@ export interface Receipt {
   args: string[]; caller: string; exitCode: number; stdout: string;
   /** Snapshot before the mutation, captured outside the model. */
   before: Record<string, string>;
+  cwd?: string;
+  after?: Record<string, string>;
 }
 export interface LiveCapture {
   runs: Run[];
@@ -47,10 +49,16 @@ export function scoreCapture(capture: LiveCapture, model: string, durationMs: nu
   const output = json(capture.files['workspace/release.json']);
   const stockOwner = advisors.find(r => r.id === stock.owner);
   const salesOwner = advisors.find(r => r.id === sales.owner);
+  const produced = (run: Run | undefined, path: string, content: string | undefined): boolean => Boolean(run && content !== undefined
+    && capture.receipts.some(r => r.args[0] === 'codex' && r.args[1] === 'exec' && r.caller === run.id && r.exitCode === 0
+      && r.before[path] !== content && r.after?.[path] === content));
   // The summaries are deliberately different domains; owners must be distinct real sessions.
   const artifactsGood = Boolean(stockOwner && salesOwner && stockOwner.id !== salesOwner.id
-    && stock.tea === 9 && stock.coffee === 3 && sales.grossCents === 1700 && sales.orders === 3);
-  fact('advisor-artifacts', artifactsGood, 'Distinct retained tool-enabled owners; stock tea=9/coffee=3 after receipt, sales gross=1700/orders=3.',
+    && stockOwner.sessionId && salesOwner.sessionId && stockOwner.sessionId !== salesOwner.sessionId
+    && stock.tea === 9 && stock.coffee === 3 && sales.grossCents === 1700 && sales.orders === 3
+    && produced(stockOwner, 'workspace/stock/summary.json', capture.files['workspace/stock/summary.json'])
+    && produced(salesOwner, 'workspace/sales/summary.json', capture.files['workspace/sales/summary.json']));
+  fact('advisor-artifacts', artifactsGood, 'Distinct retained sessions with successful tool events and artifact-changing owner-turn receipts; correct stock and sales outputs.',
     ['workspace/stock/summary.json', 'workspace/sales/summary.json']);
   fact('integrated-output', artifactsGood && output.tea === 9 && output.coffee === 3 && output.grossCents === 1700 && output.orders === 3,
     'CoS combined release matches both delivered domains after follow-up.', ['workspace/release.json']);
@@ -61,7 +69,7 @@ export function scoreCapture(capture: LiveCapture, model: string, durationMs: nu
     const content = submission && capture.files[submission.result];
     const receipt = submission && capture.receipts.find(c => c.args[0] === 'accept' && (c.args[1] === run.id || c.args[1] === run.name)
       && c.args[2] === submission.ref && c.exitCode === 0 && c.caller === run.parent.mailbox);
-    return a.status === 'accepted' && a.accepted?.by === run.parent.mailbox
+    return a.status === 'accepted' && a.submission === submission?.ref && a.accepted?.by === run.parent.mailbox
       && submission?.revision === a.revision && content !== undefined && hash(content).slice(0, 16) === submission.hash && Boolean(receipt);
   });
   fact('exact-acceptance', accepted.length >= 3 && accepted.some(a => a.run.id === stockOwner?.id)
@@ -79,7 +87,8 @@ export function scoreCapture(capture: LiveCapture, model: string, durationMs: nu
   const initialStock = json(reused?.before['workspace/stock/summary.json']);
   fact('immutable-prior-result', Boolean(priorSubmission && before !== undefined
     && capture.files[priorSubmission.result] === before && hash(before).slice(0, 16) === priorSubmission.hash
-    && initialStock.tea === 7 && initialStock.coffee === 3 && initialStock.owner === stockOwner?.id),
+    && initialStock.tea === 7 && initialStock.coffee === 3 && initialStock.owner === stockOwner?.id
+    && produced(stockOwner, 'workspace/stock/summary.json', reused?.before['workspace/stock/summary.json'])),
     'Correct initial stock and prior accepted snapshot captured before assign; immutable bytes and recorded hash preserved.');
   fact('descendants-settled', capture.runs.length > 0 && capture.runs.every(r => ['idle', 'done', 'stopped'].includes(r.state))
     && capture.runs.every(r => [r.assignment, ...(r.assignmentHistory ?? [])].every(a => a?.status === 'accepted')),
@@ -108,7 +117,12 @@ export function scoreTinyCapture(capture: LiveCapture, model: string, durationMs
     try { return [JSON.parse(line)]; } catch { return []; }
   });
   const tools = events.filter(e => e.type === 'item.completed' && e.item?.type === 'command_execution');
-  const verified = tools.some(e => e.item.exit_code === 0 && /\bnode\s+(?:\.\/)?verify\.mjs\b/.test(e.item.command));
+  // A command string can echo the verifier or skip it with shell control flow. Use
+  // the independently recorded process receipt and bind it to the delivered bytes.
+  const verified = capture.receipts.some(r => r.args[0] === 'node' && r.exitCode === 0 && r.caller.startsWith('codex-')
+    && (r.args[1] === 'workspace/verify.mjs' || (r.cwd === 'workspace' && ['verify.mjs', './verify.mjs'].includes(r.args[1] ?? '')))
+    && ['workspace/verify.mjs', 'workspace/greeting.json', 'workspace/AGENTS.md'].every(p =>
+      r.before[p] === capture.files[p] && r.after?.[p] === capture.files[p]));
   const bounded = capture.files['workspace/verify.mjs'] === tinyVerifier
     && capture.files['workspace/AGENTS.md'] === tinyInstructions
     && Object.keys(capture.files).filter(p => p.startsWith('workspace/')).every(p =>

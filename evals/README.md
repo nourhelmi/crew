@@ -23,6 +23,8 @@ workspace-write, local hooks and `--dangerously-bypass-hook-trust` support. The 
 trusts only this checkout's vetted hooks in an isolated home; this runner uses
 workspace-write with approval policy `never`, not an approval/sandbox bypass. If the
 host cannot run with those controls, that is a setup blocker, not behavior proof.
+Workspace-write explicitly enables network access so nested Codex children can reach
+the configured provider from the root's tool sandbox; read/write boundaries still apply.
 The CoS case also requires the integrated `assign`/immutable-submission/`accept`
 runtime (`src/assignment.ts`). No project or global packages are installed by evals.
 
@@ -109,6 +111,14 @@ artifacts are independently inspectable. Scoring uses actual completed command e
 content and hashes, not source-prose matching or the model's reported success. CLI
 receipts capture immutable bytes before `assign`, so a rewritten old result cannot
 pass preservation merely by claiming it did.
+The tiny case also requires a successful recorded `node verify.mjs` invocation in
+the workspace, with immutable verifier/instructions and delivered greeting bytes
+matching before and after that process. Echoed or skipped command text cannot pass.
+The CoS case binds each domain artifact to a successful owner turn's before/after
+snapshot, including the initial stock artifact before reuse. Passive advisors plus
+root-created files do not satisfy that evidence. These are turn-window snapshots,
+not filesystem write attribution; review overlapping tool traces and owner checks
+when assessing verification quality.
 
 The recorder is an evaluation aid, not a security boundary against a malicious model.
 No browser journeys are affected by this CLI-only suite. Root integration should run
