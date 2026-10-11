@@ -491,9 +491,13 @@ turn-end hook, and a way to wake an idle session. Contributions welcome.
 
 ```sh
 npm install        # typescript, for the typecheck only
-npm test && npm run typecheck
+npm test && npm run typecheck && npm run eval
 node scripts/install.ts   # after changing skills or hooks, bump `version` in both plugin manifests first
 ```
+
+`npm run eval` checks behavioral scorers against fixtures and runs in CI. The opt-in
+`npm run eval:live` exercises real CoS/advisor workflows in isolated temporary homes;
+see [behavior evals](evals/README.md) for setup, evidence and proof boundaries.
 
 [AGENTS.md](AGENTS.md) lists the invariants: zero runtime dependencies, tests that never touch
 your real Claude, Codex or herdr state, and user entry points as skills rather than host-specific
