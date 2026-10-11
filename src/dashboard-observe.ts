@@ -3,6 +3,7 @@ import { closeSync, existsSync, fstatSync, globSync, openSync, readSync, readdir
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import type { Host, Role, RunMeta, RunState } from './types.ts';
+import { consoleSessions, readMeta } from './console-store.ts';
 
 export interface DashboardNode {
   id: string;
@@ -230,19 +231,33 @@ export class DashboardObserver {
     const titles = new Map(jsonLines(readTail(join(this.roots.codex, 'session_index.jsonl'), true).text)
       .map(({ value }) => [string(value.id), string(value.thread_name)]));
     this.nodes.clear();
+    const managedMailboxes = new Map<string, string>();
+    for (const session of consoleSessions(this.roots.crew)) {
+      const identity = readMeta(session.id, this.roots.crew)?.identity;
+      if (identity) managedMailboxes.set(`${session.host}-${identity.sessionId}`, session.rootNodeId);
+      this.nodes.set(session.rootNodeId, {
+        id: session.rootNodeId, workstreamId: session.rootNodeId, name: session.title, role: 'root', host: session.host,
+        cwd: session.cwd, state: session.state === 'closed' ? 'stopped' : session.state === 'failed' ? 'failed'
+          : session.state === 'waiting' ? 'blocked' : ['running', 'starting'].includes(session.state) ? 'running' : 'idle',
+        ...(session.model ? { model: session.model } : {}), ...(session.effort ? { effort: session.effort } : {}),
+        ...(identity ? { sessionId: identity.sessionId } : {}), createdAt: session.createdAt, updatedAt: session.updatedAt,
+        status: `Console ${session.state}${session.error ? `: ${session.error}` : ''}`,
+      });
+    }
     for (const run of runs.values()) {
       const parent = run.parent;
-      if (!runs.has(parent.mailbox) && !this.nodes.has(parent.mailbox)) {
+      const parentId = managedMailboxes.get(parent.mailbox) ?? parent.mailbox;
+      if (!runs.has(parentId) && !this.nodes.has(parentId)) {
         const sessionId = parent.threadId ?? parent.mailbox.replace(/^(claude|codex)-/, '');
         const name = parent.name || titles.get(sessionId) || `${parent.host === 'claude' ? 'Claude Code' : parent.host === 'codex' ? 'Codex' : 'OpenCode'} workstream`;
-        this.nodes.set(parent.mailbox, {
-          id: parent.mailbox, workstreamId: parent.mailbox, name, role: 'root', host: parent.host,
+        this.nodes.set(parentId, {
+          id: parentId, workstreamId: parentId, name, role: 'root', host: parent.host,
           cwd: run.cwd, state: 'untracked', ...(UUID.test(sessionId) ? { sessionId } : {}),
           createdAt: run.createdAt, updatedAt: updated.get(run.id)!,
         });
       }
       this.nodes.set(run.id, {
-        id: run.id, parentId: parent.mailbox, workstreamId: '', name: run.name, role: run.role, host: run.route.host,
+        id: run.id, parentId, workstreamId: '', name: run.name, role: run.role, host: run.route.host,
         model: run.route.model, effort: run.route.effort, cwd: run.cwd, state: run.state, launcher: run.launcher,
         ...(run.threadId || run.sessionId ? { sessionId: run.threadId || run.sessionId } : {}),
         createdAt: run.createdAt, updatedAt: updated.get(run.id)!,
@@ -269,8 +284,8 @@ export class DashboardObserver {
         group = { id: root.id, name: root.name, project: basename(root.cwd) || root.cwd, updatedAt: root.updatedAt, runs: 0, running: 0, attention: 0 };
         groups.set(root.id, group);
       }
-      if (node.role !== 'root') {
-        group.runs++;
+      if (node.role !== 'root' || node.id.startsWith('console-')) {
+        if (node.role !== 'root') group.runs++;
         if (node.state === 'running') group.running++;
         if (node.waitingSince || ['blocked', 'stalled', 'failed'].includes(node.state)) group.attention++;
       }

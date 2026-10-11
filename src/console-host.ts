@@ -16,6 +16,8 @@ export interface HostOptions {
   /** Fully scrubbed root env supplied by the supervisor. Never inherited CREW_RUN. */
   env: NodeJS.ProcessEnv;
   instructions: string;
+  /** Server-configured host CLI options, never browser-supplied. */
+  args?: string[];
   identity?: HostIdentity;
   callbacks: HostCallbacks;
   /** Test-only command override, never accepted from browser input. */

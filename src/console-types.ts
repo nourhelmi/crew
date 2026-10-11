@@ -6,6 +6,8 @@ export type ConsoleState = 'starting' | 'running' | 'idle' | 'waiting' | 'interr
 export type CommandState = 'queued' | 'delivered' | 'failed' | 'uncertain';
 
 export interface ConsoleCapabilities {
+  /** Omitted by older adapters; the console bootstrap advertises only honest host access modes. */
+  accessModes?: ConsoleAccess[];
   activeInput: 'steer' | 'queue';
   interrupt: boolean;
   approvals: boolean;

@@ -39,7 +39,8 @@ const HELP = `crew: advisor crews on native Claude Code and Codex
   crew connect --socket PATH   Connect this loaded Codex root to its owning Unix app server.
   crew ls [--all]              Your children (or everything).
   crew read <run> [--submission REF] [--json]   Result/history, or the tail of its terminal/log.
-  crew dashboard [--port N]    Local read-only workstream viewer and live output (default 4317).
+  crew console [--port N]      Local console for managed roots and live teams (default 4317).
+  crew dashboard [--port N]    Compatibility alias for crew console.
   crew resume <run>            Resume an exited headless session with its recorded launch settings.
   crew stop <run>              Stop a run and close its pane.
   crew route --role R --task T Show where a task would go, without launching.
@@ -138,6 +139,7 @@ async function main(argv: string[]): Promise<void> {
   });
 
   switch (command) {
+    case 'console':
     case 'dashboard': {
       const { dashboard } = await import('./dashboard.ts');
       await dashboard(values.port === undefined ? 4317 : /^\d+$/.test(values.port) ? Number(values.port) : NaN);
