@@ -18,7 +18,7 @@ import { checkouts, trustPaths, trustTargets } from './trust.ts';
 import { routerSetting, setSessionRouter, setShellRouter } from './settings.ts';
 import { configPath, findRun, listRuns, loadConfig, readJson, resultPath, retained, runDir, updateRun, withLock, writeJson } from './store.ts';
 import { HOSTS, ROLES, type Address, type Host, type Role, type RunMeta } from './types.ts';
-import { wait, waitHint, watch } from './wait.ts';
+import { ensureWatcher, wait, waitHint, watch } from './wait.ts';
 
 const HELP = `crew: advisor crews on native Claude Code and Codex
 
@@ -205,6 +205,7 @@ async function main(argv: string[]): Promise<void> {
       const text = values.file ? readFileSync(values.file, 'utf8') : words.length ? words.join(' ') : stdin();
       if (!text.trim()) fail('crew: empty amendment');
       const { run, number, delivery } = amend(self(), ref, text);
+      ensureWatcher(run.parent.mailbox);
       console.log(`amendment ${number} appended to ${run.name}'s packet: ${delivery}`);
       return;
     }
@@ -212,6 +213,7 @@ async function main(argv: string[]): Promise<void> {
       const [ref] = positionals;
       if (!ref || !values.packet) fail('crew: crew assign <run> --packet FILE');
       const { run, delivery } = assign(self(), ref, readFileSync(values.packet, 'utf8'));
+      ensureWatcher(run.parent.mailbox);
       console.log(`assignment ${run.assignment!.id} started for ${run.name}: ${delivery}`);
       return;
     }

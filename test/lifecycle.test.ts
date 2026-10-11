@@ -702,6 +702,21 @@ if(a[0]==='pane'&&a[1]==='split'){
     assert.equal(hostCalls().filter(call => call.worker).length, 0);
   });
 
+  for (const command of ['assign', 'amend']) it(`restarts observation for a retained Herdr member after ${command}`, async () => {
+    const herdr = join(dir, 'bin', 'herdr');
+    writeFileSync(herdr, `#!${process.execPath}\nconsole.log(JSON.stringify({agent_status:'blocked'}));\n`, { mode: 0o755 });
+    const run = fixtureRun({ role: 'advisor', keep: true, launcher: 'herdr', parent: { host: 'codex', mailbox: 'codex-root' },
+      herdr: { agent: 'pane', pane: 'pane', session: 'owned' } });
+    result('DONE: previous assignment'); mail.settle(run.id);
+    assert.equal(store.readRun(run.id)!.state, 'idle');
+    assert.ok(!existsSync(join(store.mailDir('codex-root'), 'watcher')));
+    const packet = join(dir, 'next.md'); writeFileSync(packet, 'next outcome');
+    await cli(command === 'assign' ? ['assign', run.id, '--packet', packet] : ['amend', run.id, 'repair current outcome'], { HERDR_BIN_PATH: herdr });
+    assert.ok(existsSync(join(store.mailDir('codex-root'), 'watcher')), 'new work needs parent-side observation after idle');
+    await until(() => Boolean(store.readRun(run.id)?.waitingSince));
+    assert.ok(mail.takeUnread('codex-root').some(m => m.kind === 'waiting'));
+  });
+
   it('marks a missing executable launch failed without an unhandled spawn error', async () => {
     rmSync(join(dir, 'bin', 'opencode'));
     // No installed OpenCode is used.
