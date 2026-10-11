@@ -139,6 +139,25 @@ test('listener shutdown ends attached SSE sockets promptly while the managed roo
   } finally { await reader?.cancel(); await f.cleanup(); }
 });
 
+test('SSE completes delayed action receipts without fabricating a human chat row', async () => {
+  const f = await fixture();
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try {
+    const launched = await f.controller.launch(f.launch('hold'));
+    const fast = new ConsoleController({ root: f.root, receiptWaitMs: 0 });
+    const queued = await fast.action(launched.session.id, { requestId: 'deferred-interrupt', action: 'interrupt', revision: launched.session.revision });
+    assert.equal(queued.command.state, 'queued');
+    const app = await f.server();
+    const stream = await fetch(app.origin + `/api/events?session=${launched.session.id}`, { signal: AbortSignal.timeout(3000) });
+    reader = stream.body!.getReader(); let data = '';
+    while (!data.includes('"requestId":"deferred-interrupt","state":"delivered"')) {
+      const chunk = await reader.read(); assert.equal(chunk.done, false); data += new TextDecoder().decode(chunk.value);
+    }
+    assert.match(data, /"state":"interrupted"/);
+    assert.equal(f.controller.detail(launched.session.id)!.events.filter(e => e.kind === 'user').length, 1);
+  } finally { await reader?.cancel(); await f.cleanup(); }
+});
+
 test('interrupt cancels pending requests, stale answers fail, explicit resume retains recorded provider identity', async () => {
   const f = await fixture();
   try {
@@ -251,7 +270,12 @@ test('failed team retirement is explicit, retryable and never reopens a delibera
     const mailbox = `codex-${readMeta(id, f.root)!.identity!.sessionId}`;
     const child: RunMeta = { id: 'b-failed-stop', name: 'failed-stop', role: 'builder', route: { host: 'claude', model: 'fixture', effort: 'high', strategy: 'pinned' }, cwd: f.root, keep: true, parent: { mailbox, host: 'codex' }, launcher: 'bg', bgId: 'fixture-bg', createdAt: new Date().toISOString(), state: 'running' };
     writeJson(join(f.root, 'runs', child.id, 'meta.json'), child);
-    await assert.rejects(f.controller.action(id, { requestId: 'failed-close', action: 'close', revision: f.controller.detail(id)!.session.revision }), (error: unknown) => error instanceof ConsoleError && error.code === 'RETIREMENT_FAILED');
+    const input = { requestId: 'failed-close', action: 'close', revision: f.controller.detail(id)!.session.revision };
+    // HTTP/controller waits may return queued while a slow host stop is still in
+    // flight. Judge the completed durable receipt, never that provisional reply.
+    await f.controller.action(id, input).catch(error => { assert.ok(error instanceof ConsoleError && error.code === 'RETIREMENT_FAILED'); });
+    await waitFor(() => readReceipt(id, input.requestId, f.root)?.phase === 'complete');
+    await assert.rejects(f.controller.action(id, input), (error: unknown) => error instanceof ConsoleError && error.code === 'RETIREMENT_FAILED');
     assert.equal(f.controller.detail(id)!.session.state, 'failed');
     await assert.rejects(f.controller.action(id, { requestId: 'cannot-resume', action: 'resume', revision: f.controller.detail(id)!.session.revision }), (error: unknown) => error instanceof ConsoleError && error.code === 'SESSION_RETIRED');
     // Fixture reconciliation proves the recorded bg handle is gone; retry close can finish retirement.

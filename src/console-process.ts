@@ -35,25 +35,34 @@ export function processExists(pid: number): boolean {
     // A zombie has stopped but its parent may not have reaped it yet.
     return !execFileSync('ps', ['-p', String(pid), '-o', 'stat='], { encoding: 'utf8', timeout: 2000 }).trim().startsWith('Z');
   }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false; throw error; }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
+    // The process may exit between kill(0) and ps; other ps failures stay fatal.
+    try { process.kill(pid, 0); }
+    catch (probe) { if ((probe as NodeJS.ErrnoException).code === 'ESRCH') return false; }
+    throw error;
+  }
 }
 export function processMatches(handle: OwnedProcess): boolean {
   if (!Number.isSafeInteger(handle.pid) || handle.pid <= 1 || handle.pid === process.pid) return false;
-  const live = stamp(handle.pid);
-  return live.start === handle.start && live.fingerprint === handle.fingerprint;
+  try {
+    const live = stamp(handle.pid);
+    return live.start === handle.start && live.fingerprint === handle.fingerprint;
+  } catch (error) { if (!processExists(handle.pid)) return false; throw error; }
 }
 /** Explicit recovery may stop the recorded orphan, never an unrelated recycled PID. */
 export async function terminateOwnedProcess(handle: OwnedProcess): Promise<void> {
   const grouped = handle.group && process.platform !== 'win32';
   const alive = (): boolean => grouped ? groupMembers(handle.pid).length > 0 : processExists(handle.pid);
   const verify = (): void => {
+    if (processExists(handle.pid) && processMatches(handle)) return;
     if (processExists(handle.pid)) {
-      if (processMatches(handle)) return;
       throw new Error('Provider process ownership changed. Refusing to stop or resume an unrelated process.');
     }
     // A dead CLI wrapper does not prove its native child exited. A surviving
     // recorded member binds the group to this launch; otherwise fail closed.
     const members = grouped ? groupMembers(handle.pid) : [];
+    if (!members.length) return;
     if (handle.members?.some(member => members.includes(member.pid) && processMatches({ ...member, group: false }))) return;
     throw new Error('Provider wrapper exited with an unverified live process group. Resume is blocked to avoid concurrent session owners.');
   };

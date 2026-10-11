@@ -119,6 +119,7 @@ describe('actual console HTTP runner with a credential-free fake provider', () =
       }
       const cleanup = JSON.parse(readFileSync(join(directory, 'cleanup.json'), 'utf8'));
       assert.equal(cleanup.closeReceipt.command.state, 'delivered');
+      assert.equal(cleanup.providerPids.length, 1); assert.deepEqual(cleanup.remainingProviderPids, []);
       for (const pid of [cleanup.serverPid, ...cleanup.supervisorGroups]) assert.throws(() => process.kill(pid, 0), /ESRCH/);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });

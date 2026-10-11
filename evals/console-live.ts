@@ -15,6 +15,8 @@ import { scenarios } from './scenarios.ts';
 import type { Report } from './scenarios.ts';
 import { unexecuted } from './score.ts';
 import { setupIsolatedHookTrust } from './hook-trust.ts';
+import { processExists, terminateOwnedProcess } from '../src/console-process.ts';
+import type { OwnedProcess } from '../src/console-process.ts';
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -93,6 +95,16 @@ export async function runConsoleLive(options: LiveOptions): Promise<{ report: Re
     return readdirSync(root).flatMap(id => {
       try { const meta = JSON.parse(readFileSync(join(root, id, 'meta.json'), 'utf8')); return Number.isSafeInteger(meta.pid) && meta.pid > 1 ? [meta.pid as number] : []; }
       catch { return []; }
+    });
+  };
+  const providerHandles = (): OwnedProcess[] => {
+    const root = join(base, 'crew/console/sessions');
+    if (!existsSync(root)) return [];
+    return readdirSync(root).flatMap(id => {
+      try {
+        const provider = JSON.parse(readFileSync(join(root, id, 'meta.json'), 'utf8')).identity?.provider;
+        return provider && Number.isSafeInteger(provider.pid) && provider.pid > 1 ? [provider as OwnedProcess] : [];
+      } catch { return []; }
     });
   };
   const recoverOwnedLaunch = (): void => {
@@ -289,6 +301,13 @@ export async function runConsoleLive(options: LiveOptions): Promise<{ report: Re
         closeReceipt = await request('POST', `/api/console/sessions/${sessionId}/actions`, { requestId: `eval-close-${randomBytes(12).toString('hex')}`, action: 'close', revision: detail.session.revision }, signal, false);
       } catch (error) { cleanupError = clean(error instanceof Error ? error.message : String(error)); }
     }
+    // Native hosts have separate owned groups. A failed/aborted HTTP close must
+    // not leave them alive when the supervisor group is escalated.
+    const providers = providerHandles();
+    for (const provider of providers) {
+      try { await terminateOwnedProcess(provider); }
+      catch (error) { cleanupError ||= clean(error instanceof Error ? error.message : String(error)); }
+    }
     let groups = supervisorGroups();
     signalOwned(base, serverPid, 'SIGTERM', groups); await delay(250);
     groups = [...new Set([...groups, ...supervisorGroups()])];
@@ -302,7 +321,8 @@ export async function runConsoleLive(options: LiveOptions): Promise<{ report: Re
       capture.receipts = collect(base).receipts;
       report ??= setupReport('Console adapter ended without a report.', launched ? 'fail' : 'blocked');
       if (cleanupError) { report.status = 'fail'; report.note += ` Explicit close failed: ${cleanupError}; owned isolated groups escalated.`; }
-      save('cleanup.json', JSON.stringify({ serverPid, supervisorGroups: groups, closeReceipt, error: cleanupError || undefined }, null, 2));
+      save('cleanup.json', JSON.stringify({ serverPid, supervisorGroups: groups, providerPids: providers.map(p => p.pid),
+        remainingProviderPids: providers.filter(p => processExists(p.pid)).map(p => p.pid), closeReceipt, error: cleanupError || undefined }, null, 2));
       report.evidencePaths.push('cleanup.json');
       save('console-capture.json', JSON.stringify(capture, null, 2)); save('console-server.log', log.join(''));
       for (const [path, content] of Object.entries(privateEvidence)) save(path, content);
