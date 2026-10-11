@@ -370,8 +370,10 @@ an explicit choice on either host.
 
 Each console root has its own supervisor and provider connection. Closing the browser or
 restarting the web listener leaves those sessions running; reconnecting restores their
-conversation and pending requests. Interrupt stops a turn, while closing a session deliberately
-retires its root. The console only resumes identities it created and recorded.
+conversation and pending requests. Interrupt stops the root's turn and suspends automatic mail
+wakes until you continue; its children can finish their work. Closing a session deliberately
+stops the root and its Crew descendants, retaining their files and history. The console only
+resumes identities it created and recorded.
 
 ```mermaid
 flowchart LR
