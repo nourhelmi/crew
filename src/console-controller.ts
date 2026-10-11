@@ -174,6 +174,7 @@ export class ConsoleController {
     const prior = readReceipt(id, intent.payload.requestId, this.root);
     if (prior) { acceptIntent(id, intent, this.root); return this.receiptMutation(id, intent.payload.requestId); }
     if (session.state === 'closed') throw new ConsoleError('Session is deliberately closed.', 409, 'SESSION_CLOSED');
+    if (readMeta(id, this.root)?.retiring && !(intent.kind === 'action' && intent.payload.action === 'close')) throw new ConsoleError('The team is being retired. Retry Close to finish retirement.', 409, 'SESSION_RETIRED');
     if (intent.kind === 'action') {
       if (intent.payload.revision !== session.revision) throw new ConsoleError('Session changed. Refresh before applying this action.', 409, 'STALE_REVISION');
       if (intent.payload.action === 'resume') {

@@ -9,7 +9,7 @@ import { route } from './route.ts';
 import { routerSetting } from './settings.ts';
 import { trustPaths, trustTargets } from './trust.ts';
 import { RESULT_HEADINGS } from './result.ts';
-import { briefPath, findRun, home, listRuns, loadConfig, newId, packetPath, readRun, resultPath, retained, runDir, updateRun, withLock, writeRun } from './store.ts';
+import { briefPath, findRun, home, listRuns, loadConfig, mailDir, newId, packetPath, readJson, readRun, resultPath, retained, runDir, updateRun, withLock, writeRun } from './store.ts';
 import type { Config, Effort, Host, Role, Route, RunMeta } from './types.ts';
 
 export const ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), '..');
@@ -289,7 +289,7 @@ export async function spawn(options: SpawnOptions): Promise<RunMeta> {
 
   // Routing awaits an external process; reserve the name from fresh state afterwards.
   withLock('spawn', () => {
-    if (readRun(parent.mailbox)?.state === 'stopped') throw new Error('crew: a retired parent cannot launch new descendants');
+    if (readRun(parent.mailbox)?.state === 'stopped' || readJson(join(mailDir(parent.mailbox), 'console-retired.json'))) throw new Error('crew: a retired parent cannot launch new descendants');
     if (listRuns().some(current => current.name === run.name && retained(current))) {
       throw new Error(`crew: a live run is already named "${run.name}"`);
     }

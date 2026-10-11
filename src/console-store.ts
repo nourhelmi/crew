@@ -24,6 +24,9 @@ export interface ConsoleMeta {
   pid?: number;
   epoch?: string;
   heartbeat?: number;
+  /** Explicit user interruption suppresses child-mail wakeups until human continuation. */
+  mailPaused?: boolean;
+  retiring?: boolean;
   wake?: { id: string; state: 'attempted' | 'accepted' | 'uncertain' };
 }
 export interface ConsoleView {

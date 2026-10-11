@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
@@ -24,6 +24,9 @@ async function fixture() {
   for (const [name, value] of Object.entries({ HOME: root, CREW_HOME: root, CREW_CONFIG: join(root, 'config.json'), CREW_ROSTER: join(root, 'roster.json'), CODEX_HOME: join(root, 'codex'), CLAUDE_CONFIG_DIR: join(root, 'claude'), ADVISOR_STATE_DIR: join(root, 'advisor') })) process.env[name] = value;
   writeJson(process.env.CREW_CONFIG!, { router: { enabled: false }, args: { codex: [], claude: [] } });
   writeJson(process.env.CREW_ROSTER!, { models: [{ model: 'codex/fixture', effort: 'high', roles: ['builder'], cost: 0, use: 'test' }] });
+  mkdirSync(join(root, 'bin'));
+  for (const host of ['codex', 'claude', 'herdr']) { const path = join(root, 'bin', host); writeFileSync(path, '#!/bin/sh\nexit 99\n'); chmodSync(path, 0o755); }
+  process.env.PATH = `${join(root, 'bin')}:${process.env.PATH}`;
   const children: ChildProcess[] = [];
   let starts = 0;
   const controller = new ConsoleController({ root, providers: () => (['codex', 'claude'] as const).map(id => ({ id, label: id, available: true, models: [{ id: 'fixture', label: 'Fixture', efforts: ['high'] }], capabilities: hostCapabilities(id) })), receiptWaitMs: 2500,
@@ -180,5 +183,50 @@ test('concurrent idempotent messages, failure receipts and descendant/mail obser
     const failed = await f.controller.message(id, { requestId: 'fail', text: 'transport-failure' }); assert.equal(failed.command.state, 'uncertain');
     assert.equal(f.calls(id).filter(c => c.requestId === 'fail').length, 1);
     const bootstrap = JSON.stringify(f.controller.bootstrap()); assert.ok(!bootstrap.includes('instructions') && !bootstrap.includes('fixture-calls') && !bootstrap.includes('turnId'));
+  } finally { await f.cleanup(); }
+});
+
+test('interrupt suspends child-mail wakes while close retires only the recorded descendant team and blocks late spawn', async () => {
+  const f = await fixture();
+  try {
+    const result = await f.controller.launch(f.launch('hold')); const id = result.session.id;
+    const identity = readMeta(id, f.root)!.identity!.sessionId; const mailbox = `codex-${identity}`;
+    const at = new Date().toISOString();
+    const make = (id: string, parent: string): RunMeta => ({ id, name: id, role: 'builder', route: { host: 'codex', model: 'fixture', effort: 'high', strategy: 'pinned' }, cwd: f.root, keep: true, parent: { mailbox: parent, host: 'codex' }, launcher: 'exec', createdAt: at, state: 'running' });
+    for (const child of [make('b-owned', mailbox), make('b-grandchild', 'b-owned'), make('b-unrelated', 'codex-other')]) writeJson(join(f.root, 'runs', child.id, 'meta.json'), child);
+    await f.controller.action(id, { requestId: 'pause', action: 'interrupt', revision: f.controller.detail(id)!.session.revision });
+    appendMail(mailbox, { id: 'pausedmail', at, from: { mailbox: 'b-owned', host: 'codex' }, kind: 'message', text: 'paused advice' });
+    // The latch survives a later host idle notification: unread mail does not undo an explicit interrupt.
+    await new Promise(r => setTimeout(r, 400));
+    assert.equal(f.calls(id).filter(c => typeof c.text === 'string' && c.text.startsWith('[crew]')).length, 0);
+    assert.equal(f.controller.detail(id)!.session.state, 'interrupted');
+    assert.equal(JSON.parse(readFileSync(join(f.root, 'runs', 'b-owned', 'meta.json'), 'utf8')).state, 'running');
+    await f.controller.message(id, { requestId: 'continue', text: 'hold' });
+    await waitFor(() => f.calls(id).some(c => typeof c.text === 'string' && c.text.startsWith('[crew]')));
+    await waitFor(() => f.controller.detail(id)?.session.state === 'idle');
+    const closed = await f.controller.action(id, { requestId: 'retire', action: 'close', revision: f.controller.detail(id)!.session.revision });
+    assert.equal(closed.session.state, 'closed');
+    for (const child of ['b-owned', 'b-grandchild']) assert.equal(JSON.parse(readFileSync(join(f.root, 'runs', child, 'meta.json'), 'utf8')).state, 'stopped');
+    assert.equal(JSON.parse(readFileSync(join(f.root, 'runs', 'b-unrelated', 'meta.json'), 'utf8')).state, 'running');
+    const { spawn } = await import('../src/spawn.ts');
+    await assert.rejects(spawn({ mailbox, host: 'codex', threadId: identity }, { role: 'builder', name: 'late', task: 'late', cwd: f.root, keep: false, model: 'codex/fixture', effort: 'high' }), /retired parent/);
+    assert.ok(readFileSync(join(f.root, 'runs', 'b-owned', 'meta.json')));
+  } finally { await f.cleanup(); }
+});
+
+test('failed team retirement is explicit, retryable and never reopens a deliberately retiring root', async () => {
+  const f = await fixture();
+  try {
+    const result = await f.controller.launch(f.launch('hold')); const id = result.session.id;
+    const mailbox = `codex-${readMeta(id, f.root)!.identity!.sessionId}`;
+    const child: RunMeta = { id: 'b-failed-stop', name: 'failed-stop', role: 'builder', route: { host: 'claude', model: 'fixture', effort: 'high', strategy: 'pinned' }, cwd: f.root, keep: true, parent: { mailbox, host: 'codex' }, launcher: 'bg', bgId: 'fixture-bg', createdAt: new Date().toISOString(), state: 'running' };
+    writeJson(join(f.root, 'runs', child.id, 'meta.json'), child);
+    await assert.rejects(f.controller.action(id, { requestId: 'failed-close', action: 'close', revision: f.controller.detail(id)!.session.revision }), (error: unknown) => error instanceof ConsoleError && error.code === 'RETIREMENT_FAILED');
+    assert.equal(f.controller.detail(id)!.session.state, 'failed');
+    await assert.rejects(f.controller.action(id, { requestId: 'cannot-resume', action: 'resume', revision: f.controller.detail(id)!.session.revision }), (error: unknown) => error instanceof ConsoleError && error.code === 'SESSION_RETIRED');
+    // Fixture reconciliation proves the recorded bg handle is gone; retry close can finish retirement.
+    delete child.bgId; child.state = 'stopped'; writeJson(join(f.root, 'runs', child.id, 'meta.json'), child);
+    const retry = await f.controller.action(id, { requestId: 'retry-close', action: 'close', revision: f.controller.detail(id)!.session.revision });
+    assert.equal(retry.session.state, 'closed'); assert.equal(retry.command.state, 'delivered');
   } finally { await f.cleanup(); }
 });

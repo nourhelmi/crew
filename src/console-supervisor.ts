@@ -8,6 +8,7 @@ import type { ConsoleMeta, ConsoleReceipt, ConsoleView } from './console-store.t
 import type { ConsoleHostAdapter, HostCallbacks, HostEvent, HostFactory } from './console-host.ts';
 import type { ConsoleAnswer, ConsoleCommand, ConsoleEvent, ConsoleState } from './console-types.ts';
 import { home, mailDir, readJson, unread, withLock, writeJson } from './store.ts';
+import { retireRoot } from './retire.ts';
 
 /** One detached owner owns every provider pipe and durable view write. HTTP listeners own none. */
 export class ConsoleSupervisor {
@@ -117,7 +118,7 @@ export class ConsoleSupervisor {
       state: (state, error) => {
         if (!live()) return;
         if (['idle', 'interrupted', 'disconnected', 'failed', 'closed'].includes(state)) this.clearRequests();
-        this.state(state, error);
+        this.state(this.meta.mailPaused && ['idle', 'running'].includes(state) ? 'interrupted' : state, error);
       },
       event: event => { if (live()) this.event(event); },
       request: request => {
@@ -174,6 +175,7 @@ export class ConsoleSupervisor {
       } else if (intent.kind === 'message') {
         if (!this.adapter || ['closed', 'failed', 'disconnected'].includes(this.view.session.state)) throw new ConsoleError('Session transport is unavailable.', 409, 'SUPERVISOR_UNAVAILABLE');
         this.event({ kind: 'user', text: intent.payload.text, command: receipt.command });
+        this.meta.mailPaused = false; this.heartbeat();
         this.finish(receipt, await this.adapter.send(intent.payload.text, receipt.requestId, intent.payload.interrupt));
       } else if (intent.kind === 'answer') {
         this.validateAnswer(intent.payload);
@@ -186,10 +188,12 @@ export class ConsoleSupervisor {
           await this.close(); this.finish(receipt, 'delivered');
         } else if (action === 'interrupt') {
           if (!this.adapter) throw new ConsoleError('Provider is disconnected.', 409, 'SUPERVISOR_UNAVAILABLE');
+          this.meta.mailPaused = true; this.heartbeat();
           await this.adapter.interrupt(); this.finish(receipt, 'delivered');
         } else {
           if (!this.meta.identity?.sessionId) throw new ConsoleError('No exact provider identity is recorded.', 409, 'IDENTITY_UNAVAILABLE');
           if (!['idle', 'interrupted', 'disconnected', 'failed'].includes(this.view.session.state)) throw new ConsoleError('Interrupt before resuming.', 409, 'UNSUPPORTED_ACTION');
+          this.meta.mailPaused = false; this.heartbeat();
           await this.connect(); this.event({ kind: 'status', text: 'Resumed the recorded provider session. Send a message to continue.' }); this.finish(receipt, 'delivered');
         }
       }
@@ -205,7 +209,7 @@ export class ConsoleSupervisor {
     }
   }
   private async mail(): Promise<void> {
-    if (!this.adapter || !this.meta.identity || !['idle', 'running'].includes(this.view.session.state)) return;
+    if (this.meta.mailPaused || !this.adapter || !this.meta.identity || !['idle', 'running'].includes(this.view.session.state)) return;
     const mailbox = `${this.meta.launch.host}-${this.meta.identity.sessionId}`;
     const batch = unread(mailbox).mails;
     if (!batch.length || batch.some(m => m.id === this.meta.wake?.id)) return;
@@ -233,10 +237,21 @@ export class ConsoleSupervisor {
   /** Provider interruption is distinct from deliberately retiring the root. */
   async close(): Promise<void> {
     if (this.closed) return;
-    this.generation++; this.clearRequests(); this.closed = true;
-    if (this.timer) clearInterval(this.timer);
+    this.generation++; this.clearRequests(); this.meta.mailPaused = true; this.meta.retiring = true; this.heartbeat();
+    const failures: string[] = [];
+    if (this.meta.identity) {
+      try { retireRoot(`${this.meta.launch.host}-${this.meta.identity.sessionId}`, this.id); }
+      catch (error) { failures.push(error instanceof Error ? error.message : 'Team retirement failed.'); }
+    }
     try { await this.adapter?.close(); }
-    finally {
+    catch (error) { failures.push(error instanceof Error ? error.message : 'Root provider close failed.'); }
+    if (failures.length) {
+      this.state('failed', failures.join('\n'));
+      throw new ConsoleError(`Team retirement failed: ${failures.join('\n')}`, 409, 'RETIREMENT_FAILED');
+    }
+    this.closed = true;
+    if (this.timer) clearInterval(this.timer);
+    {
       this.adapter = undefined;
       for (const receipt of receipts(this.id, this.root)) {
         if (receipt.phase === 'pending' && !(receipt.intent.kind === 'action' && receipt.intent.payload.action === 'close')) this.finish(receipt, 'failed', 'Session was deliberately closed before this input was delivered.');

@@ -178,7 +178,7 @@ it('serves a local read-only API, blocks cross-site/host requests and streams gr
     const home = await fetch(url);
     assert.equal(home.status, 200);
     assert.match(home.headers.get('content-security-policy') ?? '', /frame-ancestors 'none'/);
-    assert.match(await home.text(), /Crew — workstreams/);
+    assert.match(await home.text(), /Crew — (?:workstreams|console)/);
     assert.equal((await fetch(url + '/api/snapshot', { headers: { Origin: 'https://evil.example' } })).status, 403);
     const wrongHost = await new Promise<number | undefined>((resolve, reject) => {
       const req = request(url + '/api/snapshot', { headers: { Host: 'evil.example' } }, res => { res.resume(); resolve(res.statusCode); });

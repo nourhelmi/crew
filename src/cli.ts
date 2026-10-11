@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join, resolve as resolvePath } from 'node:path';
 import { parseArgs } from 'node:util';
-import { closePane, herdr, inHerdr, labelPane } from './herdr.ts';
+import { herdr, inHerdr, labelPane } from './herdr.ts';
 import { isHookEvent, runHook } from './hook.ts';
 import { defaultCodexSocket, owningCodexSocket, self } from './identity.ts';
 import { registerCodex, wakeCodex } from './codex-mail.ts';
@@ -13,12 +13,13 @@ import { accept, submissionPath } from './assignment.ts';
 import { grade } from './outcome.ts';
 import { loadRoster, rosterPath, routerView, unrunnable } from './roster.ts';
 import { isEffort, route } from './route.ts';
-import { bgActive, hostEnv, spawn } from './spawn.ts';
+import { hostEnv, spawn } from './spawn.ts';
 import { checkouts, trustPaths, trustTargets } from './trust.ts';
 import { routerSetting, setSessionRouter, setShellRouter } from './settings.ts';
 import { configPath, findRun, listRuns, loadConfig, readJson, resultPath, retained, runDir, updateRun, withLock, writeJson } from './store.ts';
 import { HOSTS, ROLES, type Address, type Host, type Role, type RunMeta } from './types.ts';
 import { ensureWatcher, wait, waitHint, watch } from './wait.ts';
+import { stopRun } from './retire.ts';
 
 const HELP = `crew: advisor crews on native Claude Code and Codex
 
@@ -101,29 +102,6 @@ function tail(run: RunMeta): string {
   catch { return '(no output captured)'; }
 }
 
-function stopRun(run: RunMeta, visited = new Set<string>()): void {
-  if (visited.has(run.id)) return;
-  visited.add(run.id);
-  const { current, children } = withLock('spawn', () => ({
-    current: updateRun(run.id, live => ({ ...live, state: 'stopped' })) ?? run,
-    children: listRuns().filter(child => child.parent.mailbox === run.id),
-  }));
-  for (const child of children) stopRun(child, visited);
-  if (current.herdr && !current.herdr.closed) {
-    if (!closePane(current.herdr.pane, current.herdr.session)) throw new Error(`crew: ${current.name} is marked stopped, but its pane close failed; retry crew stop`);
-    updateRun(current.id, live => live.herdr ? { ...live, herdr: { ...live.herdr, closed: true } } : undefined);
-  }
-  if (current.bgId) {
-    try { execFileSync('claude', ['stop', current.bgId], { env: hostEnv(current.launch?.env), stdio: 'ignore', timeout: 20_000 }); }
-    catch {
-      if (bgActive(current.bgId, current.launch?.env) !== false) throw new Error(`crew: ${current.name} is marked stopped, but its background stop failed; retry crew stop`);
-    }
-  }
-  if (current.pid) {
-    try { process.kill(-current.pid, 'SIGTERM'); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
-  }
-}
 
 async function main(argv: string[]): Promise<void> {
   const [command, ...rest] = argv;
