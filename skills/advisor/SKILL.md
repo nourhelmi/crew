@@ -10,9 +10,10 @@ review and integrate with this host's normal tools, authentication and permissio
 entry needs no MCP server, graph or runtime initialization; herdr is used when you are
 inside it.
 
-This is the base advisor workflow. `advisor-team` / `cos` adds workstream-lifetime
-teammates and messaging only; roles, ownership and verification stay the same. Ordinary
-advisor mode already permits direct work and child advisors. Read installed sibling
+This is the base advisor workflow. `advisor-team` / `cos` uses the same execution and
+review machinery with a different root responsibility: coordinate advisor-owned outcomes
+and integrate their results. Follow the CoS entry for that mode's delegation default.
+Ordinary advisor mode permits direct work and child advisors. Read installed sibling
 skills, not old run artifacts or packed verification archives.
 
 ## Execution lane: crew for work, native only for lookups
@@ -28,7 +29,7 @@ missing tool. If delegation is unavailable, work directly where permitted.
   roster unless you pin `--model <host>/<model>[@effort]`, derives the CLI from the model,
   launches it in a herdr pane beside you (outside herdr: `claude --bg`, `codex exec` or
   `opencode run`), and prints the run name, result path and how to wait. That is what puts
-  the work on the cheapest adequate model, counts it against capacity and lets its result be
+  the work on an adequate model and lets its result be
   graded. A native subagent inherits your own model and skips all of it: in one sweep, Opus
   child advisors ran 60 native makers, every one on Opus.
 - **Native subagents only for read-only lookups** (search, reading, summarizing code or
@@ -82,13 +83,13 @@ missing tool. If delegation is unavailable, work directly where permitted.
 
 ## Route
 
-Direct work first. One builder or child advisor for cohesive work that benefits from
+In ordinary advisor mode, direct work first. CoS follows its outcome-delegation default.
+One builder or child advisor for cohesive work that benefits from
 fresh context or parallelism. Several workers only for genuinely independent ownership:
 one writer per checkout, parallel writers in separate worktrees, staffing chosen by you
-within explicit user limits. Every Claude Code session shares one subscription's 5-hour
-and weekly limits, and every Codex session shares another, you included: spread
-long-lived parallel lanes across both hosts rather than stacking one (crew's `capacity`
-config moves routed spawns past a host's cap to its overflow model). Before launching more than one maker, tell the user in one
+within explicit user limits. Crew imposes no team-size or capacity cap. Account for shared
+host rate limits when choosing useful parallelism; preserve the user's model choices.
+Before launching more than one maker, tell the user in one
 line what you launch, its rough cost and why the parts are independent, then launch: it is
 a notice, not a request for approval.
 There is no scouting, planning or reduction stage. While a
@@ -100,15 +101,17 @@ only controls this host supports and never change your root model or global sett
 
 ## Delegate
 
-Send a short self-contained packet: goal, decided versus suggested, edit boundary and
+Choose the [handoff for the recipient](references/handoffs.md): an advisor gets a mission
+with outcome ownership and decision latitude; a builder or checker gets a bounded execution
+packet. Do not turn advisor missions into implementation recipes or require approval of
+their internal plan. For a worker packet, include goal, decided versus suggested, edit boundary and
 non-goals, a done-when line with its proving command, relevant paths, real stop
 conditions, the base ref, a private scratch path and where deliverables land. Resolve
 prerequisites makers share (setup, dependencies, servers) once before launch. The maker owns diagnosis, implementation, tests, commits on its branch, and
 the affected browser journeys per [the worker contract](references/worker-contract.md#verify-the-affected-journeys).
 `crew spawn` stores the packet and points the child at its role skill and result path.
-For a native subagent, put the path of its role skill (`advisor-role-builder`,
-`advisor-role-advisor`, `advisor-role-checker`) and the packet in its prompt; it reads
-that role and the common contract. Do not preload every role. A child advisor gets an outcome and real constraints,
+Native subagents remain read-only lookups, never a second maker lane. Do not preload every role.
+A child advisor gets an outcome and real constraints,
 not an execution recipe, and may delegate further when the host and inherited limits
 permit.
 

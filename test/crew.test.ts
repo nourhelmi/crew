@@ -280,7 +280,10 @@ describe('hooks', () => {
     const out = start('claude', 's-7', 'compact');
     assert.match(out, /"hookEventName":"SessionStart"/);
     assert.match(out, /workstream `test-sweep` in CoS mode/);
+    assert.match(out, /skills\/cos\/SKILL\.md/);
     assert.match(out, /skills\/advisor\/SKILL\.md and \S+references\/team\.md/);
+    assert.match(out, /advisors own their internal work and repairs/);
+    assert.doesNotMatch(out, /Keep handling follow-up requests as the advisor/);
     assert.match(out, /CLAUDE_SESSION_ID=s-7 node \S+advisor-state-cli\.mjs read --cwd \\"\/repo\\"/);
     assert.doesNotMatch(out, /nothing is waiting/);
     run({ id: 'b-kid', name: 'kid', parent: { mailbox: 'claude-s-7', host: 'claude' } });

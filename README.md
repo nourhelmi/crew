@@ -197,8 +197,16 @@ The skills carry the doctrine; crew only moves work between hosts.
 - **Builder.** Owns investigation, implementation, tests, commits and browser checks of the affected journeys, end to end.
 - **Checker.** A fresh-context review that *repairs* in-scope findings and reports the state after repair.
 - **Child advisor.** The same judgment, scoped to the parent's outcome. It may delegate further and must settle its children before returning.
-- **CoS (chief of staff).** An additive overlay where kept child advisors act as teammates for the
-  life of the workstream. They message each other and the root, whichever CLI each one runs on.
+- **CoS (chief of staff).** Owns cross-advisor priorities, shared contracts, dependencies and
+  integration. Delegates missions to retained advisors, who choose their own implementation,
+  staffing and repairs. The CoS checks delivered evidence and the joins; it can make bounded
+  integration repairs without taking over each advisor's work. Team size follows useful
+  ownership and parallelism, with no mechanical cap.
+
+CoS sends an [advisor mission](skills/advisor/references/handoffs.md#advisor-mission): outcome,
+decision rights, interfaces/dependencies, acceptance and deliverables. Advisors send builders
+and checkers bounded execution packets with concrete surfaces and checks. Both use `--packet`;
+the mission delegates judgment rather than prescribing the advisor's internal workflow.
 
 Every maker returns a `result.md` with `Status / Claims / Evidence / Files / Decisions / Remaining Risk`.
 The first line under Status is `DONE`, `PASS`, `FAIL` or `BLOCKED: <reason>`. A kept teammate that

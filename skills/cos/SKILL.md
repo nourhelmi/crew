@@ -1,17 +1,32 @@
 ---
 name: cos
-description: Opt into a workstream-lifetime team of empowered outcome owners (kept child advisors on Claude Code or Codex, messaging through crew) sharing the advisor checkpoint.
+description: Coordinate a workstream through empowered advisor outcome owners. Use for multiple workstreams that benefit from separate context, ownership or parallel execution.
 ---
-# CoS entry
+# Chief of staff
 
-Follow [the advisor](../advisor/SKILL.md) with canonical checkpoint mode `cos`:
-pass `--mode cos` to its shared checkpoint initialization. Retain the chosen
-execution lane and existing ownership. Do not
-initialize a managed runtime merely to persist state. This is an additive team overlay,
-not another role, review policy or workflow.
+Own the combined outcome; your advisors own execution within their missions. Follow
+[the advisor](../advisor/SKILL.md) for execution, permissions and proportional review,
+with `--mode cos` for its shared checkpoint. This coordination responsibility overrides
+the base advisor's "direct work first" default. Keep one execution lane and checkpoint.
 
-Read the installed [shared team policy](../advisor/references/team.md). Direct
-work, useful temporary roles and full-stack helper-capable teammates remain valid
-in any order. Teammates are kept `crew` runs; they message each other and the root
-through `crew msg`, whichever CLI each one runs on. `$cos` is Codex skill invocation;
-Claude Code uses `/cos` (or `/crew:cos`).
+Read [team operations](../advisor/references/team.md). Delegate substantial cohesive
+outcomes to kept child advisors; choose as many members as useful from the actual work
+and user constraints, with no fixed team size or mechanical capacity limit. A large
+tightly coupled task need not be split; independent ownership and context are the reason
+to add advisors. Advisors may implement, verify, repair or delegate within their authority.
+
+Keep a small outcome/dependency map in the checkpoint: owner, interfaces, prerequisites,
+deliverable, acceptance and next join. Start independent ready work; coordinate shared
+contracts and resources. Let each advisor choose its internal plan and staffing. Model
+preferences constrain who builds or reviews, not who is allowed to manage that work.
+Do not relay every finding between an advisor and its workers or add routine root
+approval gates inside an authorized mission.
+
+Use an [advisor mission](../advisor/references/handoffs.md#advisor-mission), not a
+builder/checker execution packet. Accept the returned evidence for the specific outcome
+and revision; integrate results and check the joins. Do not replay every advisor's
+verification matrix. Direct work is appropriate for shared prerequisites, integration and
+bounded repairs; return substantial local work to its advisor. A follow-up does not by
+itself require a new team. Settle descendants and retire members when the workstream ends.
+
+`$cos` is Codex skill invocation; Claude Code uses `/cos` (or `/crew:cos`).

@@ -2,7 +2,8 @@
 
 Teammates are child advisors kept for the workstream's lifetime. Each session belongs to
 exactly one workstream and is never adopted by, renamed into or imported from another.
-Work directly, launch temporary roles, or enlist a teammate with
+The CoS owns cross-mission coordination and integration; teammates choose how to execute
+their advisor missions. Enlist a teammate with
 `crew spawn --role advisor --keep --name <name> --packet <file>`. Jev routes each teammate
 to its own model, so one team can mix Claude Code and Codex sessions. The mechanics work
 the same either way:

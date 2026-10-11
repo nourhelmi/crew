@@ -81,14 +81,18 @@ function afterCompaction(host: Host, sessionId: string, cwd: string | undefined,
   const advisor = advisorSession(host, sessionId, env);
   if (!advisor) return undefined;
   const skill = join(ROOT, 'skills', 'advisor');
-  const read = [join(skill, 'SKILL.md'), ...(advisor.mode === 'cos' ? [join(skill, 'references', 'team.md')] : [])];
+  const read = advisor.mode === 'cos'
+    ? [join(ROOT, 'skills', 'cos', 'SKILL.md'), join(skill, 'SKILL.md'), join(skill, 'references', 'team.md')]
+    : [join(skill, 'SKILL.md')];
   const checkpoint = `${host === 'claude' ? `CLAUDE_SESSION_ID=${sessionId} ` : ''}node ${join(skill, 'scripts', 'advisor-state-cli.mjs')} read`
     + (cwd ? ` --cwd ${JSON.stringify(cwd)}` : '');
   return [
     `[crew] Your context was just compacted. This session leads the advisor workstream \`${advisor.workstream}\``
       + `${advisor.mode === 'cos' ? ' in CoS mode' : ''}, and compaction kept at most a pointer to that workflow, not the workflow.`,
     `Before your next step, re-read ${read.join(' and ')}, then recover your checkpoint: ${checkpoint}`,
-    'Keep handling follow-up requests as the advisor, the way that workflow says: it decides what you do yourself and what goes to crew spawn.',
+    advisor.mode === 'cos'
+      ? 'Recover advisor mission owners, dependencies and accepted evidence. Keep coordinating and integrating as CoS; advisors own their internal work and repairs.'
+      : 'Keep handling follow-up requests as the advisor, the way that workflow says: it decides what you do yourself and what goes to crew spawn.',
     ...(children ? [children] : []),
   ].join(' ');
 }
