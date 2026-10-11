@@ -46,6 +46,7 @@ textarea { resize:vertical; }
 .cw-conversation { display:flex; flex-direction:column; min-width:0; min-height:0; position:relative; }
 .cw-conversation-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:27px 28px 22px; border-bottom:1px solid var(--cw-line); }
 .cw-conversation-head h1 { margin:6px 0; overflow-wrap:anywhere; }
+.cw-conversation-head .cw-subtitle { overflow-wrap:anywhere; }
 .cw-subtitle { color:var(--cw-muted); font-size:12px; line-height:1.6; }
 .cw-session-actions { display:flex; gap:4px; flex-wrap:wrap; justify-content:flex-end; }
 .cw-session-actions button { padding:5px 7px; font-size:11px; }
@@ -98,6 +99,7 @@ textarea { resize:vertical; }
 .cw-team { background:var(--cw-team); border-left:1px solid var(--cw-line); overflow:auto; min-width:0; }
 .cw-heading { padding:25px 22px 16px; }
 .cw-heading-top { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.cw-heading-top>div { min-width:0; overflow-wrap:anywhere; }
 .cw-heading h2 { margin:7px 0; font-size:18px; }
 .cw-age { font:9px var(--cw-mono); color:var(--cw-muted); white-space:nowrap; }
 .cw-branch { font:10px/1.7 var(--cw-mono); color:var(--cw-muted); margin-top:8px; overflow-wrap:anywhere; }
