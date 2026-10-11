@@ -16,7 +16,7 @@ async function until(predicate: () => boolean): Promise<void> {
   const deadline = Date.now() + 3000;
   while (!predicate()) { if (Date.now() > deadline) assert.fail('Fixture did not reach expected state'); await delay(5); }
 }
-function fixture(t: TestContext, overrides: { mode?: string; identity?: HostIdentity; access?: 'default' | 'workspace' | 'full'; args?: string[]; executable?: string } = {}) {
+function fixture(t: TestContext, overrides: { mode?: string; identity?: HostIdentity; access?: 'default' | 'workspace' | 'full'; args?: string[]; executable?: string; stateDir?: string } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'crew-console-claude-'));
   for (const name of ['claude', 'crew', 'codex']) mkdirSync(join(dir, name));
   for (const name of ['input.ndjson', 'output.ndjson']) writeFileSync(join(dir, name), '');
@@ -34,7 +34,9 @@ function fixture(t: TestContext, overrides: { mode?: string; identity?: HostIden
     launch: { cwd: dir, mode: 'cos', host: 'claude', requestId: 'launch', prompt: 'Must not be replayed', model: 'fixture', effort: 'high', access: overrides.access ?? 'default' },
     // No inherited real host state or credential paths, even when a test fails.
     env: { PATH: process.env.PATH, CLAUDE_FIXTURE_DIR: dir, ...(overrides.mode ? { CLAUDE_FIXTURE_MODE: overrides.mode } : {}),
-      CLAUDE_CONFIG_DIR: join(dir, 'claude'), CREW_HOME: join(dir, 'crew'), CODEX_HOME: join(dir, 'codex'), CREW_RUN: 'must-be-scrubbed', ANTHROPIC_API_KEY: 'fixture-only' },
+      CLAUDE_CONFIG_DIR: join(dir, 'claude'), CREW_HOME: join(dir, 'crew'), CODEX_HOME: join(dir, 'codex'), CREW_RUN: 'must-be-scrubbed', ANTHROPIC_API_KEY: 'fixture-only',
+      ADVISOR_STATE_DIR: overrides.stateDir ?? join(dir, 'advisor'), CLAUDE_SESSION_ID: 'foreign-claude',
+      CLAUDE_CODE_SESSION_ID: 'foreign-claude', CREW_MAILBOX: 'claude-foreign', CODEX_THREAD_ID: 'foreign-codex', CREW_OPENCODE_SESSION: 'foreign-opencode' },
     instructions: 'Fixture parent CoS/advisor contract', executable: overrides.executable ?? executable,
     callbacks: {
       identity(value) { identities.push(value); },
@@ -75,7 +77,7 @@ it('starts without sending a prompt, persists UUID identity, and resumes exactly
   assert.ok(launch.args.includes(`--session-id=${id}`));
   for (const arg of ['--print', '--input-format', '--output-format', '--include-partial-messages', '--verbose', '--append-system-prompt']) assert.ok(launch.args.includes(arg));
   assert.equal(launch.args[launch.args.indexOf('--permission-mode') + 1], 'auto');
-  assert.equal(launch.args[launch.args.indexOf('--append-system-prompt') + 1], 'Fixture parent CoS/advisor contract');
+  assert.ok(launch.args[launch.args.indexOf('--append-system-prompt') + 1].startsWith('Fixture parent CoS/advisor contract\n'));
   assert.equal(launch.args[launch.args.indexOf('--permission-prompt-tool') + 1], 'stdio');
   assert.ok(launch.args.includes('--replay-user-messages'));
   assert.equal(launch.args[launch.args.indexOf('--system-prompt-snapshot') + 1], 'off');
@@ -95,11 +97,36 @@ it('starts without sending a prompt, persists UUID identity, and resumes exactly
   const resumed = fixture(t, { identity: { sessionId: id, turnId: String(user.uuid) } });
   await resumed.host.start();
   assert.ok(resumed.launched().args.includes(`--resume=${id}`));
-  assert.ok(!resumed.launched().args.some((arg: string) => /--continue|--last|--session-id|--fork-session/.test(arg)));
+  assert.ok(!resumed.launched().args.some((arg: string) => /^(?:--continue|--last|--session-id|--fork-session)(?:=|$)/.test(arg)));
   assert.equal(resumed.users().length, 0);
   assert.equal(await resumed.host.send('New input only', 'third'), 'delivered');
   await until(() => resumed.users().length === 1);
   assert.equal(resumed.users()[0]?.session_id, id);
+});
+
+it('binds checkpoint and Crew caller ownership to the exact native UUID without hooks or skill expansion, including resume', async t => {
+  const f = fixture(t, { mode: 'workflow' }); await f.host.start();
+  const id = f.identities[0]!.sessionId;
+  const workflow = JSON.parse(readFileSync(join(f.dir, 'workflow.json'), 'utf8'));
+  assert.deepEqual(workflow.identity, { host: 'claude-code', sessionId: id });
+  assert.equal(workflow.caller.mailbox, `claude-${id}`); assert.equal(workflow.caller.host, 'claude');
+  assert.ok(existsSync(workflow.paths.session));
+  writeFileSync(workflow.paths.workstream, '# Retained checkpoint\n');
+  const launch = f.launched();
+  assert.equal(launch.claudeSession, id); assert.equal(launch.claudeCodeSession, id);
+  assert.equal(launch.crewMailbox, `claude-${id}`); assert.equal(launch.codexThread, null); assert.equal(launch.opencodeSession, null);
+  const instructions = launch.args[launch.args.indexOf('--append-system-prompt') + 1];
+  assert.ok(instructions.includes(`Your exact native Claude session identity is ${id}.`));
+  assert.ok(instructions.includes('invoke the node helper using that inherited environment'));
+  await f.host.close();
+  const resumed = fixture(t, { mode: 'workflow', identity: { sessionId: id }, stateDir: join(f.dir, 'advisor') });
+  await resumed.host.start();
+  const recovered = JSON.parse(readFileSync(join(resumed.dir, 'workflow.json'), 'utf8'));
+  assert.deepEqual(recovered.identity, workflow.identity); assert.deepEqual(recovered.paths, workflow.paths);
+  assert.equal(readFileSync(recovered.paths.workstream, 'utf8'), '# Retained checkpoint\n');
+  assert.equal(recovered.caller.mailbox, `claude-${id}`);
+  assert.equal(resumed.launched().claudeSession, id);
+  assert.ok(resumed.launched().args.includes(`--resume=${id}`));
 });
 
 it('queues active input until result AND host idle, and delivers one turn at a time', async t => {

@@ -346,7 +346,7 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
     return [...extra, '--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
       '--include-partial-messages', '--replay-user-messages', '--permission-prompts', 'host', '--permission-prompt-tool', 'stdio',
       options.identity ? `--resume=${sessionId}` : `--session-id=${sessionId}`,
-      '--append-system-prompt', options.instructions, '--system-prompt-snapshot', 'off',
+      '--append-system-prompt', `${options.instructions}\nYour exact native Claude session identity is ${sessionId}. Tool shells inherit CLAUDE_SESSION_ID and CREW_MAILBOX for this recorded session, including on resume. Skill files read through Read do not expand slash-command placeholders. For the advisor/CoS checkpoint recipe, invoke the node helper using that inherited environment; do not prepend a single-quoted literal \${CLAUDE_SESSION_ID} assignment. This is the actual --session-id/--resume identity, not a fallback. If shell identity is missing or differs, report the failure. Keep this identity guidance after compaction.`, '--system-prompt-snapshot', 'off',
       ...(options.launch.model ? ['--model', options.launch.model] : []),
       ...(options.launch.effort ? ['--effort', options.launch.effort] : [])];
   }
@@ -357,8 +357,11 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
       if (options.launch.access === 'workspace') throw new Error('Claude workspace confinement is unsupported: permission modes and the Bash sandbox are not a general workspace filesystem boundary');
       const argv = args();
       setState('starting'); cb.identity({ sessionId }); // Persist before human input.
-      const env: NodeJS.ProcessEnv = { ...options.env, CLAUDE_CODE_SDK_READS_SESSION_STATE: '1' };
-      delete env.CREW_RUN;
+      // The adapter owns the exact UUID before launch; hooks/skill interpolation are
+      // not prerequisites for tool-shell mailbox and checkpoint ownership.
+      const env: NodeJS.ProcessEnv = { ...options.env, CLAUDE_CODE_SDK_READS_SESSION_STATE: '1',
+        CLAUDE_SESSION_ID: sessionId, CLAUDE_CODE_SESSION_ID: sessionId, CREW_MAILBOX: `claude-${sessionId}` };
+      for (const key of ['CREW_RUN', 'CLAUDECODE', 'CODEX_THREAD_ID', 'CREW_OPENCODE_SESSION']) delete env[key];
       child = spawn(options.executable ?? 'claude', argv, { cwd: options.launch.cwd, env, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
       child.stdin.on('error', error => fail(error));
       child.stdout.on('error', error => fail(error, true));
