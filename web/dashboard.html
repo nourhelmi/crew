@@ -1,55 +1,82 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light dark">
-  <title>Crew — workstreams</title>
-  <link rel="stylesheet" href="/dashboard.css">
-  <script src="/dashboard.js" defer></script>
+ <meta charset="utf-8">
+ <meta name="viewport" content="width=device-width, initial-scale=1">
+ <meta name="color-scheme" content="light dark">
+ <title>Crew — console</title>
+ <link rel="stylesheet" href="/dashboard.css">
+ <script src="/dashboard.js" defer></script>
 </head>
 <body>
 <div id="crew-dashboard">
  <div class="cw-window">
   <header class="cw-top">
-   <div class="cw-logo"><span class="cw-brandmark" aria-hidden="true"><b></b><b></b><b></b></span>crew.</div>
-   <span class="cw-top-label">Your agents, in view.</span>
-   <span class="cw-demo" id="connection" role="status">Connecting…</span>
+   <a class="cw-logo" href="/" aria-label="Crew console"><span class="cw-brandmark" aria-hidden="true"><b></b><b></b><b></b></span>crew.</a>
+   <span class="cw-top-label">The team behind your work.</span>
+   <div class="cw-connection"><span id="connection" role="status">Connecting…</span><button type="button" id="reconnect" class="cw-text-button">Reconnect</button></div>
   </header>
   <div class="cw-layout">
-   <aside class="cw-sidebar" aria-label="Workstreams">
-    <div class="cw-eyebrow">Workstreams</div>
-    <label class="cw-search-label" for="workstream-search">Find a workstream or agent</label>
+   <aside class="cw-sidebar" aria-label="Sessions and workstreams">
+    <button type="button" id="new-session" class="cw-primary" disabled>＋ New session</button>
+    <p id="capability-note" class="cw-sidebar-note" role="status">Checking local controls…</p>
+    <label class="cw-search-label" for="workstream-search">Find sessions or agents</label>
     <input id="workstream-search" class="cw-search" type="search" placeholder="Find work…" autocomplete="off">
-    <nav class="cw-streams" id="workstreams" aria-label="Choose workstream"></nav>
-    <div class="cw-sidebar-bottom"><div class="cw-machine">Local workspace</div><p class="cw-sidebar-note">Read only. Agents keep working when you close this page.</p></div>
+    <div class="cw-eyebrow">Console sessions</div>
+    <nav class="cw-streams" id="sessions" aria-label="Choose console session"></nav>
+    <div class="cw-eyebrow cw-external-label">External · view only</div>
+    <nav class="cw-streams" id="workstreams" aria-label="Choose external workstream"></nav>
+    <div class="cw-sidebar-bottom"><span class="cw-dot"></span> Local workspace<p class="cw-sidebar-note">Sessions keep working when you leave this page.</p></div>
    </aside>
-   <main class="cw-main">
-    <header class="cw-heading"><div class="cw-heading-top"><div><div class="cw-eyebrow" id="project">Crew</div><h1 id="stream-title">Your workstreams</h1></div><span class="cw-age" id="stream-age"></span></div><p class="cw-subtitle" id="stream-subtitle">Reading local Crew records…</p><div class="cw-branch" id="cwd"></div></header>
+   <main class="cw-conversation" aria-label="Root conversation">
+    <header class="cw-conversation-head">
+     <div><div class="cw-eyebrow" id="conversation-context">Crew console</div><h1 id="conversation-title">What are we building?</h1><p id="conversation-meta" class="cw-subtitle">Launch a root. Talk here. Follow the whole team alongside it.</p></div>
+     <div id="session-actions" class="cw-session-actions"></div>
+    </header>
+    <p id="console-error" class="cw-notice cw-error" role="status" hidden></p>
+    <div class="cw-history-toolbar"><button type="button" id="older" class="cw-text-button" hidden>↑ Load older messages</button><span id="session-state" role="status"></span></div>
+    <div id="conversation" class="cw-thread" tabindex="0" aria-label="Conversation history"><div class="cw-welcome"><span class="cw-welcome-mark" aria-hidden="true">›_</span><h2>One conversation.<br>A whole crew.</h2><p>Give your root the outcome. Inspect each delegation, decision, and result as the work unfolds.</p><button type="button" data-new-session class="cw-primary" disabled>Start a session</button></div></div>
+    <button type="button" id="follow-conversation" class="cw-follow" hidden>↓ Latest messages</button>
+    <div id="requests" class="cw-requests" aria-label="Root requests"></div>
+    <div id="outbox" class="cw-outbox" aria-label="Message delivery"></div>
+    <p id="pause-notice" class="cw-notice" hidden>The root is paused. Team members keep working, and their messages stay pending until you send a message or resume.</p>
+    <form id="composer" class="cw-composer" hidden>
+     <label class="cw-sr-only" for="message">Message the root</label>
+     <textarea id="message" rows="3" placeholder="Tell the root what to do next…" required></textarea>
+     <div class="cw-composer-controls"><span id="send-hint">⌘ / Ctrl + Enter to send</span><div><button type="button" id="interrupt-send" class="cw-secondary" hidden>Interrupt &amp; send</button><button type="submit" id="send" class="cw-primary">Send</button></div></div>
+    </form>
+    <div id="view-only" class="cw-notice" hidden>External session · view only. Continue the conversation in its host app.</div>
+   </main>
+   <section class="cw-main cw-team" aria-label="Team workbench">
+    <header class="cw-heading"><div class="cw-heading-top"><div><div class="cw-eyebrow" id="project">Team workbench</div><h2 id="stream-title">Your team</h2></div><span class="cw-age" id="stream-age"></span></div><p class="cw-subtitle" id="stream-subtitle">Select a session or external workstream.</p><div class="cw-branch" id="cwd"></div></header>
     <div class="cw-attention cw-clear" id="attention" role="status"></div>
     <p class="cw-data-warning" id="warnings" role="status" hidden></p>
     <div class="cw-stage" id="stage">
-     <section class="cw-overview" aria-label="Delegation map">
-      <div class="cw-mapbar"><span class="cw-eyebrow">Crew map</span><span class="cw-small-count" id="count"></span></div>
-      <div class="cw-map" id="map"></div>
-      <div class="cw-legend"><span class="cw-legend-line"></span>Delegated by its parent</div>
-     </section>
+     <section class="cw-overview" aria-label="Delegation map"><div class="cw-mapbar"><span class="cw-eyebrow">Delegation</span><span class="cw-small-count" id="count"></span></div><div class="cw-map" id="map"></div><div class="cw-legend"><span class="cw-legend-line"></span>Delegated by its parent</div></section>
      <aside class="cw-inspector" aria-label="Selected agent">
-      <div class="cw-inspect-head" id="inspect-head"><h2>Select an agent</h2></div>
-      <div class="cw-tabs" aria-label="Agent detail view">
-       <button type="button" data-tab="output" aria-pressed="true">Output</button>
-       <button type="button" data-tab="activity" aria-pressed="false">Activity</button>
-       <button type="button" data-tab="packet" aria-pressed="false">Packet</button>
-       <button type="button" data-tab="result" aria-pressed="false">Result</button>
-       <button type="button" data-tab="messages" aria-pressed="false">Mail</button>
-      </div>
-      <div class="cw-details" id="details"><p class="cw-subtitle">Select an agent to follow its output.</p></div>
+      <div class="cw-inspect-head" id="inspect-head"><h3>Select an agent</h3></div>
+      <div class="cw-tabs" aria-label="Agent detail view"><button type="button" data-tab="output" aria-pressed="true">Output</button><button type="button" data-tab="activity" aria-pressed="false">Activity</button><button type="button" data-tab="packet" aria-pressed="false">Mission</button><button type="button" data-tab="result" aria-pressed="false">Result</button><button type="button" data-tab="messages" aria-pressed="false">Mail</button></div>
+      <div class="cw-details" id="details"><p class="cw-subtitle">Select a member to inspect its work.</p></div>
      </aside>
     </div>
-    <footer class="cw-footer"><span>Local observation · no inboxes consumed</span><span id="observed"></span></footer>
-   </main>
+    <footer class="cw-footer"><span>Observation never consumes mail.</span><span id="observed"></span></footer>
+   </section>
   </div>
  </div>
+ <dialog id="launch-dialog" class="cw-dialog" aria-labelledby="launch-title">
+  <form id="launch-form">
+   <div class="cw-dialog-head"><div><div class="cw-eyebrow">A new workstream</div><h2 id="launch-title">Launch your root</h2></div><button type="button" data-close-dialog class="cw-icon-button" aria-label="Dismiss launch">×</button></div>
+   <p class="cw-subtitle">Give it an outcome, a workspace, and room to work.</p>
+   <label for="launch-prompt">What should the crew accomplish?</label><textarea id="launch-prompt" name="prompt" rows="5" placeholder="Build, investigate, or ship… Be specific about the outcome." required maxlength="100000"></textarea>
+   <label for="launch-cwd">Project directory</label><input id="launch-cwd" name="cwd" list="projects" placeholder="/absolute/path/to/project" required><datalist id="projects"></datalist>
+   <div class="cw-form-row"><div><label for="launch-mode">Root role</label><select id="launch-mode" name="mode"><option value="cos">Chief of staff</option><option value="advisor">Advisor</option></select></div><div><label for="launch-host">Host</label><select id="launch-host" name="host"></select></div></div>
+   <p id="provider-note" class="cw-subtitle"></p>
+   <details id="advanced"><summary>Model &amp; advanced options</summary><div class="cw-form-row"><div><label for="launch-model">Model</label><select id="launch-model" name="model"></select></div><div><label for="launch-effort">Reasoning effort</label><select id="launch-effort" name="effort"></select></div></div><label for="launch-title-input">Session name <span class="cw-muted">optional</span></label><input id="launch-title-input" name="title" maxlength="160" placeholder="A name for this workstream"><label for="launch-access">Workspace access</label><select id="launch-access" name="access"><option value="default">Host default</option><option value="workspace">Workspace writes</option><option value="full">Full access</option></select><p class="cw-subtitle">Full access allows the root to act beyond this project. Choose the access this work needs.</p></details>
+   <p id="launch-error" class="cw-notice cw-error" role="status" hidden></p>
+   <div class="cw-dialog-foot"><button type="button" data-close-dialog class="cw-secondary">Cancel</button><button type="submit" id="launch-submit" class="cw-primary">Launch session</button></div>
+  </form>
+ </dialog>
+ <dialog id="confirm-dialog" class="cw-dialog cw-confirm" aria-labelledby="confirm-title"><form method="dialog"><h2 id="confirm-title">Close this session?</h2><p id="confirm-copy">This stops the root and its Crew team. Saved conversations, results, and workspaces stay available.</p><div class="cw-dialog-foot"><button value="cancel" class="cw-secondary" aria-label="Keep session" autofocus>Keep session</button><button id="confirm-action" value="confirm" class="cw-danger" aria-label="Close session">Close session</button></div></form></dialog>
 </div>
 </body>
 </html>
