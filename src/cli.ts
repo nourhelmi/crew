@@ -7,7 +7,7 @@ import { herdr, inHerdr, labelPane } from './herdr.ts';
 import { isHookEvent, runHook } from './hook.ts';
 import { defaultCodexSocket, owningCodexSocket, self } from './identity.ts';
 import { registerCodex, wakeCodex } from './codex-mail.ts';
-import { amend, assign, format, resolve, send, takeUnread } from './mail.ts';
+import { amend, assign, format, nativeAmendmentDelivery, resolve, send, takeUnread } from './mail.ts';
 import { resume } from './resume.ts';
 import { accept, submissionPath } from './assignment.ts';
 import { grade } from './outcome.ts';
@@ -116,7 +116,7 @@ async function main(argv: string[]): Promise<void> {
       'dry-run': { type: 'boolean' }, timeout: { type: 'string' }, file: { type: 'string' }, all: { type: 'boolean' },
       host: { type: 'string' }, json: { type: 'boolean' }, quiet: { type: 'boolean' }, global: { type: 'boolean' },
       submission: { type: 'string' }, checks: { type: 'string' }, socket: { type: 'string' }, port: { type: 'string' },
-      'request-id': { type: 'string' }, 'text-file': { type: 'string' },
+      'request-id': { type: 'string' }, 'attempt-id': { type: 'string' }, 'text-file': { type: 'string' },
     },
   });
 
@@ -194,6 +194,20 @@ async function main(argv: string[]): Promise<void> {
       if (!text.trim()) fail('crew: empty amendment');
       const amended = amend(run.parent, run.id, text, values['request-id']);
       console.log(JSON.stringify({ runId: run.id, number: amended.number }));
+      return;
+    }
+    case 't3-amend-prepare':
+    case 't3-amend-ack': {
+      const [ref] = positionals;
+      if (process.env.CREW_T3_AMEND_OWNED !== '1' || !ref || !values['request-id'] || !values['attempt-id']) {
+        fail('crew: native amendment delivery requires a server-owned request and attempt');
+      }
+      const run = findRun(ref);
+      if (!run || run.id !== ref) fail('crew: native amendment delivery requires the exact run id');
+      const phase = command === 't3-amend-prepare' ? 'prepare' : 'ack';
+      const number = nativeAmendmentDelivery(run.id, values['request-id'], values['attempt-id'], phase);
+      if (phase === 'ack') ensureWatcher(run.parent.mailbox);
+      console.log(JSON.stringify({ runId: run.id, number, phase }));
       return;
     }
     case 'amend': {

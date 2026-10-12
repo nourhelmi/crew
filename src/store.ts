@@ -72,6 +72,12 @@ export interface PacketChange {
 const packetChangePath = (id: string): string => join(runDir(id), 'packet-change.json');
 export const nativeAmendmentPath = (id: string, requestId: string): string =>
   join(runDir(id), 't3-amendments', `${createHash('sha256').update(requestId).digest('hex')}.json`);
+export interface NativeAmendmentReceipt { requestId: string; hash: string; number: number; noticeId: string }
+export interface NativeAmendmentAttempt { requestId: string; attemptId: string; noticeId: string; resultHash?: string }
+export const nativeAmendmentAttemptPath = (id: string, requestId: string, attemptId: string): string =>
+  join(runDir(id), 't3-amendments', 'attempts', `${createHash('sha256').update(JSON.stringify([requestId, attemptId])).digest('hex')}.json`);
+export const nativeAmendmentDeliveredPath = (id: string, noticeId: string): string =>
+  join(runDir(id), 't3-amendments', 'delivered', `${createHash('sha256').update(noticeId).digest('hex')}.json`);
 
 function applyPacketChange(meta: RunMeta, change: PacketChange): RunMeta {
   writeFileSync(packetPath(meta.id), change.packet, { mode: 0o600 });
@@ -81,7 +87,9 @@ function applyPacketChange(meta: RunMeta, change: PacketChange): RunMeta {
     try { return JSON.parse(line).id === change.notice.id; } catch { return false; }
   }); } catch { /* first mail */ }
   if (!delivered) appendMail(meta.id, change.notice);
-  if (change.nativeAmendment) writeJson(nativeAmendmentPath(meta.id, change.nativeAmendment.requestId), change.nativeAmendment);
+  if (change.nativeAmendment) writeJson(nativeAmendmentPath(meta.id, change.nativeAmendment.requestId), {
+    ...change.nativeAmendment, noticeId: change.notice.id,
+  } satisfies NativeAmendmentReceipt);
   const { amendment: _, ...rest } = meta;
   return { ...rest, state: 'running', assignment: change.assignment,
     // The native composer owns dispatch of this message, so watchers must not launch a second turn.
@@ -158,7 +166,14 @@ export function unread(mailbox: string): { mails: Mail[]; commit: () => void } {
   const chunk = raw.subarray(start);
   const complete = chunk.lastIndexOf(0x0a) + 1; // ignore a line still being written
   const mails = chunk.subarray(0, complete).toString('utf8').split('\n').filter(Boolean)
-    .flatMap(line => { try { return [JSON.parse(line) as Mail]; } catch { return []; } });
+    .flatMap(line => { try { return [JSON.parse(line) as Mail]; } catch { return []; } })
+    .filter(mail => {
+      if (mail.kind !== 'amendment') return true;
+      // A native prompt can carry this exact amendment without reading its inbox.
+      // Sparse receipts never advance the cursor past other, undelivered messages.
+      try { return readJson<NativeAmendmentAttempt>(nativeAmendmentDeliveredPath(mailbox, mail.id))?.noticeId !== mail.id; }
+      catch { return true; } // Corrupt acknowledgement is not proof of delivery.
+    });
   return { mails, commit: () => {
     if (!complete) return;
     withLock(`cursor-${mailbox}`, () => {

@@ -88,6 +88,8 @@ const { stopRun } = await import('../src/retire.ts');
 const { stopRootChildren } = await import('../src/stop-boundary.ts');
 const { watch } = await import('../src/wait.ts');
 const { finishT3Request, t3Worker } = await import('../src/t3-client.ts');
+const crewMail = await import('../src/mail.ts');
+const { readResult } = await import('../src/result.ts');
 const calls = (): Array<{ args: string[]; request: { action: string; runId: string; requestId?: string }; authorization: string; electron: string }> =>
   existsSync(callsFile) ? readFileSync(callsFile, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [];
 const remote = (id: string): Record<string, any> => JSON.parse(readFileSync(stateFile, 'utf8'))[id];
@@ -353,5 +355,125 @@ describe('native T3 worker lifecycle', () => {
     assert.equal(store.readRun(run.id)?.assignment?.revision, 1);
     await stopRun(run);
     assert.throws(() => execFileSync(resolve('bin/crew'), args, { env, stdio: 'pipe' }), /is stopped/);
+  });
+
+  it('settles a delivered native amendment without inbox polling, excluding an older turn result', async () => {
+    const run = await launch();
+    const result = store.resultPath(run.id);
+    writeFileSync(result, '# Status\nDONE: initial result\n');
+    crewMail.settle(run.id);
+    crewMail.takeUnread(run.parent.mailbox);
+    crewMail.amend(run.parent, run.id, 'Change Blue to Green.', 'human-green');
+    writeFileSync(result, '# Status\nDONE: old turn finished after the follow-up was queued\n');
+    assert.equal(crewMail.settle(run.id), undefined);
+    const args = [run.id, '--request-id', 'human-green', '--attempt-id', 'native-attempt:2'];
+    const env = { ...process.env, CREW_T3_AMEND_OWNED: '1' };
+    assert.throws(() => execFileSync(resolve('bin/crew'), ['t3-amend-prepare', ...args], { env: process.env, stdio: 'pipe' }), /server-owned request/);
+    assert.throws(() => execFileSync(resolve('bin/crew'), ['t3-amend-ack', ...args], { env, stdio: 'pipe' }), /not prepared/);
+    const prepared = execFileSync(resolve('bin/crew'), ['t3-amend-prepare', ...args], { env, encoding: 'utf8' });
+    assert.deepEqual(JSON.parse(prepared), { runId: run.id, number: 1, phase: 'prepare' });
+    assert.equal(store.unread(run.id).mails.length, 1); // failed provider start still has undelivered work
+    assert.equal(crewMail.settle(run.id), undefined);
+    execFileSync(resolve('bin/crew'), ['t3-amend-ack', ...args], { env, stdio: 'pipe' });
+    assert.equal(store.unread(run.id).mails.length, 0);
+    assert.equal(crewMail.settle(run.id), undefined); // old turn's newer DONE remains excluded
+    assert.equal(existsSync(join(store.mailDir(run.id), 'cursor')), false);
+    writeFileSync(result, '# Status\nDONE: new native turn changed Blue to Green\n');
+    remoteState(run.id, 'idle');
+    await watch(run.parent.mailbox, 1, 100);
+    assert.equal(store.readRun(run.id)?.state, 'idle');
+    assert.equal(store.readRun(run.id)?.assignment?.status, 'submitted');
+    assert.equal(store.readRun(run.id)?.assignment?.submissions.length, 2);
+    assert.equal(crewMail.takeUnread(run.parent.mailbox).filter(mail => mail.kind === 'settled').length, 1);
+    execFileSync(resolve('bin/crew'), ['t3-amend-ack', ...args], { env, stdio: 'pipe' });
+    assert.equal(crewMail.settle(run.id), undefined);
+    assert.equal(crewMail.takeUnread(run.parent.mailbox).length, 0);
+    assert.equal(calls().filter(call => call.request.action === 'resume').length, 0);
+  });
+
+  it('keeps the pre-send baseline across retries and acknowledges only the exact delivered notice', async () => {
+    const run = await launch();
+    const result = store.resultPath(run.id);
+    writeFileSync(result, '# Status\nDONE: old result\n');
+    mail(run.id, 'advice-before');
+    crewMail.amend(run.parent, run.id, 'First native instruction.', 'human-one');
+    const first = store.unread(run.id).mails.at(-1)!;
+    crewMail.nativeAmendmentDelivery(run.id, 'human-one', 'attempt:one', 'prepare');
+    const baseline = store.readRun(run.id)!.amendment!.resultHash;
+    writeFileSync(result, '# Status\nDONE: fast new result before native acceptance returns\n');
+    crewMail.nativeAmendmentDelivery(run.id, 'human-one', 'attempt:one', 'prepare');
+    assert.equal(store.readRun(run.id)?.amendment?.resultHash, baseline);
+    crewMail.amend(run.parent, run.id, 'Second queued native instruction.', 'human-two');
+    const latestBaseline = store.readRun(run.id)!.amendment!.resultHash;
+    const second = store.unread(run.id).mails.at(-1)!;
+    store.appendMail(run.id, { id: 'other-amendment', kind: 'amendment', at: '', from: run.parent, text: 'Still unread.' });
+    mail(run.id, 'advice-after');
+    crewMail.nativeAmendmentDelivery(run.id, 'human-one', 'attempt:one', 'ack');
+    assert.equal(store.readRun(run.id)?.amendment?.resultHash, latestBaseline);
+    assert.deepEqual(store.unread(run.id).mails.map(mail => mail.id), ['advice-before', second.id, 'other-amendment', 'advice-after']);
+    assert.equal(existsSync(join(store.mailDir(run.id), 'cursor')), false);
+    assert.equal(crewMail.settle(run.id), undefined);
+    assert.throws(() => crewMail.nativeAmendmentDelivery(run.id, 'unknown', 'attempt:one', 'ack'), /no exact delivery receipt/);
+    assert.throws(() => crewMail.nativeAmendmentDelivery(run.id, 'human-two', 'unknown', 'ack'), /not prepared/);
+    assert.equal(statSync(store.nativeAmendmentDeliveredPath(run.id, first.id)).mode & 0o777, 0o600);
+    await stopRun(run);
+    assert.throws(() => crewMail.nativeAmendmentDelivery(run.id, 'human-one', 'attempt:one', 'ack'), /is stopped/);
+  });
+
+  it('recovers a prepared delivery without resnapshotting a fast result or replaying consumed mail', async () => {
+    const run = await launch();
+    const result = store.resultPath(run.id);
+    writeFileSync(result, '# Status\nDONE: previous native turn\n');
+    crewMail.amend(run.parent, run.id, 'Native follow-up.', 'human-recovery');
+    crewMail.nativeAmendmentDelivery(run.id, 'human-recovery', 'attempt:recovery', 'prepare');
+    const baseline = readResult(result)!.hash;
+    writeFileSync(result, '# Status\nDONE: new native turn completed immediately\n');
+    store.updateRun(run.id, current => ({ ...current, amendment: { number: 1 }, state: 'stalled' }));
+    crewMail.nativeAmendmentDelivery(run.id, 'human-recovery', 'attempt:recovery', 'prepare');
+    crewMail.nativeAmendmentDelivery(run.id, 'human-recovery', 'attempt:recovery', 'ack');
+    assert.equal(store.readRun(run.id)?.amendment?.resultHash, baseline);
+    assert.equal(store.readRun(run.id)?.state, 'running');
+    assert.equal(store.unread(run.id).mails.length, 0);
+    assert.notEqual(crewMail.settle(run.id), undefined);
+    assert.equal(store.readRun(run.id)?.state, 'idle');
+    crewMail.nativeAmendmentDelivery(run.id, 'human-recovery', 'attempt:recovery', 'prepare');
+    crewMail.nativeAmendmentDelivery(run.id, 'human-recovery', 'attempt:later-replay', 'prepare');
+    crewMail.nativeAmendmentDelivery(run.id, 'human-recovery', 'attempt:later-replay', 'ack');
+    assert.equal(crewMail.settle(run.id), undefined);
+    assert.equal(store.readRun(run.id)?.state, 'idle');
+    assert.equal(store.unread(run.id).mails.length, 0);
+  });
+
+  it('restarts detached settlement after a stall between preparation and native acceptance', async () => {
+    const run = await launch();
+    const result = store.resultPath(run.id);
+    writeFileSync(result, '# Status\nDONE: previous native turn\n');
+    crewMail.amend(run.parent, run.id, 'Follow-up without a foreground parent wait.', 'human-late-acceptance');
+    crewMail.nativeAmendmentDelivery(run.id, 'human-late-acceptance', 'attempt:late', 'prepare');
+    store.updateRun(run.id, current => ({ ...current, state: 'stalled' }));
+    writeFileSync(result, '# Status\nDONE: accepted follow-up completed\n');
+    remoteState(run.id, 'idle');
+    const watcher = join(store.mailDir(run.parent.mailbox), 'watcher');
+    rmSync(watcher);
+    let ownedPid: number | undefined;
+    try {
+      execFileSync(resolve('bin/crew'), ['t3-amend-ack', run.id, '--request-id', 'human-late-acceptance', '--attempt-id', 'attempt:late'], {
+        env: { ...process.env, CREW_T3_AMEND_OWNED: '1' }, stdio: 'pipe',
+      });
+      ownedPid = Number(readFileSync(watcher, 'utf8'));
+      assert.ok(Number.isSafeInteger(ownedPid) && ownedPid > 0 && ownedPid !== process.pid);
+      const deadline = Date.now() + 3_000;
+      while ((store.readRun(run.id)?.state !== 'idle' || !store.unread(run.parent.mailbox).mails.some(mail => mail.kind === 'settled'))
+        && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+      assert.equal(store.readRun(run.id)?.state, 'idle');
+      assert.equal(store.readRun(run.id)?.assignment?.status, 'submitted');
+      assert.equal(store.unread(run.parent.mailbox).mails.filter(mail => mail.kind === 'settled').length, 1);
+      assert.equal(calls().filter(call => call.request.action === 'resume').length, 0);
+      crewMail.nativeAmendmentDelivery(run.id, 'human-late-acceptance', 'attempt:replay', 'ack');
+      assert.equal(store.readRun(run.id)?.state, 'idle');
+    } finally {
+      // This PID was created by our isolated ACK CLI, never discovered globally.
+      if (ownedPid) { try { process.kill(ownedPid, 'SIGTERM'); } catch { /* already exited */ } }
+    }
   });
 });

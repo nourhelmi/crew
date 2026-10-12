@@ -7,7 +7,7 @@ import { requestResume, resuming } from './resume.ts';
 import { pushCodex, registeredSocket } from './codex-mail.ts';
 import { reviewed } from './outcome.ts';
 import { progressLine, readResult } from './result.ts';
-import { appendMail, changePacket, findRun, hasWaiter, mailDir, nativeAmendmentPath, newId, packetPath, readJson, readRun, resultPath, runDir, unread, updateRun, withLock, writeJson } from './store.ts';
+import { appendMail, changePacket, findRun, hasWaiter, mailDir, nativeAmendmentAttemptPath, nativeAmendmentDeliveredPath, nativeAmendmentPath, newId, packetPath, readJson, readRun, resultPath, runDir, unread, updateRun, withLock, writeJson, type NativeAmendmentAttempt, type NativeAmendmentReceipt } from './store.ts';
 import type { Address, Delivery, Host, Mail, RunMeta } from './types.ts';
 
 export function runAddress(run: RunMeta): Address {
@@ -144,6 +144,56 @@ export function amend(from: Address, runRef: string, text: string, nativeRequest
     });
   }) ?? run;
   return { run: amended, number, delivery: nativeRequestId ? 'queued' : deliver(runAddress(amended), notice) };
+}
+
+/** Prepare only when the old native turn is quiescent; acknowledge only after the
+ * provider accepts this exact prompt. A queued composer message is not delivery. */
+export function nativeAmendmentDelivery(id: string, requestId: string, attemptId: string, phase: 'prepare' | 'ack'): number {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(requestId)
+    || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/.test(attemptId)) throw new Error('crew: invalid native amendment delivery identity');
+  let number = 0;
+  const run = updateRun(id, current => {
+    if (current.launcher !== 't3' || !current.t3) throw new Error('crew: native amendment delivery requires a bound T3 worker');
+    if (current.state === 'stopped') throw new Error(`crew: ${current.name} is stopped; spawn a new run for new work`);
+    const receipt = readJson<NativeAmendmentReceipt>(nativeAmendmentPath(id, requestId));
+    if (!receipt || receipt.requestId !== requestId || typeof receipt.noticeId !== 'string' || !receipt.noticeId
+      || !Number.isInteger(receipt.number)) throw new Error('crew: native amendment request has no exact delivery receipt');
+    number = receipt.number;
+    const deliveredPath = nativeAmendmentDeliveredPath(id, receipt.noticeId);
+    const delivered = readJson<NativeAmendmentAttempt>(deliveredPath);
+    if (delivered?.requestId === requestId && delivered.noticeId === receipt.noticeId) {
+      return phase === 'ack' && current.state === 'stalled' && current.assignment?.status === 'active'
+        ? { ...current, state: 'running' } : undefined;
+    }
+    const attemptPath = nativeAmendmentAttemptPath(id, requestId, attemptId);
+    let attempt = readJson<NativeAmendmentAttempt>(attemptPath);
+    if (attempt && (attempt.requestId !== requestId || attempt.attemptId !== attemptId || attempt.noticeId !== receipt.noticeId)) {
+      throw new Error('crew: native amendment attempt ownership changed');
+    }
+    if (phase === 'prepare') {
+      if (!attempt) {
+        const resultHash = readResult(resultPath(id))?.hash;
+        attempt = { requestId, attemptId, noticeId: receipt.noticeId, ...(resultHash ? { resultHash } : {}) };
+        writeJson(attemptPath, attempt);
+      }
+      // Reapply a persisted baseline after a crash, but never resnapshot a fast
+      // new result when the same native attempt is replayed.
+      return { ...current,
+        ...(current.amendment?.number === number ? {
+          amendment: { number, ...(attempt.resultHash ? { resultHash: attempt.resultHash } : {}) },
+        } : {}),
+        ...(current.state === 'stalled' && current.assignment?.status === 'active' ? { state: 'running' } : {}),
+      };
+    }
+    if (!attempt) throw new Error('crew: native amendment delivery was not prepared for this attempt');
+    writeJson(deliveredPath, attempt);
+    // Prepare must commit before the native send. Acknowledgement never samples
+    // or rebases a result that the newly accepted prompt may already have written.
+    return current.state === 'stalled' && current.assignment?.status === 'active'
+      ? { ...current, state: 'running' } : undefined;
+  });
+  if (!run) throw new Error('crew: native amendment delivery requires an existing run');
+  return number;
 }
 
 /** New outcome, same retained member/host/model. Old packets and result history remain inspectable. */
