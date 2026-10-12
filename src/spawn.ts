@@ -11,6 +11,7 @@ import { trustPaths, trustTargets } from './trust.ts';
 import { RESULT_HEADINGS } from './result.ts';
 import { briefPath, findRun, home, listRuns, loadConfig, mailDir, newId, packetPath, readJson, readRun, resultPath, retained, runDir, updateRun, withLock, writeRun } from './store.ts';
 import type { Config, Effort, Host, Role, Route, RunMeta } from './types.ts';
+import { managedConsoleParent, prepareConsoleChild } from './console-children.ts';
 
 export const ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), '..');
 const skillPath = (role: Role): string => join(ROOT, 'skills', `advisor-role-${role}`, 'SKILL.md');
@@ -294,12 +295,24 @@ export async function spawn(options: SpawnOptions): Promise<RunMeta> {
       throw new Error(`crew: a live run is already named "${run.name}"`);
     }
     run.route = placed;
-    run.launcher = inHerdr() ? 'herdr' : placed.host === 'claude' ? 'bg' : 'exec';
+    const managed = managedConsoleParent(parent);
+    run.launcher = managed ? 'console' : inHerdr() ? 'herdr' : placed.host === 'claude' ? 'bg' : 'exec';
+    if (managed) run.console = { sessionId: `c-${id}`, rootSessionId: managed.id };
     mkdirSync(runDir(id), { recursive: true });
     writeFileSync(packetPath(id), options.task.endsWith('\n') ? options.task : `${options.task}\n`, { mode: 0o600 });
     writeFileSync(briefPath(id), `${bootstrap(run)}\n`, { mode: 0o600 });
     writeRun(run);
+    if (managed) {
+      try { prepareConsoleChild(run); }
+      catch (error) { updateRun(id, current => ({ ...current, state: 'failed' })); throw error; }
+    }
   });
+  if (run.launcher === 'console') {
+    try { await new (await import('./console-controller.ts')).ConsoleController().launchChild(readRun(id)!); }
+    catch (error) { updateRun(id, current => current.state === 'stopped' ? undefined : { ...current, state: 'failed' }); throw error; }
+    (await import('./wait.ts')).ensureWatcher(parent.mailbox);
+    return readRun(id)!;
+  }
   const roots = writableRoots(options.cwd);
   const args = argv(placed.host, placed, run.name, config, firstPrompt(run), roots, run.launcher === 'exec');
   const extra: Record<string, string> = {

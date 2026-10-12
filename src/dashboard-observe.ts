@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import type { Host, Role, RunMeta, RunState } from './types.ts';
 import { consoleSessions, readMeta } from './console-store.ts';
+import { publicChild } from './console-children.ts';
 import type { ConsoleState } from './console-types.ts';
 
 export interface DashboardNode {
@@ -262,6 +263,7 @@ export class DashboardObserver {
       this.nodes.set(run.id, {
         id: run.id, parentId, workstreamId: '', name: run.name, role: run.role, host: run.route.host,
         model: run.route.model, effort: run.route.effort, cwd: run.cwd, state: run.state, launcher: run.launcher,
+        ...(run.console ? { consoleState: publicChild(run, run.console.rootSessionId, this.roots.crew).state } : {}),
         ...(run.threadId || run.sessionId ? { sessionId: run.threadId || run.sessionId } : {}),
         createdAt: run.createdAt, updatedAt: updated.get(run.id)!,
         ...(run.assignment ? { assignment: run.assignment } : {}),

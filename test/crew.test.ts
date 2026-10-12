@@ -267,7 +267,7 @@ describe('hooks', () => {
     writeFileSync(envFile, '');
     runHook('session-start', 'claude', '{"session_id":"s-1"}', env({ CREW_RUN: 'b-test', CLAUDE_ENV_FILE: envFile }));
     assert.equal(store.readRun('b-test')?.sessionId, 's-1');
-    assert.match(readFileSync(envFile, 'utf8'), /CREW_MAILBOX=claude-s-1/);
+    assert.match(readFileSync(envFile, 'utf8'), /CREW_MAILBOX=b-test/);
     run(); // a fresh, unclaimed run for the Codex session
     runHook('session-start', 'codex', '{"session_id":"t-9"}', env({ CREW_RUN: 'b-test' }));
     assert.equal(store.readRun('b-test')?.threadId, 't-9');

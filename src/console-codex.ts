@@ -328,7 +328,8 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
     if (closing || dead) throw new Error('crew: Codex adapter is closed or disconnected');
     setState('starting');
     try {
-      const env = { ...options.env }; delete env.CREW_RUN;
+      const env = { ...options.env };
+      if (options.child) env.CREW_RUN = options.child.runId; else delete env.CREW_RUN;
       const configured = configuredArgs(options.args || []);
       const args = [...configured.args];
       const access = options.launch.access || 'default';
@@ -360,15 +361,15 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
       });
       child.stdout.on('end', () => { buffer = ''; disconnect('crew: Codex app-server stdout closed'); });
       child.stdout.on('error', () => { buffer = ''; disconnect('crew: Codex app-server stdout failed'); });
-      await rpc('initialize', { clientInfo: { name: 'crew_console', title: 'Crew console', version: '0.14.0' }, capabilities: { experimentalApi: true } });
+      await rpc('initialize', { clientInfo: { name: 'crew_console', title: 'Crew console', version: '0.15.0' }, capabilities: { experimentalApi: true } });
       await write({ method: 'initialized' });
       provider = recordProcess(child.pid!, process.platform !== 'win32');
       let roots: string[] = [];
-      if (access === 'workspace' || configured.roots.length) {
+      if (access === 'workspace' || configured.roots.length || options.child) {
         const effective = object(object(await rpc('config/read', { cwd: options.launch.cwd, includeLayers: false })).config);
         const existing = array(object(effective.sandbox_workspace_write).writable_roots).filter((value): value is string => typeof value === 'string');
         const extra = [...existing, ...configured.roots];
-        roots = access === 'workspace' ? workspaceRoots(options, extra) : [...new Set(extra.map(path => resolve(options.launch.cwd, path)))];
+        roots = access === 'workspace' || options.child ? workspaceRoots(options, extra) : [...new Set(extra.map(path => resolve(options.launch.cwd, path)))];
       }
       const config: ObjectValue = {};
       if (options.launch.effort) config.model_reasoning_effort = options.launch.effort;

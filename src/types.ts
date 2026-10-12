@@ -16,7 +16,7 @@ export interface Route {
   reason?: string;
 }
 
-export type Launcher = 'herdr' | 'bg' | 'exec';
+export type Launcher = 'herdr' | 'bg' | 'exec' | 'console';
 
 /** Anything that can receive mail: a crew run, or a root session. */
 export interface Address {
@@ -71,6 +71,8 @@ export interface RunMeta {
   keep: boolean;
   parent: Address;
   launcher: Launcher;
+  /** Verified console ancestry and a dedicated native provider supervisor. */
+  console?: { sessionId: string; rootSessionId: string };
   createdAt: string;
   state: RunState;
   herdr?: { pane: string; agent: string; session?: string; closed?: boolean };

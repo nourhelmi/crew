@@ -9,6 +9,9 @@ import { hostEnv } from './spawn.ts';
 import { acceptIntent, consoleArgsHash, consoleDetail, consoleSessions, ConsoleError, directoryExists, intentHash, metaPath, publicSession, readMeta, readReceipt, receiptPath, SAFE_CONSOLE_ID, sessionDir, supervisorAlive, viewPath } from './console-store.ts';
 import type { ConsoleIntent, ConsoleMeta, ConsoleView } from './console-store.ts';
 import type { ConsoleAction, ConsoleAnswer, ConsoleBootstrap, ConsoleCapabilities, ConsoleLaunch, ConsoleMessage, ConsoleMutation, ConsoleProvider, ConsoleUpdate } from './console-types.ts';
+import type { ConsoleChildMutation } from './console-types.ts';
+import { childRun, consoleChildDetail, consoleTeam, ownedChild } from './console-children.ts';
+import type { RunMeta } from './types.ts';
 
 export const hostCapabilities = (host: 'codex' | 'claude'): ConsoleCapabilities => ({ accessModes: host === 'codex' ? ['default', 'workspace', 'full'] : ['default', 'full'], activeInput: host === 'codex' ? 'steer' : 'queue', interrupt: true, approvals: true, questions: true });
 export function rootEnv(): NodeJS.ProcessEnv {
@@ -133,8 +136,18 @@ export class ConsoleController {
     const projects = [...new Set([...sessions.map(s => s.cwd), process.cwd()])].slice(0, 30).map(cwd => ({ cwd, name: basename(cwd) || cwd }));
     return { token: this.token, providers: this.providers(), projects, sessions };
   }
-  detail(id: string, before?: string) { return consoleDetail(id, before, this.root); }
-  update(id?: string): ConsoleUpdate { return { sessions: consoleSessions(this.root), detail: id ? this.detail(id) ?? null : null }; }
+  detail(id: string, before?: string) { return readMeta(id, this.root)?.child ? undefined : consoleDetail(id, before, this.root); }
+  team(id: string) { return consoleTeam(id, this.root); }
+  childDetail(id: string, run: string, before?: string) { return consoleChildDetail(id, run, before, this.root); }
+  update(id?: string, run?: string): ConsoleUpdate { return { sessions: consoleSessions(this.root), detail: id ? this.detail(id) ?? null : null,
+    team: id ? this.team(id) ?? null : null, childDetail: id && run ? this.childDetail(id, run) ?? null : null }; }
+  /** Called only after crew spawn reserves a routed child and its owned metadata. */
+  async launchChild(run: RunMeta): Promise<void> {
+    const meta = ownedChild(run, this.root);
+    if (!meta || run.state === 'stopped') throw new ConsoleError('Managed child was retired before launch.', 409, 'SESSION_RETIRED');
+    acceptIntent(run.console!.sessionId, { kind: 'launch', payload: meta.launch }, this.root);
+    await this.startSupervisor(run.console!.sessionId);
+  }
   async launch(value: unknown): Promise<ConsoleMutation> {
     const incomingId = requestId(object(value).requestId);
     const id = `s-${createHash('sha256').update(incomingId).digest('hex').slice(0, 24)}`;
@@ -167,9 +180,33 @@ export class ConsoleController {
       return this.receiptMutation(id, launch.requestId);
     });
   }
-  async message(id: string, value: unknown): Promise<ConsoleMutation> { return this.mutate(id, { kind: 'message', payload: messageInput(value) }); }
-  async action(id: string, value: unknown): Promise<ConsoleMutation> { return this.mutate(id, { kind: 'action', payload: actionInput(value) }); }
-  async answer(id: string, value: unknown): Promise<ConsoleMutation> { return this.mutate(id, { kind: 'answer', payload: answerInput(value) }); }
+  private requireRoot(id: string): void {
+    if (!this.detail(id)) throw new ConsoleError('Managed root is unavailable.', 404, 'SESSION_NOT_FOUND');
+  }
+  async message(id: string, value: unknown): Promise<ConsoleMutation> { this.requireRoot(id); return this.mutate(id, { kind: 'message', payload: messageInput(value) }); }
+  async action(id: string, value: unknown): Promise<ConsoleMutation> { this.requireRoot(id); return this.mutate(id, { kind: 'action', payload: actionInput(value) }); }
+  async answer(id: string, value: unknown): Promise<ConsoleMutation> { this.requireRoot(id); return this.mutate(id, { kind: 'answer', payload: answerInput(value) }); }
+  private requireChild(id: string, runId: string): RunMeta {
+    this.requireRoot(id);
+    const detail = this.childDetail(id, runId);
+    const run = childRun(runId, this.root);
+    if (!detail || !run) throw new ConsoleError('Child does not belong to this root.', 404, 'CHILD_NOT_FOUND');
+    if (!detail.child.managed) throw new ConsoleError('Child has no console-owned native pipe. Use its native host.', 409, 'CHILD_UNMANAGED');
+    return run;
+  }
+  async childAction(id: string, runId: string, value: unknown): Promise<ConsoleChildMutation> {
+    const run = this.requireChild(id, runId);
+    const v = object(value);
+    if (!['interrupt', 'resume', 'stop'].includes(String(v.action))) throw new ConsoleError('Invalid child action.');
+    const action = actionInput({ ...v, action: v.action === 'stop' ? 'close' : v.action });
+    const result = await this.mutate(run.console!.sessionId, { kind: 'action', payload: action });
+    return { child: this.childDetail(id, runId)!.child, command: result.command };
+  }
+  async childAnswer(id: string, runId: string, value: unknown): Promise<ConsoleChildMutation> {
+    const run = this.requireChild(id, runId);
+    const result = await this.mutate(run.console!.sessionId, { kind: 'answer', payload: answerInput(value) });
+    return { child: this.childDetail(id, runId)!.child, command: result.command };
+  }
   private async mutate(id: string, intent: Exclude<ConsoleIntent, { kind: 'launch' }>): Promise<ConsoleMutation> {
     const session = publicSession(id, this.root);
     if (!session) throw new ConsoleError('Managed session is unavailable.', 404, 'SESSION_NOT_FOUND');
@@ -189,7 +226,7 @@ export class ConsoleController {
     // Closing a dead supervisor still retires the root; a short-lived supervisor handles that intent.
     const retire = intent.kind === 'action' && intent.payload.action === 'close' && !supervisorAlive(meta);
     if (!restart && !retire && !supervisorAlive(meta)) throw new ConsoleError('Supervisor is disconnected. Resume the recorded session explicitly.', 409, 'SUPERVISOR_UNAVAILABLE');
-    if (intent.kind === 'answer' && !this.detail(id)?.requests.some(r => r.id === intent.payload.pendingRequestId)) throw new ConsoleError('Approval or question is no longer pending.', 409, 'STALE_REQUEST');
+    if (intent.kind === 'answer' && !consoleDetail(id, undefined, this.root)?.requests.some(r => r.id === intent.payload.pendingRequestId)) throw new ConsoleError('Approval or question is no longer pending.', 409, 'STALE_REQUEST');
     acceptIntent(id, intent, this.root);
     if (restart || retire) await this.startSupervisor(id);
     return this.receiptMutation(id, intent.payload.requestId);

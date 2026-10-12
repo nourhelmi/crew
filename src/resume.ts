@@ -13,6 +13,7 @@ export function resuming(id: string): boolean {
 
 /** Schedule a headless turn without blocking the sender's mailbox/run locks. */
 export function requestResume(run: RunMeta): boolean {
+  if (run.launcher === 'console') return false; // Its owned supervisor watches the run mailbox.
   if (run.launcher === 'herdr' || run.state === 'stopped' || !run.sessionId || !run.launch) return false;
   if (unread(run.id).mails.at(-1)?.id === run.resumedMail) return false;
   const log = openSync(join(runDir(run.id), 'resume.log'), 'a');
@@ -28,6 +29,17 @@ export function requestResume(run: RunMeta): boolean {
 
 /** Resume the recorded session; never clone a busy worker, reroute, or revive an explicit stop. */
 export async function resume(id: string, force = false): Promise<boolean> {
+  const managed = readRun(id);
+  if (managed?.launcher === 'console') {
+    if (managed.state === 'stopped') throw new Error(`crew: ${managed.name} is stopped; spawn a new run for new work`);
+    if (!force) return false; // Mail never reconnects a lost owner or replays an attempted pointer.
+    const controller = new (await import('./console-controller.ts')).ConsoleController();
+    const detail = managed.console && controller.childDetail(managed.console.rootSessionId, id);
+    if (!detail?.child.managed) throw new Error('crew: managed child ownership is unavailable');
+    if (!['idle', 'interrupted', 'disconnected', 'failed'].includes(detail.child.state)) return false;
+    await controller.childAction(managed.console!.rootSessionId, id, { requestId: `resume-${id}-${detail.child.revision}`, action: 'resume', revision: detail.child.revision });
+    return true;
+  }
   const requestedTurn = readRun(id)?.turn ?? 0;
   return withLockAsync(`resume-${id}`, async () => {
     const run = readRun(id);

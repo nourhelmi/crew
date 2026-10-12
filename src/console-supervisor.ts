@@ -7,9 +7,11 @@ import { consoleArgsHash, ConsoleError, metaPath, readMeta, readReceipt, readVie
 import type { ConsoleMeta, ConsoleReceipt, ConsoleView } from './console-store.ts';
 import type { ConsoleHostAdapter, HostCallbacks, HostEvent, HostFactory } from './console-host.ts';
 import type { ConsoleAnswer, ConsoleCommand, ConsoleEvent, ConsoleState } from './console-types.ts';
-import { hasWaiter, home, loadConfig, mailDir, readJson, unread, withLock, withLockAsync, writeJson } from './store.ts';
-import { retireRoot } from './retire.ts';
-import { terminateOwnedProcess } from './console-process.ts';
+import { hasWaiter, home, loadConfig, mailDir, readJson, readRun, unread, updateRun, withLock, withLockAsync, writeJson } from './store.ts';
+import { retireRoot, stopRun } from './retire.ts';
+import { childRun, managedConsoleParent, ownedChild } from './console-children.ts';
+import { ROOT, writableRoots } from './spawn.ts';
+import { processExists, terminateOwnedProcess } from './console-process.ts';
 
 /** One detached owner owns every provider pipe and durable view write. HTTP listeners own none. */
 export class ConsoleSupervisor {
@@ -40,7 +42,7 @@ export class ConsoleSupervisor {
     return withLock(`console-owner-${this.id}`, () => {
       const owner = readJson<{ pid: number; epoch: string }>(this.ownerFile);
       if (owner) {
-        try { process.kill(owner.pid, 0); return false; } catch { /* owner process is gone */ }
+        try { if (processExists(owner.pid)) return false; } catch { return false; } // Uncertain ownership stays closed.
         try { unlinkSync(this.ownerFile); } catch { /* competing recovery */ }
       }
       try { writeFileSync(this.ownerFile, JSON.stringify({ pid: process.pid, epoch: this.epoch }), { flag: 'wx', mode: 0o600 }); return true; }
@@ -124,6 +126,13 @@ export class ConsoleSupervisor {
       identity: identity => {
         if (!live()) return;
         if (this.meta.identity && this.meta.identity.sessionId !== identity.sessionId) throw new ConsoleError('Provider changed the exact recorded session identity.', 409, 'IDENTITY_MISMATCH');
+        if (this.meta.child) {
+          const run = updateRun(this.meta.child.runId, current => {
+            if (current.sessionId && current.sessionId !== identity.sessionId) throw new ConsoleError('Provider changed the retained child identity.', 409, 'IDENTITY_MISMATCH');
+            return { ...current, sessionId: identity.sessionId, ...(this.meta.launch.host === 'codex' ? { threadId: identity.sessionId } : {}) };
+          });
+          if (!run) throw new ConsoleError('Managed child is unavailable.', 409, 'CHILD_NOT_FOUND');
+        }
         this.meta.identity = { ...identity, ...(identity.provider ? {} : this.meta.identity?.provider ? { provider: this.meta.identity.provider } : {}) }; this.heartbeat();
       },
       state: (state, error) => {
@@ -153,6 +162,10 @@ export class ConsoleSupervisor {
     const generation = ++this.generation;
     const current = (): void => {
       if (this.closed || this.meta.retiring || generation !== this.generation) throw new ConsoleError('Session was retired during provider connection.', 409, 'SESSION_RETIRED');
+      if (this.meta.child) {
+        const run = childRun(this.meta.child.runId, this.root);
+        if (!run || run.state === 'stopped' || !ownedChild(run, this.root) || managedConsoleParent(run.parent, this.root)?.id !== this.meta.child.rootSessionId) throw new ConsoleError('Child ancestry was retired or disconnected.', 409, 'SESSION_RETIRED');
+      }
     };
     current(); const previous = this.adapter; this.adapter = undefined;
     if (previous) await previous.close();
@@ -162,8 +175,10 @@ export class ConsoleSupervisor {
     let factory = this.factory;
     if (!factory) factory = this.meta.launch.host === 'codex' ? (await import('./console-codex.ts')).createCodexHost : (await import('./console-claude.ts')).createClaudeHost;
     current();
-    this.adapter = factory({ launch: this.meta.launch, instructions: this.meta.instructions, args,
-      env: { ...rootEnv(), CREW_HOME: this.root, CREW_CONSOLE_SESSION: this.id }, callbacks: this.callbacks(this.generation), ...(this.meta.identity ? { identity: this.meta.identity } : {}) });
+    const childArgs = this.meta.child && this.meta.launch.host === 'claude' ? [...args, ...[...writableRoots(this.meta.launch.cwd), ROOT].flatMap(root => ['--add-dir', root])] : args;
+    this.adapter = factory({ launch: this.meta.launch, instructions: this.meta.instructions, args: childArgs,
+      env: { ...rootEnv(), CREW_HOME: this.root, CREW_CONSOLE_SESSION: this.meta.child?.rootSessionId ?? this.id, ...(this.meta.child ? { CREW_RUN: this.meta.child.runId } : {}) },
+      ...(this.meta.child ? { child: { runId: this.meta.child.runId } } : {}), callbacks: this.callbacks(this.generation), ...(this.meta.identity ? { identity: this.meta.identity } : {}) });
     await this.adapter.start();
     current();
   }
@@ -232,7 +247,7 @@ export class ConsoleSupervisor {
   }
   private async mail(): Promise<void> {
     if (this.meta.mailPaused || !this.adapter || !this.meta.identity || !['idle', 'running'].includes(this.view.session.state)) return;
-    const mailbox = `${this.meta.launch.host}-${this.meta.identity.sessionId}`;
+    const mailbox = this.meta.child?.runId ?? `${this.meta.launch.host}-${this.meta.identity.sessionId}`;
     // Claude's active human input queues. A mail pointer must never wait in that queue
     // after its batch was consumed, so wake Claude only when actually idle.
     if (hasWaiter(mailbox) || (this.meta.launch.host === 'claude' && this.view.session.state !== 'idle')) return;
@@ -255,6 +270,11 @@ export class ConsoleSupervisor {
     if (this.busy || this.closed) return;
     this.busy = true;
     try {
+      if (this.meta.child) {
+        const run = childRun(this.meta.child.runId, this.root);
+        const root = readMeta(this.meta.child.rootSessionId, this.root);
+        if (!run || run.state === 'stopped' || root?.retiring || !root) { await this.close(); return; }
+      }
       for (const receipt of receipts(this.id, this.root).filter(r => r.phase === 'pending')) {
         await this.process(receipt);
         if (this.closed) break;
@@ -274,8 +294,12 @@ export class ConsoleSupervisor {
     if (this.closed) return;
     this.generation++; this.clearRequests(); this.meta.mailPaused = true; this.meta.retiring = true; this.heartbeat();
     const failures: string[] = [];
-    if (this.meta.identity) {
-      try { retireRoot(`${this.meta.launch.host}-${this.meta.identity.sessionId}`, this.id); }
+    if (this.meta.child) {
+      const run = readRun(this.meta.child.runId);
+      try { if (run) await stopRun(run, new Set(), false); }
+      catch (error) { failures.push(error instanceof Error ? error.message : 'Child retirement failed.'); }
+    } else if (this.meta.identity) {
+      try { await retireRoot(`${this.meta.launch.host}-${this.meta.identity.sessionId}`, this.id); }
       catch (error) { failures.push(error instanceof Error ? error.message : 'Team retirement failed.'); }
     }
     try { await this.adapter?.close(); }

@@ -245,7 +245,7 @@ async function main(argv: string[]): Promise<void> {
     }
     case 'stop': {
       const run = findRun(positionals[0] ?? fail('crew: crew stop <run>')) ?? fail('crew: no such run');
-      stopRun(run);
+      await stopRun(run);
       console.log(`stopped ${run.name}`);
       return;
     }

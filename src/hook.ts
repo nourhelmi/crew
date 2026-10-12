@@ -41,8 +41,9 @@ function sessionStart(host: Host, input: HookInput, env: NodeJS.ProcessEnv): Hoo
       : { ...run, sessionId, ...(host === 'codex' ? { threadId: sessionId } : {}) });
   }
   if (host === 'claude' && env.CLAUDE_ENV_FILE) {
+    const mailbox = ownRun(env, sessionId)?.id ?? sessionMailbox('claude', sessionId);
     appendFileSync(env.CLAUDE_ENV_FILE,
-      `export CREW_MAILBOX=${sessionMailbox('claude', sessionId)}\nexport CLAUDE_SESSION_ID=${sessionId}\n`);
+      `export CREW_MAILBOX=${mailbox}\nexport CLAUDE_SESSION_ID=${sessionId}\n`);
   }
   const context = input.source === 'compact' ? afterCompaction(host, sessionId, input.cwd, env) : undefined;
   return context ? { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: context } } : undefined;

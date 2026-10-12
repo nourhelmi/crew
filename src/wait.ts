@@ -11,6 +11,8 @@ import { readResult } from './result.ts';
 import { bgActive, bgSession, ROOT } from './spawn.ts';
 import { alive, hasWaiter, listRuns, mailDir, markWaiter, mtime, readRun, resultPath, unread, updateRun, withLock } from './store.ts';
 import type { Address, Host, Mail, RunMeta } from './types.ts';
+import { ownedChild } from './console-children.ts';
+import { publicSession, supervisorAlive } from './console-store.ts';
 
 const LIVENESS_EVERY_MS = 5_000;
 const BG_EVERY_MS = 20_000;
@@ -20,6 +22,11 @@ type Bg = ReturnType<typeof bgSession>;
 
 /** Why a live child is gone, or undefined while it still runs (or was not checked this sweep). */
 function gone(run: RunMeta, herdrStatus: AgentStatus | undefined, bg: Bg | 'unchecked'): string | undefined {
+  if (run.launcher === 'console') {
+    const meta = ownedChild(run);
+    const session = run.console && publicSession(run.console.sessionId);
+    return !meta || !supervisorAlive(meta) || ['disconnected', 'failed', 'closed'].includes(session?.state ?? 'disconnected') ? 'its owned console transport disconnected' : undefined;
+  }
   if (run.launcher === 'herdr') return herdrStatus ? undefined : 'its herdr agent exited';
   if (run.launcher === 'exec') return alive(run.pid) ? undefined : 'codex exec exited';
   if (run.launcher === 'bg' && bg !== 'unchecked') {
@@ -50,10 +57,11 @@ function sweep(mailbox: string, checkBg: boolean): void {
         // An approval, question or folder-trust dialog needs a human or the parent.
         if (run.launcher === 'herdr' && herdrStatus !== 'unknown') waiting(run.id, herdrStatus === 'blocked');
         if (bg !== 'unchecked' && bg !== 'unknown') waiting(run.id, bg?.status === 'blocked');
+        if (run.launcher === 'console' && run.console) waiting(run.id, publicSession(run.console.sessionId)?.state === 'waiting');
         if (!hasResult || unread(run.id).mails.length || run.keep) {
           const why = gone(run, herdrStatus, bg);
           const lastMail = unread(run.id).mails.at(-1)?.id;
-          const needsLaunch = run.launcher !== 'herdr' && run.sessionId && run.launch && lastMail && lastMail !== run.resumedMail;
+          const needsLaunch = run.launcher !== 'herdr' && run.launcher !== 'console' && run.sessionId && run.launch && lastMail && lastMail !== run.resumedMail;
           if (why && !needsLaunch) {
             if (run.keep && run.assignment?.status !== 'active' && hasResult && !unread(run.id).mails.length) settle(run.id, true);
             else stall(run.id, why);
@@ -230,7 +238,7 @@ function watched(mailbox: string): RunMeta[] {
     || (run.state === 'done' && !run.keep && run.herdr && !run.herdr.closed)
     || (run.state === 'blocked' && (run.launcher === 'exec' ? alive(run.pid)
       : run.launcher === 'herdr' ? Boolean(run.herdr && !run.herdr.closed && agentStatus(run.herdr.agent, run.herdr.session))
-      : false))));
+      : run.launcher === 'console' ? supervisorAlive(ownedChild(run)) : false))));
 }
 
 export { format };

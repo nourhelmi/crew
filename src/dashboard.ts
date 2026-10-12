@@ -44,7 +44,8 @@ export function createDashboardServer(observer = new DashboardObserver(), interv
         json(415, { error: 'Send application/json.', code: 'INVALID_INPUT' }); return;
       }
       const match = url.pathname.match(/^\/api\/console\/sessions(?:\/([A-Za-z0-9_-]{1,128})\/(messages|actions|answers))?$/);
-      if (!match) { json(404, { error: 'Not found', code: 'NOT_FOUND' }); return; }
+      const childMatch = url.pathname.match(/^\/api\/console\/sessions\/([A-Za-z0-9_-]{1,128})\/children\/([A-Za-z0-9_-]{1,100})\/(actions|answers)$/);
+      if (!match && !childMatch) { json(404, { error: 'Not found', code: 'NOT_FOUND' }); return; }
       try {
         const chunks: Buffer[] = []; let size = 0;
         for await (const chunk of req) {
@@ -55,8 +56,9 @@ export function createDashboardServer(observer = new DashboardObserver(), interv
         let body: unknown;
         try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
         catch { throw new ConsoleError('Send a valid JSON object.'); }
-        const id = match[1]; const operation = match[2];
-        const result = !id ? await controller.launch(body) : operation === 'messages' ? await controller.message(id, body)
+        const id = match?.[1]; const operation = match?.[2];
+        const result = childMatch ? childMatch[3] === 'actions' ? await controller.childAction(childMatch[1]!, childMatch[2]!, body) : await controller.childAnswer(childMatch[1]!, childMatch[2]!, body)
+          : !id ? await controller.launch(body) : operation === 'messages' ? await controller.message(id, body)
           : operation === 'actions' ? await controller.action(id, body) : await controller.answer(id, body);
         json(200, result);
       } catch (error) {
@@ -83,6 +85,12 @@ export function createDashboardServer(observer = new DashboardObserver(), interv
         const detail = controller?.detail(managed[1]!, url.searchParams.get('before') ?? undefined);
         json(detail ? 200 : 404, detail ?? { error: 'Managed session is unavailable.', code: 'SESSION_NOT_FOUND' }); return;
       }
+      const team = url.pathname.match(/^\/api\/console\/sessions\/([A-Za-z0-9_-]{1,128})\/team$/);
+      const child = url.pathname.match(/^\/api\/console\/sessions\/([A-Za-z0-9_-]{1,128})\/children\/([A-Za-z0-9_-]{1,100})$/);
+      if (team || child) {
+        const value = team ? controller?.team(team[1]!) : controller?.childDetail(child![1]!, child![2]!, url.searchParams.get('before') ?? undefined);
+        json(value ? 200 : 404, value ?? { error: 'Managed team or child is unavailable.', code: 'CHILD_NOT_FOUND' }); return;
+      }
       if (url.pathname === '/api/snapshot') { json(200, observer.snapshot()); return; }
       if (url.pathname === '/api/detail') {
         observer.snapshot();
@@ -92,7 +100,9 @@ export function createDashboardServer(observer = new DashboardObserver(), interv
       if (url.pathname !== '/api/events') { json(404, { error: 'Not found' }); return; }
       const selected = url.searchParams.get('node');
       const selectedSession = url.searchParams.get('session');
+      const selectedRun = url.searchParams.get('run');
       if (selectedSession && !controller?.detail(selectedSession)) { json(404, { error: 'Managed session is unavailable.', code: 'SESSION_NOT_FOUND' }); return; }
+      if (selectedRun && (!selectedSession || !controller?.childDetail(selectedSession, selectedRun))) { json(404, { error: 'Managed child is unavailable.', code: 'CHILD_NOT_FOUND' }); return; }
       observer.snapshot();
       if (selected && !observer.detail(selected)) { json(404, { error: 'This run is no longer available.' }); return; }
       res.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
@@ -105,7 +115,7 @@ export function createDashboardServer(observer = new DashboardObserver(), interv
         try {
           const snapshot = observer.snapshot();
           const detail = selected ? observer.detail(selected) ?? null : null;
-          const data = JSON.stringify({ snapshot, detail, ...(controller ? { console: controller.update(selectedSession ?? undefined) } : {}) });
+          const data = JSON.stringify({ snapshot, detail, ...(controller ? { console: controller.update(selectedSession ?? undefined, selectedRun ?? undefined) } : {}) });
           const hash = createHash('sha256').update(data).digest('hex');
           if (hash !== lastHash) {
             res.write(`event: update\ndata: ${data}\n\n`);

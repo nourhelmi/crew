@@ -56,6 +56,7 @@ function publish(text: string): void {
   else if (text === 'race-complete') finish();
 }
 const input = createInterface({ input: process.stdin });
+input.once('close', () => { if (scenario().holdOnStdinClose) setInterval(() => {}, 1000); });
 input.on('line', line => {
   const wire = JSON.parse(line), settings = scenario();
   record({ kind: 'wire', ...wire });
@@ -72,7 +73,7 @@ input.on('line', line => {
   if (wire.method === 'initialized') return;
   if (wire.method === 'config/read') { response({ config: { sandbox_workspace_write: { writable_roots: settings.configuredRoots || [], network_access: true } }, origins: {}, layers: null }); return; }
   if (wire.method === 'thread/start' || wire.method === 'thread/resume') {
-    threadId = settings.wrongThread ? 'wrong-thread' : wire.params.threadId || 'thread-new';
+    threadId = settings.wrongThread ? 'wrong-thread' : wire.params.threadId || settings.threadId || 'thread-new';
     turnId = settings.activeResume ? 'turn-resumed' : '';
     response({ thread: { id: threadId, status: { type: settings.activeResume || settings.missingActiveTurn ? 'active' : 'idle', activeFlags: [] }, turns: turnId ? [turn(turnId)] : [] }, sandbox: { type: 'readOnly', networkAccess: false } });
     return;
@@ -89,7 +90,7 @@ input.on('line', line => {
       if (text === 'race-complete') publish(text);
       response({ turn: turn(id) });
     } else response({ turnId });
-    if (text !== 'race-complete') publish(text);
+    if (text !== 'race-complete') publish(text.startsWith('Read and follow your crew brief:') && typeof settings.initialChildRequest === 'string' ? settings.initialChildRequest : text);
     return;
   }
   if (wire.method === 'turn/interrupt') {

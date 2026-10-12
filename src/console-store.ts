@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { home, readJson, writeJson } from './store.ts';
 import type { HostIdentity } from './console-host.ts';
+import { processExists } from './console-process.ts';
 import type { ConsoleAction, ConsoleAnswer, ConsoleCommand, ConsoleDetail, ConsoleEvent, ConsoleLaunch, ConsoleMessage, ConsoleRequest, ConsoleSession } from './console-types.ts';
 
 export class ConsoleError extends Error {
@@ -19,6 +20,8 @@ export function sessionDir(id: string, root = home()): string {
 export interface ConsoleMeta {
   launch: ConsoleLaunch;
   instructions: string;
+  /** A Crew run with a live owned pipe, not another console root. */
+  child?: { runId: string; rootSessionId: string };
   /** Bind policy without duplicating credential-bearing native CLI arguments. */
   argsHash?: string;
   /** Legacy private metadata, scrubbed when its supervisor next owns it. */
@@ -99,22 +102,23 @@ export function receipts(id: string, root = home()): ConsoleReceipt[] {
 }
 export function supervisorAlive(meta: ConsoleMeta | undefined): boolean {
   if (!meta?.pid || !meta.epoch || !meta.heartbeat || Date.now() - meta.heartbeat > 10_000) return false;
-  try { process.kill(meta.pid, 0); return true; } catch { return false; }
+  try { return processExists(meta.pid); } catch { return false; }
 }
 export function publicSession(id: string, root = home()): ConsoleSession | undefined {
   const view = readView(id, root);
   if (!view) return;
   const session = { ...view.session };
-  if (!['closed', 'failed', 'disconnected'].includes(session.state) && !supervisorAlive(readMeta(id, root))
-    && Date.now() - Date.parse(session.createdAt) > 10_000) {
+  const meta = readMeta(id, root);
+  if (!['closed', 'failed', 'disconnected'].includes(session.state) && !supervisorAlive(meta)
+    && (meta?.identity || Date.now() - Date.parse(session.createdAt) > 10_000)) {
     session.state = 'disconnected'; session.error = 'The owned supervisor is unavailable. Resume explicitly to recover the recorded session.';
   }
   return session;
 }
 export function consoleSessions(root = home()): ConsoleSession[] {
   try { return readdirSync(join(consoleDir(root), 'sessions')).filter(id => SAFE_CONSOLE_ID.test(id)).flatMap(id => {
-    try { const s = publicSession(id, root); return s ? [s] : []; } catch { return []; }
-  }).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 200); }
+    try { const s = readMeta(id, root)?.child ? undefined : publicSession(id, root); return s ? [s] : []; } catch { return []; }
+  }).sort((a, b) => b.createdAt.localeCompare(a.createdAt)); }
   catch { return []; }
 }
 export function consoleDetail(id: string, before?: string, root = home()): ConsoleDetail | undefined {

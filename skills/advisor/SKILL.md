@@ -27,7 +27,8 @@ missing tool. If delegation is unavailable, work directly where permitted.
   `crew spawn --role <advisor|builder|checker> --packet <file> [--name <n>] [--keep]`, plus
   `--checks <run>` for a checker of a crew run's work. crew routes it through the user's
   roster unless you pin `--model <host>/<model>[@effort]`, derives the CLI from the model,
-  launches it in a herdr pane beside you (outside herdr: `claude --bg`, `codex exec` or
+  launches a console-owned Codex/Claude child through its own native pipe, or in a herdr
+  pane beside you (outside both: `claude --bg`, `codex exec` or
   `opencode run`), and prints the run name, result path and how to wait. That is what puts
   the work on an adequate model and lets its result be
   graded. A native subagent inherits your own model and skips all of it: in one sweep, Opus
@@ -67,7 +68,11 @@ missing tool. If delegation is unavailable, work directly where permitted.
   verdict on a child's result is clear, record it: `crew grade <run> good|bad "<why>"`,
   especially for checkers (real findings, or a miss caught later), work you had to redo, and
   child advisors. One line each; skip it when unsure. This is how routing learns.
-- **Where children appear.** Inside herdr, each crew child is a pane beside you; a finished
+- **Where children appear.** Console-owned Codex/Claude descendants appear in the web team's
+  tree with their own public stream, native approvals/questions and interrupt/resume/stop.
+  Routing and child packets still govern them. An existing exec/bg child has no owned console
+  pipe; answer it in its original host. OpenCode cannot be a managed console descendant.
+  Inside herdr, each crew child is a pane beside you; a finished
   one closes itself, a failed or blocked one stays open. Outside herdr (the Claude Code or
   Codex desktop app, a plain terminal), Claude children are `claude --bg` sessions
   (`claude agents`, `claude attach <id>`) and Codex children are `codex exec` runs.

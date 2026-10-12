@@ -16,6 +16,8 @@ export interface HostOptions {
   launch: ConsoleLaunch;
   /** Fully scrubbed root env supplied by the supervisor. Never inherited CREW_RUN. */
   env: NodeJS.ProcessEnv;
+  /** Explicit child identity; roots must never inherit CREW_RUN. */
+  child?: { runId: string };
   instructions: string;
   /** Server-configured host CLI options, never browser-supplied. */
   args?: string[];

@@ -152,6 +152,7 @@ Five primitives, each built on something the hosts already do:
 | a connected root Codex session | its owning Unix app server steers the active turn, or starts an immediate turn when idle |
 | other root Codex sessions | foreground `crew wait` returns mail; the Stop hook hands over unread mail before finishing |
 | an idle headless Crew run | resumes the recorded Codex, Claude background or OpenCode session to read its inbox |
+| a console-owned Crew child | its own supervisor sends one pointer through its live native pipe; Claude waits until idle |
 | an idle agent in a herdr pane | the same pointer is typed into the pane |
 | a busy Crew child | a PostToolUse hook announces unread mail after its next tool call |
 
@@ -176,6 +177,9 @@ for the supported CLI setup and the verified desktop configuration.
 
 Retained headless teammates resume the same recorded host session for later mail and packet
 amendments. Busy workers read through their hooks; concurrent resume requests serialize.
+Console-owned teammates retain a live native pipe between assignments. Their supervisor watches
+the run mailbox and preserves the same native session. A disconnected child requires an explicit
+console Resume or `crew resume`; agent mail never reconnects it or repeats attempted input.
 `crew resume <run>` explicitly restarts an exited headless session using its original model,
 arguments and Crew environment. It requires recorded launch/session data. A stopped run
 stays stopped; use a fresh spawn for new work. To continue through a fresh maker, write a
@@ -375,6 +379,16 @@ wakes until you continue; its children can finish their work. Closing a session 
 stops the root and its Crew descendants, retaining their files and history. The console only
 resumes identities it created and recorded.
 
+Codex and Claude children launched by `crew spawn` from a console-owned root or managed child
+also get their own supervisor and native pipe. Select a child to read its structured public stream,
+allow or deny native approval requests, answer questions, interrupt, resume or stop it. The team
+view collects pending requests with their exact run targets. Interrupting the root cannot cancel
+a child's question; stopping a child retires its descendants. Provider activity, run lifecycle and
+assignment submission/acceptance are separate states. Routing, packets, amendments and retained
+assignment identities still follow the Crew CLI contract. Child launches preserve configured
+host permissions and the root's explicit access policy; resumes reject changed host arguments.
+Claude children cannot run under a Codex root's explicit workspace confinement policy.
+
 ```mermaid
 flowchart LR
     U[You in the browser] --> W[Local web console]
@@ -394,9 +408,10 @@ and mail history. These reads never consume inboxes or settle runs. The tree sho
 the CoS owns scheduling dependencies in its checkpoint. Raw team output stays in the browser
 instead of being copied into the root's context.
 
-Work started outside the console remains visible and **view-only**. Existing background or
-exec children can need approval in their original host; the console identifies that attention
-without presenting an approval control it cannot deliver. Member output comes from recorded
+Work started outside the console remains visible and **view-only**. Pre-existing background or
+exec children have no console-owned pipe and need their original host for approvals. They are
+never silently adopted. OpenCode lacks a supported console approval transport and cannot be
+launched as a managed descendant. External member output comes from recorded
 native transcripts or captured exec output, with bounded recent history and explicit source
 limitations. Hidden reasoning and injected harness context are omitted.
 

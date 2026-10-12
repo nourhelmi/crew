@@ -362,8 +362,9 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
       // The adapter owns the exact UUID before launch; hooks/skill interpolation are
       // not prerequisites for tool-shell mailbox and checkpoint ownership.
       const env: NodeJS.ProcessEnv = { ...options.env, CLAUDE_CODE_SDK_READS_SESSION_STATE: '1',
-        CLAUDE_SESSION_ID: sessionId, CLAUDE_CODE_SESSION_ID: sessionId, CREW_MAILBOX: `claude-${sessionId}` };
-      for (const key of ['CREW_RUN', 'CLAUDECODE', 'CODEX_THREAD_ID', 'CREW_OPENCODE_SESSION']) delete env[key];
+        CLAUDE_SESSION_ID: sessionId, CLAUDE_CODE_SESSION_ID: sessionId, CREW_MAILBOX: options.child?.runId ?? `claude-${sessionId}` };
+      for (const key of ['CLAUDECODE', 'CODEX_THREAD_ID', 'CREW_OPENCODE_SESSION']) delete env[key];
+      if (options.child) env.CREW_RUN = options.child.runId; else delete env.CREW_RUN;
       child = spawn(options.executable ?? 'claude', argv, { cwd: options.launch.cwd, env, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
       child.stdin.on('error', error => fail(error));
       child.stdout.on('error', error => fail(error, true));
