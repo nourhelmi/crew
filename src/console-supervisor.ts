@@ -1,12 +1,12 @@
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { rootEnv } from './console-controller.ts';
-import { consoleArgsHash, ConsoleError, metaPath, readMeta, readReceipt, readView, receiptPath, receipts, sessionDir, writeView } from './console-store.ts';
+import { appendConsoleChanges, consoleArgsHash, ConsoleError, ensureConsoleJournal, metaPath, readMeta, readReceipt, readView, receiptPath, receipts, sessionDir, writeView } from './console-store.ts';
 import type { ConsoleMeta, ConsoleReceipt, ConsoleView } from './console-store.ts';
 import type { ConsoleHostAdapter, HostCallbacks, HostEvent, HostFactory } from './console-host.ts';
-import type { ConsoleAnswer, ConsoleCommand, ConsoleEvent, ConsoleState } from './console-types.ts';
+import type { ConsoleAnswer, ConsoleChange, ConsoleCommand, ConsoleEvent, ConsoleState } from './console-types.ts';
 import { hasWaiter, home, loadConfig, mailDir, readJson, readRun, unread, updateRun, withLock, withLockAsync, writeJson } from './store.ts';
 import { retireRoot, stopRun } from './retire.ts';
 import { childRun, managedConsoleParent, ownedChild } from './console-children.ts';
@@ -29,7 +29,8 @@ export class ConsoleSupervisor {
   private generation = 0;
   private recoveryRequestId: string | undefined;
   private factory: HostFactory | undefined;
-  private eventKeys = new Map<string, string>();
+  private eventKeys = new Map<string, Pick<ConsoleEvent, 'id' | 'sequence' | 'at'>>();
+  private published: { session: string; requests: string; commands: Map<string, string> };
   private onExit: () => void;
   constructor(id: string, options: { root?: string; factory?: HostFactory; onExit?: () => void } = {}) {
     this.id = id; this.root = options.root ?? home(); this.factory = options.factory; this.onExit = options.onExit ?? (() => {});
@@ -37,6 +38,8 @@ export class ConsoleSupervisor {
     if (!meta || !view) throw new ConsoleError('Managed session state is unavailable.', 404, 'STATE_UNAVAILABLE');
     if (meta.args) { meta.argsHash ??= consoleArgsHash(meta.args); delete meta.args; }
     this.meta = meta; this.view = view; this.ownerFile = join(sessionDir(id, this.root), 'owner.json');
+    ensureConsoleJournal(id, this.root);
+    this.published = { session: JSON.stringify(view.session), requests: JSON.stringify(view.requests), commands: new Map(Object.entries(view.commands).map(([id, command]) => [id, JSON.stringify(command)])) };
   }
   private own(): boolean {
     return withLock(`console-owner-${this.id}`, () => {
@@ -45,7 +48,14 @@ export class ConsoleSupervisor {
         try { if (processExists(owner.pid)) return false; } catch { return false; } // Uncertain ownership stays closed.
         try { unlinkSync(this.ownerFile); } catch { /* competing recovery */ }
       }
-      try { writeFileSync(this.ownerFile, JSON.stringify({ pid: process.pid, epoch: this.epoch }), { flag: 'wx', mode: 0o600 }); return true; }
+      try {
+        writeFileSync(this.ownerFile, JSON.stringify({ pid: process.pid, epoch: this.epoch }), { flag: 'wx', mode: 0o600 });
+        // Configuration can be refreshed while suspended, under this same owner lock.
+        // Bind the latest private launch only after winning ownership.
+        this.meta = readMeta(this.id, this.root) ?? this.meta;
+        if (this.meta.args) { this.meta.argsHash ??= consoleArgsHash(this.meta.args); delete this.meta.args; }
+        return true;
+      }
       catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false; throw error; }
     });
   }
@@ -54,7 +64,7 @@ export class ConsoleSupervisor {
     this.meta.pid = process.pid; this.meta.epoch = this.epoch; this.heartbeat();
     // Recovered roots require explicit resume. Never replay a launch/message whose owner disappeared.
     const commands = receipts(this.id, this.root);
-    const recovery = commands.filter(r => r.phase === 'pending' && r.intent.kind === 'action' && ['resume', 'close'].includes(r.intent.payload.action)).at(-1);
+    const recovery = commands.filter(r => r.phase === 'pending' && r.intent.kind === 'action' && ['resume', 'suspend', 'close'].includes(r.intent.payload.action)).at(-1);
     this.recoveryRequestId = recovery?.requestId;
     if (this.meta.identity || commands.some(r => r.phase === 'attempted')) {
       for (const r of commands) {
@@ -69,18 +79,26 @@ export class ConsoleSupervisor {
     return true;
   }
   private persist(): void {
-    writeView(this.id, this.view, this.root);
-    if (this.eventKeys.size > 3000) {
-      const retained = new Set(this.view.events.map(event => event.id));
-      for (const [key, id] of this.eventKeys) if (!retained.has(id)) this.eventKeys.delete(key);
+    const changes: ConsoleChange[] = [];
+    const session = JSON.stringify(this.view.session); const requests = JSON.stringify(this.view.requests);
+    if (session !== this.published.session) changes.push({ kind: 'session', session: this.view.session });
+    if (requests !== this.published.requests) changes.push({ kind: 'requests', requests: this.view.requests });
+    for (const [id, command] of Object.entries(this.view.commands)) {
+      const serialized = JSON.stringify(command);
+      if (this.published.commands.get(id) !== serialized) { changes.push({ kind: 'command', command }); this.published.commands.set(id, serialized); }
     }
+    appendConsoleChanges(this.id, changes, this.root);
+    this.published.session = session; this.published.requests = requests;
+    writeView(this.id, this.view, this.root);
   }
   private heartbeat(): void {
     if (this.closed) return;
     this.meta.heartbeat = Date.now(); writeJson(metaPath(this.id, this.root), this.meta);
   }
   private state(state: ConsoleState, error?: string): void {
-    if (this.closed && state !== 'closed') return;
+    // A late connect/cleanup failure cannot reopen a committed retirement.
+    if (this.view.session.state === 'closed' && state !== 'closed') return;
+    if (this.closed && state !== 'closed' && state !== 'disconnected') return;
     if (this.view.session.state !== state || this.view.session.error !== error) this.view.session.revision++;
     this.view.session.state = state; this.view.session.updatedAt = new Date().toISOString();
     if (error) this.view.session.error = error.slice(0, 2000); else delete this.view.session.error;
@@ -89,16 +107,18 @@ export class ConsoleSupervisor {
   private event(event: HostEvent): void {
     const { key, ...payload } = event;
     const safe = { ...payload };
-    if ('text' in safe) safe.text = safe.text.slice(0, 24_000);
     if ('title' in safe) safe.title = safe.title.slice(0, 256);
-    const previous = key ? this.view.events.find(e => e.id === this.eventKeys.get(key)) : undefined;
+    const identity = key ? this.eventKeys.get(key) : undefined;
+    const previous = identity ? this.view.events.find(e => e.id === identity.id) : undefined;
     if (previous) Object.assign(previous, safe);
     else {
-      const sequence = ++this.view.sequence;
-      const id = `${this.id}-${sequence}`;
-      this.view.events.push({ ...safe, id, sequence, at: new Date().toISOString() } as ConsoleEvent);
-      if (key) this.eventKeys.set(key, id);
+      const sequence = identity?.sequence ?? ++this.view.sequence;
+      const identityFields = identity ?? { id: `${this.id}-${sequence}-${randomBytes(6).toString('hex')}`, sequence, at: new Date().toISOString() };
+      this.view.events.push({ ...safe, ...identityFields } as ConsoleEvent);
+      if (key) this.eventKeys.set(key, identityFields);
     }
+    const current = previous ?? this.view.events.at(-1)!;
+    appendConsoleChanges(this.id, [{ kind: 'event', event: current }], this.root);
     this.persist();
   }
   private command(requestId: string, state: ConsoleCommand['state'], error?: string): void {
@@ -167,21 +187,37 @@ export class ConsoleSupervisor {
         if (!run || run.state === 'stopped' || !ownedChild(run, this.root) || managedConsoleParent(run.parent, this.root)?.id !== this.meta.child.rootSessionId) throw new ConsoleError('Child ancestry was retired or disconnected.', 409, 'SESSION_RETIRED');
       }
     };
-    current(); const previous = this.adapter; this.adapter = undefined;
-    if (previous) await previous.close();
-    else if (this.meta.identity?.provider) await terminateOwnedProcess(this.meta.identity.provider);
-    current();
-    this.clearRequests(); this.eventKeys.clear(); this.state('starting');
-    let factory = this.factory;
-    if (!factory) factory = this.meta.launch.host === 'codex' ? (await import('./console-codex.ts')).createCodexHost : (await import('./console-claude.ts')).createClaudeHost;
-    current();
-    const childArgs = this.meta.child && this.meta.launch.host === 'claude' ? [...args, ...[...writableRoots(this.meta.launch.cwd), ROOT].flatMap(root => ['--add-dir', root])] : args;
-    this.adapter = factory({ launch: this.meta.launch, instructions: this.meta.instructions, args: childArgs,
-      env: { ...rootEnv(), CREW_HOME: this.root, CREW_CONSOLE_SESSION: this.meta.child?.rootSessionId ?? this.id, ...(this.meta.child ? { CREW_RUN: this.meta.child.runId,
-        ...(this.meta.child.router === undefined ? {} : { CREW_ROUTER: this.meta.child.router ? 'on' : 'off' }) } : {}) },
-      ...(this.meta.child ? { child: { runId: this.meta.child.runId } } : {}), callbacks: this.callbacks(this.generation), ...(this.meta.identity ? { identity: this.meta.identity } : {}) });
-    await this.adapter.start();
-    current();
+    current(); this.clearRequests(); this.state('starting');
+    delete this.meta.suspended; this.heartbeat();
+    try {
+      if (this.adapter) await this.adapter.close();
+      else if (this.meta.identity?.provider) await terminateOwnedProcess(this.meta.identity.provider);
+      this.adapter = undefined;
+      current();
+      this.eventKeys.clear();
+      let factory = this.factory;
+      if (!factory) factory = this.meta.launch.host === 'codex' ? (await import('./console-codex.ts')).createCodexHost : (await import('./console-claude.ts')).createClaudeHost;
+      current();
+      const childArgs = this.meta.child && this.meta.launch.host === 'claude' ? [...args, ...[...writableRoots(this.meta.launch.cwd), ROOT].flatMap(root => ['--add-dir', root])] : args;
+      this.adapter = factory({ launch: this.meta.launch, instructions: this.meta.instructions, args: childArgs,
+        env: { ...rootEnv(), CREW_HOME: this.root, CREW_CONSOLE_SESSION: this.meta.child?.rootSessionId ?? this.id, ...(this.meta.child ? { CREW_RUN: this.meta.child.runId,
+          ...(this.meta.child.router === undefined ? {} : { CREW_ROUTER: this.meta.child.router ? 'on' : 'off' }) } : {}) },
+        ...(this.meta.child ? { child: { runId: this.meta.child.runId } } : {}), callbacks: this.callbacks(this.generation), ...(this.meta.identity ? { identity: this.meta.identity } : {}) });
+      await this.adapter.start();
+      current();
+    } catch (error) {
+      // A parent may be interrupted while native startup is awaiting a reply.
+      // Release that pipe before reporting a failed launch; mail must not wake it.
+      this.generation++; this.meta.mailPaused = true; this.clearRequests();
+      let failure = error;
+      try { await this.adapter?.close(); this.adapter = undefined; }
+      catch (cleanup) {
+        failure = new Error(`${error instanceof Error ? error.message : 'Provider connection failed.'}; provider cleanup failed: ${cleanup instanceof Error ? cleanup.message : 'unknown error'}`, { cause: error });
+      }
+      this.state('disconnected', failure instanceof Error ? failure.message : 'Provider connection failed.');
+      this.heartbeat();
+      throw failure;
+    }
   }
   private validateAnswer(answer: ConsoleAnswer): void {
     const pending = this.view.requests.find(r => r.id === answer.pendingRequestId);
@@ -219,10 +255,12 @@ export class ConsoleSupervisor {
         if (!this.adapter) throw new ConsoleError('Provider is disconnected.', 409, 'SUPERVISOR_UNAVAILABLE');
         await this.adapter.answer(intent.payload); this.finish(receipt, 'delivered');
       } else {
-        if (receipt.requestId !== this.recoveryRequestId && intent.payload.revision !== this.view.session.revision) throw new ConsoleError('Session changed before this action could run.', 409, 'STALE_REVISION');
+        if (intent.payload.action !== 'suspend' && receipt.requestId !== this.recoveryRequestId && intent.payload.revision !== this.view.session.revision) throw new ConsoleError('Session changed before this action could run.', 409, 'STALE_REVISION');
         const action = intent.payload.action;
         if (action === 'close') {
           await this.close(); this.finish(receipt, 'delivered');
+        } else if (action === 'suspend') {
+          await this.suspend(); this.finish(receipt, 'delivered');
         } else if (action === 'interrupt') {
           if (!this.adapter) throw new ConsoleError('Provider is disconnected.', 409, 'SUPERVISOR_UNAVAILABLE');
           this.meta.mailPaused = true; this.heartbeat();
@@ -231,7 +269,20 @@ export class ConsoleSupervisor {
           if (!this.meta.identity?.sessionId) throw new ConsoleError('No exact provider identity is recorded.', 409, 'IDENTITY_UNAVAILABLE');
           if (!['idle', 'interrupted', 'disconnected', 'failed'].includes(this.view.session.state)) throw new ConsoleError('Interrupt before resuming.', 409, 'UNSUPPORTED_ACTION');
           this.meta.mailPaused = false; this.heartbeat();
-          await this.connect(); this.event({ kind: 'status', text: 'Resumed the recorded provider session. Send a message to continue.' }); this.finish(receipt, 'delivered');
+          await this.connect();
+          if (this.meta.child) {
+            const run = updateRun(this.meta.child.runId, current => {
+              if (current.state === 'stopped') return undefined;
+              const active = ['running', 'stalled'].includes(current.state) && (!current.assignment || current.assignment.status === 'active');
+              if (active) { try { unlinkSync(join(this.root, 'runs', current.id, '.stalled')); } catch { /* new liveness episode */ } }
+              // Fence probes taken before this confirmed connection, even if they
+              // finish after the CLI's resume mutex has been released.
+              return { ...current, turn: (current.turn ?? 0) + 1, ...(active ? { state: 'running' as const } : {}) };
+            });
+            if (!run || run.state === 'stopped') { await this.close(); throw new ConsoleError('Child was stopped while resuming.', 409, 'SESSION_RETIRED'); }
+            (await import('./wait.ts')).ensureWatcher(run.parent.mailbox);
+          }
+          this.event({ kind: 'status', text: 'Resumed the recorded provider session. Send a message to continue.' }); this.finish(receipt, 'delivered');
         }
       }
     } catch (error) {
@@ -291,6 +342,26 @@ export class ConsoleSupervisor {
   close(): Promise<void> {
     return this.closePromise ??= this.retire().finally(() => { if (!this.closed) this.closePromise = undefined; });
   }
+  /** Detach the client-owned runtime while preserving exact resumable identities. */
+  async suspend(): Promise<void> {
+    if (this.closed) return;
+    this.generation++; this.meta.mailPaused = true; this.clearRequests(); this.heartbeat();
+    if (this.adapter) await this.adapter.close();
+    else if (this.meta.identity?.provider) await terminateOwnedProcess(this.meta.identity.provider);
+    this.adapter = undefined;
+    for (const receipt of receipts(this.id, this.root)) {
+      if ((receipt.phase !== 'complete' || receipt.command.state === 'queued') && !(receipt.intent.kind === 'action' && receipt.intent.payload.action === 'suspend')) {
+        this.finish(receipt, receipt.phase === 'pending' ? 'failed' : 'uncertain', 'Client disconnected; input was not replayed.');
+      }
+    }
+    this.meta.suspended = true;
+    this.closed = true; if (this.timer) clearInterval(this.timer);
+    delete this.meta.pid; delete this.meta.epoch; delete this.meta.heartbeat; writeJson(metaPath(this.id, this.root), this.meta);
+    this.state('disconnected', 'Client disconnected. Resume explicitly to recover the recorded provider session.');
+    const owner = readJson<{ epoch: string }>(this.ownerFile);
+    if (owner?.epoch === this.epoch) { try { unlinkSync(this.ownerFile); } catch { /* already removed */ } }
+    this.onExit();
+  }
   private async retire(): Promise<void> {
     if (this.closed) return;
     this.generation++; this.clearRequests(); this.meta.mailPaused = true; this.meta.retiring = true; this.heartbeat();
@@ -336,11 +407,11 @@ async function main(): Promise<void> {
   const id = basename(path); const root = dirname(dirname(dirname(path)));
   if (resolve(sessionDir(id, root)) !== resolve(path)) throw new Error('crew: invalid console supervisor path');
   let keep: ReturnType<typeof setInterval> | undefined;
-  const supervisor = new ConsoleSupervisor(id, { root, onExit: () => { if (keep) clearInterval(keep); } });
-  if (!await supervisor.start()) return;
+  let exited = false;
+  const supervisor = new ConsoleSupervisor(id, { root, onExit: () => { exited = true; if (keep) clearInterval(keep); } });
+  if (!await supervisor.start() || exited) return;
   // Provider stdout is normally a live handle; keep recovery failures controllable too.
   keep = setInterval(() => {}, 60_000);
-  if (readView(id, root)?.session.state === 'closed') clearInterval(keep);
   const stop = (): void => { void supervisor.close(); };
   process.once('SIGTERM', stop); process.once('SIGINT', stop);
 }

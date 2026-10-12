@@ -10,13 +10,14 @@ import { createClaudeHost } from '../src/console-claude.ts';
 import type { HostEvent, HostIdentity, HostOptions } from '../src/console-host.ts';
 import type { ConsoleRequest, ConsoleState, CommandState } from '../src/console-types.ts';
 import { processExists, processMatches } from '../src/console-process.ts';
+import type { McpServer } from '../src/mcp-config.ts';
 
 type Json = Record<string, any>;
 async function until(predicate: () => boolean): Promise<void> {
   const deadline = Date.now() + 3000;
   while (!predicate()) { if (Date.now() > deadline) assert.fail('Fixture did not reach expected state'); await delay(5); }
 }
-function fixture(t: TestContext, overrides: { mode?: string; identity?: HostIdentity; access?: 'default' | 'workspace' | 'full'; args?: string[]; executable?: string; stateDir?: string } = {}) {
+function fixture(t: TestContext, overrides: { mode?: string; identity?: HostIdentity; access?: 'default' | 'workspace' | 'full'; args?: string[]; executable?: string; stateDir?: string; mcpServers?: McpServer[] } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'crew-console-claude-'));
   for (const name of ['claude', 'crew', 'codex']) mkdirSync(join(dir, name));
   for (const name of ['input.ndjson', 'output.ndjson']) writeFileSync(join(dir, name), '');
@@ -31,7 +32,7 @@ function fixture(t: TestContext, overrides: { mode?: string; identity?: HostIden
   const cancelled: string[] = [];
   const commands: { id: string; state: CommandState; error?: string | undefined }[] = [];
   const options: HostOptions & { args?: string[] } = {
-    launch: { cwd: dir, mode: 'cos', host: 'claude', requestId: 'launch', prompt: 'Must not be replayed', model: 'fixture', effort: 'high', access: overrides.access ?? 'default' },
+    launch: { cwd: dir, mode: 'cos', host: 'claude', requestId: 'launch', prompt: 'Must not be replayed', model: 'fixture', effort: 'high', access: overrides.access ?? 'default', ...(overrides.mcpServers ? { mcpServers: overrides.mcpServers } : {}) },
     // No inherited real host state or credential paths, even when a test fails.
     env: { PATH: process.env.PATH, CLAUDE_FIXTURE_DIR: dir, ...(overrides.mode ? { CLAUDE_FIXTURE_MODE: overrides.mode } : {}),
       CLAUDE_CONFIG_DIR: join(dir, 'claude'), CREW_HOME: join(dir, 'crew'), CODEX_HOME: join(dir, 'codex'), CREW_RUN: 'must-be-scrubbed', ANTHROPIC_API_KEY: 'fixture-only',
@@ -419,4 +420,20 @@ it('bounds public text and JSON deltas, queued human input, and incomplete wire 
   assert.equal(f.users().length, 1);
   f.emit({ fixture: 'raw', text: '{"content":"' + 'x'.repeat(1024 * 1024) });
   await until(() => f.states.some(s => /stream frame exceeded/.test(s.error ?? '')));
+});
+
+it('registers client MCP servers over private control stdin before user input', async t => {
+  const f = fixture(t, { mcpServers: [
+    { name: 'client-http', type: 'http', url: 'http://127.0.0.1:43210/mcp', headers: [{ name: 'Authorization', value: 'fixture-private-token' }] },
+    { name: 'client-stdio', command: '/fixture/server', args: ['--stdio'], env: [{ name: 'FIXTURE_KEY', value: 'fixture-private-env' }] },
+  ] });
+  await f.host.start();
+  const controls = f.input().filter(value => value.type === 'control_request');
+  assert.deepEqual(controls.map(value => value.request.subtype), ['initialize', 'mcp_set_servers']);
+  assert.deepEqual(controls[1]!.request.servers, {
+    'client-http': { type: 'http', url: 'http://127.0.0.1:43210/mcp', headers: { Authorization: 'fixture-private-token' } },
+    'client-stdio': { type: 'stdio', command: '/fixture/server', args: ['--stdio'], env: { FIXTURE_KEY: 'fixture-private-env' } },
+  });
+  assert.equal(f.users().length, 0);
+  assert.equal(JSON.stringify(f.launched()).includes('fixture-private'), false);
 });

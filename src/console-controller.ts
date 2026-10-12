@@ -4,14 +4,15 @@ import { accessSync, constants, mkdirSync, openSync, closeSync, realpathSync } f
 import { basename, delimiter, dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadRoster } from './roster.ts';
-import { loadConfig, home, withLockAsync, writeJson } from './store.ts';
+import { loadConfig, home, withLock, withLockAsync, writeJson } from './store.ts';
 import { hostEnv } from './spawn.ts';
-import { acceptIntent, consoleArgsHash, consoleDetail, consoleSessions, ConsoleError, directoryExists, intentHash, metaPath, publicSession, readMeta, readReceipt, receiptPath, SAFE_CONSOLE_ID, sessionDir, supervisorAlive, viewPath } from './console-store.ts';
+import { acceptIntent, consoleArgsHash, consoleDetail, consoleEvents, consoleRequests, consoleSessions, ConsoleError, directoryExists, intentHash, metaPath, publicSession, readMeta, readReceipt, receiptPath, SAFE_CONSOLE_ID, sessionDir, supervisorAlive, writeView } from './console-store.ts';
 import type { ConsoleIntent, ConsoleMeta, ConsoleView } from './console-store.ts';
 import type { ConsoleAction, ConsoleAnswer, ConsoleBootstrap, ConsoleCapabilities, ConsoleLaunch, ConsoleMessage, ConsoleMutation, ConsoleProvider, ConsoleUpdate } from './console-types.ts';
 import type { ConsoleChildMutation } from './console-types.ts';
-import { childRun, consoleChildDetail, consoleTeam, ownedChild } from './console-children.ts';
+import { belongsToRoot, childRun, consoleChildDetail, consoleTeam, ownedChild } from './console-children.ts';
 import type { RunMeta } from './types.ts';
+import { validateMcpServers } from './mcp-config.ts';
 
 export const hostCapabilities = (host: 'codex' | 'claude'): ConsoleCapabilities => ({ accessModes: host === 'codex' ? ['default', 'workspace', 'full'] : ['default', 'full'], activeInput: host === 'codex' ? 'steer' : 'queue', interrupt: true, approvals: true, questions: true });
 export function rootEnv(): NodeJS.ProcessEnv {
@@ -56,7 +57,7 @@ const requestId = (value: unknown): string => {
   return value;
 };
 function launchInput(value: unknown, providers: ConsoleProvider[], prior?: ConsoleLaunch): ConsoleLaunch {
-  const v = object(value); only(v, ['requestId', 'title', 'cwd', 'mode', 'host', 'model', 'effort', 'access', 'prompt']);
+  const v = object(value); only(v, ['requestId', 'title', 'cwd', 'mode', 'host', 'model', 'effort', 'access', 'prompt', 'mcpServers']);
   const id = requestId(v.requestId); const prompt = text(v.prompt, 'Prompt');
   if (v.host !== 'codex' && v.host !== 'claude') throw new ConsoleError('Choose Codex or Claude Code.');
   if (v.mode !== 'cos' && v.mode !== 'advisor') throw new ConsoleError('Choose CoS or advisor.');
@@ -83,7 +84,8 @@ function launchInput(value: unknown, providers: ConsoleProvider[], prior?: Conso
     if (!prior && (!model || !provider!.models.find(m => m.id === model)?.efforts?.includes(effort))) throw new ConsoleError('Choose a supported effort for the selected model.');
   }
   return { requestId: id, cwd: project, host: v.host, mode: v.mode, prompt, access,
-    ...(v.title !== undefined ? { title: text(v.title, 'Title', 160) } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
+    ...(v.title !== undefined ? { title: text(v.title, 'Title', 160) } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}),
+    ...(v.mcpServers === undefined ? {} : { mcpServers: validateMcpServers(v.mcpServers) }) };
 }
 function messageInput(value: unknown): ConsoleMessage {
   const v = object(value); only(v, ['requestId', 'text', 'interrupt']);
@@ -92,7 +94,7 @@ function messageInput(value: unknown): ConsoleMessage {
 }
 function actionInput(value: unknown): ConsoleAction {
   const v = object(value); only(v, ['requestId', 'action', 'revision']);
-  if (!['interrupt', 'resume', 'close'].includes(String(v.action)) || typeof v.action !== 'string') throw new ConsoleError('Invalid action.');
+  if (!['interrupt', 'resume', 'suspend', 'close'].includes(String(v.action)) || typeof v.action !== 'string') throw new ConsoleError('Invalid action.');
   if (!Number.isSafeInteger(v.revision) || Number(v.revision) < 0) throw new ConsoleError('Action requires the current session revision.');
   return { requestId: requestId(v.requestId), action: v.action as ConsoleAction['action'], revision: v.revision as number };
 }
@@ -137,8 +139,15 @@ export class ConsoleController {
     return { token: this.token, providers: this.providers(), projects, sessions };
   }
   detail(id: string, before?: string) { return readMeta(id, this.root)?.child ? undefined : consoleDetail(id, before, this.root); }
+  session(id: string) { this.requireRoot(id); return publicSession(id, this.root); }
+  requests(id: string) { this.requireRoot(id); return consoleRequests(id, this.root); }
+  childRequests(id: string, runId: string) { const run = this.requireChild(id, runId); return run.state === 'stopped' ? [] : consoleRequests(run.console!.sessionId, this.root); }
   team(id: string) { return consoleTeam(id, this.root); }
   childDetail(id: string, run: string, before?: string) { return consoleChildDetail(id, run, before, this.root); }
+  events(id: string, cursor?: string, limit?: number) { this.requireRoot(id); return consoleEvents(id, cursor, limit, this.root); }
+  childEvents(id: string, runId: string, cursor?: string, limit?: number) {
+    const run = this.requireChild(id, runId); return consoleEvents(run.console!.sessionId, cursor, limit, this.root);
+  }
   update(id?: string, run?: string): ConsoleUpdate { return { sessions: consoleSessions(this.root), detail: id ? this.detail(id) ?? null : null,
     team: id ? this.team(id) ?? null : null, childDetail: id && run ? this.childDetail(id, run) ?? null : null }; }
   /** Called only after crew spawn reserves a routed child and its owned metadata. */
@@ -168,30 +177,30 @@ export class ConsoleController {
         access: launch.access ?? 'default', state: 'starting', revision: 0, createdAt: at, updatedAt: at, rootNodeId: `console-${id}`, capabilities: hostCapabilities(launch.host), pendingRequests: 0,
         ...(launch.model ? { model: launch.model } : {}), ...(launch.effort ? { effort: launch.effort } : {}) }, events: [], requests: [], commands: {}, sequence: 0 };
       mkdirSync(sessionDir(id, this.root), { recursive: true, mode: 0o700 });
-      writeJson(metaPath(id, this.root), meta); writeJson(viewPath(id, this.root), view);
+      writeJson(metaPath(id, this.root), meta); writeView(id, view, this.root);
       acceptIntent(id, intent, this.root);
       try { await this.startSupervisor(id); }
       catch {
         const receipt = readReceipt(id, launch.requestId, this.root)!;
         receipt.phase = 'complete'; receipt.command = { requestId: launch.requestId, state: 'failed', error: 'Owned supervisor could not start.' };
         writeJson(receiptPath(id, launch.requestId, this.root), receipt);
-        view.session.state = 'failed'; view.session.error = receipt.command.error!; writeJson(viewPath(id, this.root), view);
+        view.session.state = 'failed'; view.session.error = receipt.command.error!; writeView(id, view, this.root);
       }
       return this.receiptMutation(id, launch.requestId);
     });
   }
   private requireRoot(id: string): void {
-    if (!this.detail(id)) throw new ConsoleError('Managed root is unavailable.', 404, 'SESSION_NOT_FOUND');
+    const meta = readMeta(id, this.root);
+    if (!meta || meta.child) throw new ConsoleError('Managed root is unavailable.', 404, 'SESSION_NOT_FOUND');
   }
   async message(id: string, value: unknown): Promise<ConsoleMutation> { this.requireRoot(id); return this.mutate(id, { kind: 'message', payload: messageInput(value) }); }
   async action(id: string, value: unknown): Promise<ConsoleMutation> { this.requireRoot(id); return this.mutate(id, { kind: 'action', payload: actionInput(value) }); }
   async answer(id: string, value: unknown): Promise<ConsoleMutation> { this.requireRoot(id); return this.mutate(id, { kind: 'answer', payload: answerInput(value) }); }
   private requireChild(id: string, runId: string): RunMeta {
     this.requireRoot(id);
-    const detail = this.childDetail(id, runId);
     const run = childRun(runId, this.root);
-    if (!detail || !run) throw new ConsoleError('Child does not belong to this root.', 404, 'CHILD_NOT_FOUND');
-    if (!detail.child.managed) throw new ConsoleError('Child has no console-owned native pipe. Use its native host.', 409, 'CHILD_UNMANAGED');
+    if (!run || !belongsToRoot(run, id, this.root)) throw new ConsoleError('Child does not belong to this root.', 404, 'CHILD_NOT_FOUND');
+    if (!ownedChild(run, this.root)) throw new ConsoleError('Child has no console-owned native pipe. Use its native host.', 409, 'CHILD_UNMANAGED');
     return run;
   }
   async childAction(id: string, runId: string, value: unknown): Promise<ConsoleChildMutation> {
@@ -206,6 +215,47 @@ export class ConsoleController {
     const run = this.requireChild(id, runId);
     const result = await this.mutate(run.console!.sessionId, { kind: 'answer', payload: answerInput(value) });
     return { child: this.childDetail(id, runId)!.child, command: result.command };
+  }
+  /** A reconnecting client may rotate its MCP endpoints/credentials only after all
+   * owned pipes have been released. Provider identities and packets remain unchanged. */
+  refreshMcp(id: string, servers: unknown): void {
+    this.requireRoot(id);
+    const mcpServers = validateMcpServers(servers);
+    const targets = [id, ...(this.team(id)?.children ?? []).filter(child => child.managed && child.runState !== 'stopped').map(child => this.requireChild(id, child.runId).console!.sessionId)].sort();
+    const refresh = (): void => {
+      const metas = targets.map(target => {
+        const meta = readMeta(target, this.root); const session = publicSession(target, this.root);
+        if (!meta || !meta.identity || meta.retiring || meta.pid || meta.epoch || session?.state !== 'disconnected') throw new ConsoleError('Suspend the whole owned session before refreshing MCP configuration.', 409, 'SESSION_ACTIVE');
+        return [target, meta] as const;
+      });
+      for (const [target, meta] of metas) writeJson(metaPath(target, this.root), { ...meta, launch: { ...meta.launch, mcpServers } });
+    };
+    const lock = (at: number): void => { if (at === targets.length) refresh(); else withLock(`console-owner-${targets[at]}`, () => lock(at + 1)); };
+    lock(0);
+  }
+  /** Release owned provider processes after a client disconnect without retiring packets.
+   * Suspend the root first so it cannot create new descendants during cleanup. */
+  async suspend(id: string): Promise<void> {
+    this.requireRoot(id);
+    const release = async (target: string): Promise<void> => {
+      const session = publicSession(target, this.root);
+      if (!session || session.state === 'closed') return;
+      const result = await this.mutate(target, { kind: 'action', payload: { requestId: `suspend-${randomBytes(16).toString('hex')}`, action: 'suspend', revision: session.revision } });
+      const deadline = Date.now() + 15_000;
+      let receipt = readReceipt(target, result.command.requestId, this.root);
+      while (receipt?.phase !== 'complete' && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 25)); receipt = readReceipt(target, result.command.requestId, this.root);
+      }
+      if (receipt?.command.state !== 'delivered') throw new ConsoleError('Owned session suspension was not confirmed.', 409, 'SUSPEND_FAILED');
+    };
+    const failures: string[] = [];
+    try { await release(id); } catch (error) { failures.push(error instanceof Error ? error.message : 'Root suspension failed.'); }
+    for (const child of this.team(id)?.children ?? []) {
+      if (!child.managed || child.runState === 'stopped') continue;
+      const run = this.requireChild(id, child.runId);
+      try { await release(run.console!.sessionId); } catch (error) { failures.push(error instanceof Error ? error.message : 'Child suspension failed.'); }
+    }
+    if (failures.length) throw new ConsoleError(failures.join('\n'), 409, 'SUSPEND_FAILED');
   }
   private async mutate(id: string, intent: Exclude<ConsoleIntent, { kind: 'launch' }>): Promise<ConsoleMutation> {
     const session = publicSession(id, this.root);
@@ -224,9 +274,9 @@ export class ConsoleController {
     const meta = readMeta(id, this.root);
     const restart = intent.kind === 'action' && intent.payload.action === 'resume' && !supervisorAlive(meta);
     // Closing a dead supervisor still retires the root; a short-lived supervisor handles that intent.
-    const retire = intent.kind === 'action' && intent.payload.action === 'close' && !supervisorAlive(meta);
+    const retire = intent.kind === 'action' && ['close', 'suspend'].includes(intent.payload.action) && !supervisorAlive(meta);
     if (!restart && !retire && !supervisorAlive(meta)) throw new ConsoleError('Supervisor is disconnected. Resume the recorded session explicitly.', 409, 'SUPERVISOR_UNAVAILABLE');
-    if (intent.kind === 'answer' && !consoleDetail(id, undefined, this.root)?.requests.some(r => r.id === intent.payload.pendingRequestId)) throw new ConsoleError('Approval or question is no longer pending.', 409, 'STALE_REQUEST');
+    if (intent.kind === 'answer' && !consoleRequests(id, this.root).some(r => r.id === intent.payload.pendingRequestId)) throw new ConsoleError('Approval or question is no longer pending.', 409, 'STALE_REQUEST');
     acceptIntent(id, intent, this.root);
     if (restart || retire) await this.startSupervisor(id);
     return this.receiptMutation(id, intent.payload.requestId);

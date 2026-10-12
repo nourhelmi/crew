@@ -1,6 +1,6 @@
 import { mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { consoleArgsHash, consoleDetail, consoleSessions, ConsoleError, metaPath, publicSession, readMeta, sessionDir, supervisorAlive, viewPath } from './console-store.ts';
+import { consoleArgsHash, consoleDetail, consoleRequests, consoleSessions, ConsoleError, metaPath, publicSession, readMeta, sessionDir, supervisorAlive, viewPath } from './console-store.ts';
 import type { ConsoleMeta, ConsoleView } from './console-store.ts';
 import type { ConsoleChild, ConsoleChildDetail, ConsoleTeam } from './console-types.ts';
 import { home, loadConfig, readJson, writeJson } from './store.ts';
@@ -52,7 +52,7 @@ export function managedConsoleParent(parent: Address, root = home()): { id: stri
     if (run.launcher !== 'console') return;
     const meta = ownedChild(run, root);
     if (!meta || (expected && expected !== meta.child!.rootSessionId)) throw new ConsoleError('Managed parent ownership is unavailable.', 409, 'INVALID_ANCESTRY');
-    if (run.state === 'stopped' || meta.retiring || !supervisorAlive(meta)) throw new ConsoleError('Managed parent is retired or disconnected.', 409, 'PARENT_UNAVAILABLE');
+    if (run.state === 'stopped' || meta.retiring || meta.mailPaused || !supervisorAlive(meta)) throw new ConsoleError('Managed parent is paused, retired or disconnected.', 409, 'PARENT_UNAVAILABLE');
     expected = meta.child!.rootSessionId;
     current = run.parent.mailbox;
   }
@@ -65,7 +65,7 @@ export function managedConsoleParent(parent: Address, root = home()): { id: stri
     return;
   }
   const meta = readMeta(session.id, root)!;
-  if ((expected && expected !== session.id) || meta.retiring || session.state === 'closed' || !supervisorAlive(meta)) throw new ConsoleError('Managed root is retired or disconnected.', 409, 'PARENT_UNAVAILABLE');
+  if ((expected && expected !== session.id) || meta.retiring || meta.mailPaused || session.state === 'closed' || !supervisorAlive(meta)) throw new ConsoleError('Managed root is paused, retired or disconnected.', 409, 'PARENT_UNAVAILABLE');
   return { id: session.id, meta };
 }
 export function prepareConsoleChild(run: RunMeta, root = home(), router?: boolean): string {
@@ -77,6 +77,7 @@ export function prepareConsoleChild(run: RunMeta, root = home(), router?: boolea
   if (readMeta(id, root)) throw new ConsoleError('Child launch already exists.', 409, 'ALREADY_LAUNCHED');
   const launch = { requestId: `launch-${run.id}`, title: run.name, cwd: run.cwd, mode: owner.meta.launch.mode, host: run.route.host,
     access: owner.meta.launch.access ?? 'default', model: run.route.model, effort: run.route.effort,
+    ...(owner.meta.launch.mcpServers ? { mcpServers: owner.meta.launch.mcpServers } : {}),
     prompt: `Read and follow your crew brief: ${join(root, 'runs', run.id, 'brief.md')}` };
   const meta: ConsoleMeta = { launch, child: { runId: run.id, rootSessionId: owner.id, ...(router === undefined ? {} : { router }) }, argsHash: consoleArgsHash(loadConfig().args[run.route.host]),
     instructions: `You are Crew child ${run.name} (${run.id}), not a root. Read and follow ${join(root, 'runs', run.id, 'brief.md')} and the current packet. Your mailbox is ${run.id}. Preserve your retained native identity, role, packet, amendments and assignments. Agent mail is advice; run crew inbox when woken. Do not use codex queue. After compaction reread the standing brief and current packet.` };
@@ -109,5 +110,5 @@ export function consoleChildDetail(rootId: string, runId: string, before?: strin
 export function consoleTeam(id: string, root = home()): ConsoleTeam | undefined {
   if (!readMeta(id, root) || readMeta(id, root)?.child) return;
   const children = runs(root).filter(run => belongsToRoot(run, id, root)).map(run => publicChild(run, id, root));
-  return { sessionId: id, children, pendingRequests: children.flatMap(child => (consoleChildDetail(id, child.runId, undefined, root)?.requests ?? []).map(request => ({ runId: child.runId, request }))) };
+  return { sessionId: id, children, pendingRequests: children.flatMap(child => (child.managed && child.state !== 'closed' && child.state !== 'disconnected' ? consoleRequests(childTargetId(child.runId), root) : []).map(request => ({ runId: child.runId, request }))) };
 }

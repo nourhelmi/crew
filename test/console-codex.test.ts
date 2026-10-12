@@ -85,6 +85,21 @@ test('unsupported configuration fails the launch definitively before provider di
   assert.equal(f.states.at(-1)?.state, 'failed');
 });
 
+test('client MCP definitions reach Codex through private thread config, not argv or environment', async t => {
+  const f = fixture(t, { launch: { requestId: 'launch', cwd: process.cwd(), mode: 'advisor', host: 'codex', prompt: '', mcpServers: [
+    { name: 'client-http', type: 'http', url: 'http://127.0.0.1:43210/mcp', headers: [{ name: 'Authorization', value: 'fixture-private-token' }] },
+    { name: 'client-stdio', command: '/fixture/server', args: ['--stdio'], env: [{ name: 'FIXTURE_KEY', value: 'fixture-private-env' }] },
+  ] } });
+  await f.host.start();
+  const start = f.wires().find(w => w.method === 'thread/start')!;
+  assert.deepEqual((start.params.config as Record<string, unknown>).mcp_servers, {
+    'client-http': { url: 'http://127.0.0.1:43210/mcp', http_headers: { Authorization: 'fixture-private-token' } },
+    'client-stdio': { command: '/fixture/server', args: ['--stdio'], env: { FIXTURE_KEY: 'fixture-private-env' } },
+  });
+  const launch = f.wires()[0]!;
+  assert.equal(JSON.stringify([launch.args, launch.env]).includes('fixture-private'), false);
+});
+
 test('Codex resumes only the supplied identity, discovers the current turn, and never replays history', async t => {
   const f = fixture(t, { identity: { sessionId: 'exact-thread', turnId: 'stale-turn' } }, { activeResume: true });
   await f.host.start();
@@ -367,6 +382,63 @@ test('failed or ambiguous interrupt does not transmit the replacement human inpu
     const f = fixture(t, {}, settings); await f.host.start(); await f.host.send('active', 'active');
     assert.equal(await f.host.send('replacement', 'replacement', true), 'failed');
     assert.equal(f.wires().some(w => w.params?.clientUserMessageId === 'replacement'), false);
+  }
+});
+
+test('pre-identity cleanup tolerates EPERM only after the owned group has exited', { skip: process.platform === 'win32' }, async t => {
+  const f = fixture(t, {}, { startupFlood: true });
+  const originalKill = process.kill;
+  let raced = false;
+  try {
+    process.kill = ((pid, signal) => {
+      if (pid === -Number(f.wires()[0]?.pid) && signal === 'SIGTERM' && !raced) {
+        raced = true;
+        originalKill(pid, 'SIGKILL');
+        const deadline = Date.now() + 2000;
+        for (;;) {
+          let state = '';
+          try { state = execFileSync('ps', ['-p', String(-pid), '-o', 'stat='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { /* already reaped */ }
+          if (!state || state.startsWith('Z')) break;
+          assert.ok(Date.now() < deadline, 'Owned fixture must exit before the simulated EPERM');
+        }
+        throw Object.assign(new Error('Zombie group signal denied'), { code: 'EPERM' });
+      }
+      return originalKill(pid, signal);
+    }) as typeof process.kill;
+    await assert.rejects(f.host.start(), error => {
+      assert.match(String(error), /startup event buffer limit/);
+      assert.doesNotMatch(String(error), /cleanup failed|EPERM|signal denied/);
+      return true;
+    });
+    assert.equal(raced, true);
+    assert.deepEqual(f.identities, []);
+  } finally { process.kill = originalKill; }
+});
+
+test('pre-identity cleanup preserves startup failure and rejects denied live-group signals, including escalation', { skip: process.platform === 'win32' }, async t => {
+  for (const deniedSignal of ['SIGTERM', 'SIGKILL']) {
+    const f = fixture(t, {}, { startupFlood: true });
+    const originalKill = process.kill;
+    let denied = false;
+    try {
+      process.kill = ((pid, signal) => {
+        if (pid === -Number(f.wires()[0]?.pid)) {
+          if (signal === deniedSignal) {
+            denied = true;
+            throw Object.assign(new Error('Denied live fixture signal'), { code: 'EPERM' });
+          }
+          if (deniedSignal === 'SIGKILL' && signal === 'SIGTERM') return true;
+        }
+        return originalKill(pid, signal);
+      }) as typeof process.kill;
+      await assert.rejects(f.host.start(), /startup event buffer limit.*cleanup failed: Denied live fixture signal/);
+      assert.equal(denied, true);
+      assert.equal(originalKill(f.wires()[0]!.pid!, 0), true);
+      assert.deepEqual(f.identities, []);
+      assert.ok(f.states.some(s => /startup event buffer limit.*cleanup failed/.test(s.error ?? '')));
+      await assert.rejects(f.host.close(), /Denied live fixture signal/);
+    } finally { process.kill = originalKill; }
+    await f.host.close(); // A failed close is retryable after the actual denial ends.
   }
 });
 

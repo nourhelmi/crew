@@ -16,6 +16,7 @@
     ]
   },
   "include": [
+    "adapters/**/*.ts",
     "src/**/*.ts",
     "test/**/*.ts",
     "scripts/**/*.ts"

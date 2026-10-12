@@ -14,7 +14,6 @@ import type { Config, Effort, Host, Role, Route, RunMeta } from './types.ts';
 import { managedConsoleParent, prepareConsoleChild } from './console-children.ts';
 import { assertSpawnBoundary, rootSpawnBoundary } from './stop-boundary.ts';
 import { processExists, recordProcess, terminateOwnedTree } from './console-process.ts';
-import { finishT3Request, nativeT3Bridge, prepareT3, retireT3Bridge, t3Worker } from './t3-client.ts';
 
 export const ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), '..');
 const skillPath = (role: Role): string => join(ROOT, 'skills', `advisor-role-${role}`, 'SKILL.md');
@@ -290,11 +289,10 @@ export async function spawn(options: SpawnOptions): Promise<RunMeta> {
   }, { ...config, router: { ...config.router, enabled: router.on } });
   if (!router.on && chosen.strategy === 'default') chosen.reason = `router off (${router.source})`;
   const placed = chosen;
-  const t3Bridge = nativeT3Bridge(placed.host);
   const id = newId(options.role.slice(0, 1));
   const run: RunMeta = {
     id, name: options.name ?? `${options.role}-${id.slice(-4)}`, role: options.role, route: placed,
-    cwd: options.cwd, keep: options.keep, parent, launcher: t3Bridge ? 't3' : inHerdr() ? 'herdr' : placed.host === 'claude' ? 'bg' : 'exec',
+    cwd: options.cwd, keep: options.keep, parent, launcher: inHerdr() ? 'herdr' : placed.host === 'claude' ? 'bg' : 'exec',
     createdAt: new Date().toISOString(), state: 'running',
     assignment: { id: 'initial', revision: 0, createdAt: new Date().toISOString(), status: 'active', submissions: [] },
     ...(checks ? { checks } : {}),
@@ -318,15 +316,14 @@ export async function spawn(options: SpawnOptions): Promise<RunMeta> {
       throw new Error(`crew: a live run is already named "${run.name}"`);
     }
     run.route = placed;
-    const managed = t3Bridge ? undefined : managedConsoleParent(parent);
+    const managed = managedConsoleParent(parent);
     const controlled = placed.host !== 'opencode' ? managed : undefined;
-    run.launcher = t3Bridge ? 't3' : controlled ? 'console' : inHerdr() ? 'herdr' : placed.host === 'claude' ? 'bg' : 'exec';
+    run.launcher = controlled ? 'console' : inHerdr() ? 'herdr' : placed.host === 'claude' ? 'bg' : 'exec';
     if (controlled) run.console = { sessionId: `c-${id}`, rootSessionId: controlled.id };
     mkdirSync(runDir(id), { recursive: true });
     writeFileSync(packetPath(id), options.task.endsWith('\n') ? options.task : `${options.task}\n`, { mode: 0o600 });
     writeFileSync(briefPath(id), `${bootstrap(run)}\n`, { mode: 0o600 });
     writeRun(run);
-    if (t3Bridge) prepareT3(run, t3Bridge);
     if (controlled) {
       try { prepareConsoleChild(run, home(), router.source !== 'config' ? router.on : undefined); }
       catch (error) { updateRun(id, current => ({ ...current, state: 'failed' })); throw error; }
@@ -351,26 +348,6 @@ export async function spawn(options: SpawnOptions): Promise<RunMeta> {
     ...(placed.host === 'opencode' ? opencodeEnv(placed, roots) : {}),
   };
   updateRun(id, current => ({ ...current, launch: { args, env: extra }, ...(run.sessionId ? { sessionId: run.sessionId } : {}) }));
-  if (run.launcher === 't3') {
-    try {
-      const current = readRun(id)!;
-      const requestId = current.t3Request!.requestId;
-      const response = await t3Worker(current, 'start', requestId);
-      finishT3Request(id, requestId);
-      const after = readRun(id)!;
-      if (after.state === 'stopped' && !after.t3Stopped && response.state !== 'stopped') {
-        const stopped = await t3Worker(after, 'stop');
-        if (stopped.state !== 'stopped') throw new Error('crew: T3 worker stop is unconfirmed; retry crew stop');
-        retireT3Bridge(id);
-      }
-      if (response.state === 'stopped') retireT3Bridge(id);
-    } catch (error) {
-      updateRun(id, current => current.state === 'stopped' ? undefined : { ...current, state: 'failed' });
-      throw error;
-    }
-    (await import('./wait.ts')).ensureWatcher(parent.mailbox);
-    return readRun(id)!;
-  }
   if (run.launcher !== 'exec') trustPaths(trustTargets(options.cwd, config.trust.roots));
   let launched: Launched;
   try {

@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { claudeMcpServers } from './mcp-config.ts';
 import type { ConsoleHostAdapter, HostOptions } from './console-host.ts';
 import type { ConsoleAnswer, ConsoleRequest, ConsoleState, CommandState } from './console-types.ts';
 import { recordProcess, terminateOwnedProcess } from './console-process.ts';
@@ -408,6 +409,12 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
         if (!closing) fail(new Error('Claude stdout disconnected'), true);
       });
       await control({ subtype: 'initialize', hooks: null });
+      if (options.launch.mcpServers?.length) {
+        try {
+          const result = await control({ subtype: 'mcp_set_servers', servers: claudeMcpServers(options.launch.mcpServers) });
+          if (Object.keys(object(result.errors)).length) throw new Error('MCP registration failed');
+        } catch { throw new Error('crew: Claude could not register the client MCP servers'); }
+      }
       if (failure || closing) throw failure ?? new Error('Claude closed during initialization');
       provider = recordProcess(child.pid!, process.platform !== 'win32');
       cb.identity({ sessionId, provider });

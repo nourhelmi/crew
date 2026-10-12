@@ -7,7 +7,7 @@ import { requestResume, resuming } from './resume.ts';
 import { pushCodex, registeredSocket } from './codex-mail.ts';
 import { reviewed } from './outcome.ts';
 import { progressLine, readResult } from './result.ts';
-import { appendMail, changePacket, findRun, hasWaiter, mailDir, nativeAmendmentAttemptPath, nativeAmendmentDeliveredPath, nativeAmendmentPath, newId, packetPath, readJson, readRun, resultPath, runDir, unread, updateRun, withLock, writeJson, type NativeAmendmentAttempt, type NativeAmendmentReceipt } from './store.ts';
+import { appendMail, changePacket, findRun, hasWaiter, mailDir, newId, packetPath, readJson, readRun, resultPath, runDir, unread, updateRun, withLock, writeJson } from './store.ts';
 import type { Address, Delivery, Host, Mail, RunMeta } from './types.ts';
 
 export function runAddress(run: RunMeta): Address {
@@ -110,28 +110,15 @@ export function send(from: Address, to: Address, text: string, kind: 'message' |
  * Scope, authorization and done-when changes go into the child's packet, never only into
  * mail: children treat plain messages as advice. Only the run's parent may amend it.
  */
-export function amend(from: Address, runRef: string, text: string, nativeRequestId?: string): { run: RunMeta; number: number; delivery: Delivery } {
+export function amend(from: Address, runRef: string, text: string): { run: RunMeta; number: number; delivery: Delivery } {
   const run = findRun(runRef);
   if (!run) throw new Error(`crew: no run matches "${runRef}" (see crew ls)`);
   if (run.parent.mailbox !== from.mailbox) throw new Error(`crew: only ${run.name}'s parent can amend its packet; send advice with crew msg`);
-  if (nativeRequestId !== undefined && (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(nativeRequestId) || run.launcher !== 't3' || !run.t3)) {
-    throw new Error('crew: native amendments require a bound T3 worker and a valid request id');
-  }
   const packet = packetPath(run.id);
   let number = 0;
   const notice: Mail = { id: newId('m'), at: new Date().toISOString(), kind: 'amendment', from, text: '' };
   const amended = updateRun(run.id, current => {
     if (current.state === 'stopped') throw new Error(`crew: ${current.name} is stopped; spawn a new run for new work`);
-    if (current.parent.mailbox !== from.mailbox) throw new Error(`crew: only ${current.name}'s parent can amend its packet`);
-    const hashText = createHash('sha256').update(text.trim()).digest('hex');
-    if (nativeRequestId) {
-      const existing = readJson<{ hash: string; number: number }>(nativeAmendmentPath(run.id, nativeRequestId));
-      if (existing) {
-        if (existing.hash !== hashText) throw new Error('crew: native amendment request id was reused with different text');
-        number = existing.number;
-        return undefined;
-      }
-    }
     const assignment = currentAssignment(current);
     number = assignment.revision + 1;
     const hash = readResult(resultPath(run.id))?.hash;
@@ -139,61 +126,10 @@ export function amend(from: Address, runRef: string, text: string, nativeRequest
     return changePacket(current, {
       assignment: { ...unaccepted(assignment), revision: number, status: 'active' },
       amendment: { number, ...(hash ? { resultHash: hash } : {}) }, notice,
-      ...(nativeRequestId ? { nativeAmendment: { requestId: nativeRequestId, hash: hashText, number } } : {}),
       packet: `${readFileSync(packet, 'utf8')}\n## Amendment ${number} (${notice.at})\n\n${text.trim()}\n`,
     });
   }) ?? run;
-  return { run: amended, number, delivery: nativeRequestId ? 'queued' : deliver(runAddress(amended), notice) };
-}
-
-/** Prepare only when the old native turn is quiescent; acknowledge only after the
- * provider accepts this exact prompt. A queued composer message is not delivery. */
-export function nativeAmendmentDelivery(id: string, requestId: string, attemptId: string, phase: 'prepare' | 'ack'): number {
-  if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(requestId)
-    || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/.test(attemptId)) throw new Error('crew: invalid native amendment delivery identity');
-  let number = 0;
-  const run = updateRun(id, current => {
-    if (current.launcher !== 't3' || !current.t3) throw new Error('crew: native amendment delivery requires a bound T3 worker');
-    if (current.state === 'stopped') throw new Error(`crew: ${current.name} is stopped; spawn a new run for new work`);
-    const receipt = readJson<NativeAmendmentReceipt>(nativeAmendmentPath(id, requestId));
-    if (!receipt || receipt.requestId !== requestId || typeof receipt.noticeId !== 'string' || !receipt.noticeId
-      || !Number.isInteger(receipt.number)) throw new Error('crew: native amendment request has no exact delivery receipt');
-    number = receipt.number;
-    const deliveredPath = nativeAmendmentDeliveredPath(id, receipt.noticeId);
-    const delivered = readJson<NativeAmendmentAttempt>(deliveredPath);
-    if (delivered?.requestId === requestId && delivered.noticeId === receipt.noticeId) {
-      return phase === 'ack' && current.state === 'stalled' && current.assignment?.status === 'active'
-        ? { ...current, state: 'running' } : undefined;
-    }
-    const attemptPath = nativeAmendmentAttemptPath(id, requestId, attemptId);
-    let attempt = readJson<NativeAmendmentAttempt>(attemptPath);
-    if (attempt && (attempt.requestId !== requestId || attempt.attemptId !== attemptId || attempt.noticeId !== receipt.noticeId)) {
-      throw new Error('crew: native amendment attempt ownership changed');
-    }
-    if (phase === 'prepare') {
-      if (!attempt) {
-        const resultHash = readResult(resultPath(id))?.hash;
-        attempt = { requestId, attemptId, noticeId: receipt.noticeId, ...(resultHash ? { resultHash } : {}) };
-        writeJson(attemptPath, attempt);
-      }
-      // Reapply a persisted baseline after a crash, but never resnapshot a fast
-      // new result when the same native attempt is replayed.
-      return { ...current,
-        ...(current.amendment?.number === number ? {
-          amendment: { number, ...(attempt.resultHash ? { resultHash: attempt.resultHash } : {}) },
-        } : {}),
-        ...(current.state === 'stalled' && current.assignment?.status === 'active' ? { state: 'running' } : {}),
-      };
-    }
-    if (!attempt) throw new Error('crew: native amendment delivery was not prepared for this attempt');
-    writeJson(deliveredPath, attempt);
-    // Prepare must commit before the native send. Acknowledgement never samples
-    // or rebases a result that the newly accepted prompt may already have written.
-    return current.state === 'stalled' && current.assignment?.status === 'active'
-      ? { ...current, state: 'running' } : undefined;
-  });
-  if (!run) throw new Error('crew: native amendment delivery requires an existing run');
-  return number;
+  return { run: amended, number, delivery: deliver(runAddress(amended), notice) };
 }
 
 /** New outcome, same retained member/host/model. Old packets and result history remain inspectable. */
@@ -379,9 +315,7 @@ export function waiting(id: string, blocked: boolean): Delivery | undefined {
   if (!run || !blocked) return undefined;
   return deliver(run.parent, {
     id: newId('m'), at: new Date().toISOString(), kind: 'waiting', from: fromRun(run),
-    text: run.launcher === 't3'
-      ? `is waiting on a native approval or question in CrewCode (run ${run.name}, ${run.id}, thread ${run.t3?.threadId ?? 'starting'}); open its native thread to answer`
-      : run.launcher === 'console'
+    text: run.launcher === 'console'
       ? `is waiting on a native approval or question in the Crew console (run ${run.name}, ${run.id}); agent mail cannot answer a native human request`
       : run.bgId
       ? `is waiting on an approval, question or folder-trust dialog in background session ${run.bgId} (answer it: claude attach ${run.bgId})`

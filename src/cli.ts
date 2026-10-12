@@ -7,7 +7,7 @@ import { herdr, inHerdr, labelPane } from './herdr.ts';
 import { isHookEvent, runHook } from './hook.ts';
 import { defaultCodexSocket, owningCodexSocket, self } from './identity.ts';
 import { registerCodex, wakeCodex } from './codex-mail.ts';
-import { amend, assign, format, nativeAmendmentDelivery, resolve, send, takeUnread } from './mail.ts';
+import { amend, assign, format, resolve, send, takeUnread } from './mail.ts';
 import { resume } from './resume.ts';
 import { accept, submissionPath } from './assignment.ts';
 import { grade } from './outcome.ts';
@@ -27,8 +27,8 @@ const HELP = `crew: advisor crews on native Claude Code and Codex
   crew spawn --role advisor|builder|checker (--task TEXT | --packet FILE | -- TEXT | stdin)
              [--model M[@effort]] [--effort E] [--name N] [--cwd DIR] [--keep] [--dry-run]
              [--checks RUN]
-      Route (Jev unless --model), launch a native CrewCode worker when connected,
-      else a herdr pane or claude --bg / codex exec. A checker given --checks RUN reports
+      Route (Jev unless --model), pick the CLI from the model, launch it (herdr pane,
+      else claude --bg / codex exec). Prints the run. A checker given --checks RUN reports
       how RUN's work held up, and routing learns from it.
   crew wait [--timeout 30m]    Block until a child settles/stalls or mail arrives; print it; exit.
                                Claude: run it as a background command, it wakes you on exit.
@@ -42,8 +42,9 @@ const HELP = `crew: advisor crews on native Claude Code and Codex
   crew ls [--all]              Your children (or everything).
   crew read <run> [--submission REF] [--json]   Result/history, or the tail of its terminal/log.
   crew console [--port N]      Local console for managed roots and live teams (default 4317).
+  crew acp                    ACP stdio server for compatible clients; no client-specific runtime.
   crew dashboard [--port N]    Compatibility alias for crew console.
-  crew resume <run>            Resume the same native or headless session with its recorded settings.
+  crew resume <run>            Resume an exited headless session with its recorded launch settings.
   crew stop <run>              Stop a run and close its pane.
   crew stop --children-of HOST-SESSION   Stop a native root's tree, including pending launches.
   crew route --role R --task T Show where a task would go, without launching.
@@ -86,7 +87,7 @@ function age(iso: string): string {
 }
 
 function row(run: RunMeta): string {
-  const where = run.t3 ? `t3:${run.t3.threadId}` : run.herdr ? `herdr:${run.herdr.agent}` : run.bgId ? `bg:${run.bgId}` : run.pid ? `exec:${run.pid}` : run.launcher;
+  const where = run.herdr ? `herdr:${run.herdr.agent}` : run.bgId ? `bg:${run.bgId}` : run.pid ? `exec:${run.pid}` : run.launcher;
   const last = run.settled ? `  "${run.settled.status.slice(0, 60)}"` : '';
   return `${run.name.padEnd(18)} ${run.id.padEnd(12)} ${run.role.padEnd(8)} ${`${run.route.host} ${run.route.model}@${run.route.effort}`.padEnd(30)} ${run.state.padEnd(8)} ${where.padEnd(16)} ${age(run.createdAt).padStart(4)}${run.keep ? ' kept' : ''}${run.assignment ? ` assignment:${run.assignment.id}/${run.assignment.revision} ${run.assignment.status}${run.assignment.submission ? ` submission:${run.assignment.submission}` : ''}` : ''}${last}`;
 }
@@ -116,11 +117,16 @@ async function main(argv: string[]): Promise<void> {
       'dry-run': { type: 'boolean' }, timeout: { type: 'string' }, file: { type: 'string' }, all: { type: 'boolean' },
       host: { type: 'string' }, json: { type: 'boolean' }, quiet: { type: 'boolean' }, global: { type: 'boolean' },
       submission: { type: 'string' }, checks: { type: 'string' }, socket: { type: 'string' }, port: { type: 'string' },
-      'request-id': { type: 'string' }, 'attempt-id': { type: 'string' }, 'text-file': { type: 'string' },
     },
   });
 
   switch (command) {
+    case 'acp': {
+      if (rest.length) fail('crew: crew acp takes no arguments; configure sessions through ACP');
+      const { runAcp } = await import('../adapters/acp/index.ts');
+      await runAcp();
+      return;
+    }
     case 'console':
     case 'dashboard': {
       const { dashboard } = await import('./dashboard.ts');
@@ -152,7 +158,7 @@ async function main(argv: string[]): Promise<void> {
         ...(values.name ? { name: values.name } : {}), ...(values.checks ? { checks: values.checks } : {}),
       });
       if (values.json) { console.log(JSON.stringify(run)); return; }
-      const where = run.t3 ? `T3 thread ${run.t3.threadId}` : run.herdr ? `herdr pane ${run.herdr.pane}` : run.bgId ? `claude --bg ${run.bgId}` : run.pid ? `codex exec pid ${run.pid}` : run.launcher;
+      const where = run.herdr ? `herdr pane ${run.herdr.pane}` : run.bgId ? `claude --bg ${run.bgId}` : run.pid ? `codex exec pid ${run.pid}` : run.launcher;
       console.log(`${values['dry-run'] ? 'would spawn' : 'spawned'} ${run.name} (run ${run.id}): ${run.route.host} ${run.route.model}@${run.route.effort} [${run.route.strategy}] via ${where}`);
       if (run.route.reason && run.route.strategy === 'default') console.log(`  routing fell back to the role default: ${run.route.reason}`);
       if (!values['dry-run']) console.log(`  result: ${resultPath(run.id)}\n  ${waitHint(run.parent) ?? 'wake: crew wait'}`);
@@ -181,33 +187,6 @@ async function main(argv: string[]): Promise<void> {
       const me = self();
       const target = resolve(to, me);
       console.log(`sent to ${target.name ?? target.mailbox}: ${send(me, target, text)}`);
-      return;
-    }
-    case 't3-amend': {
-      const [ref] = positionals;
-      if (process.env.CREW_T3_AMEND_OWNED !== '1' || !ref || !values['request-id'] || !values['text-file']) {
-        fail('crew: t3-amend requires a server-owned native composer request');
-      }
-      const run = findRun(ref);
-      if (!run || run.id !== ref || run.launcher !== 't3' || !run.t3) fail('crew: native amendment requires the exact bound T3 run id');
-      const text = readFileSync(values['text-file'], 'utf8');
-      if (!text.trim()) fail('crew: empty amendment');
-      const amended = amend(run.parent, run.id, text, values['request-id']);
-      console.log(JSON.stringify({ runId: run.id, number: amended.number }));
-      return;
-    }
-    case 't3-amend-prepare':
-    case 't3-amend-ack': {
-      const [ref] = positionals;
-      if (process.env.CREW_T3_AMEND_OWNED !== '1' || !ref || !values['request-id'] || !values['attempt-id']) {
-        fail('crew: native amendment delivery requires a server-owned request and attempt');
-      }
-      const run = findRun(ref);
-      if (!run || run.id !== ref) fail('crew: native amendment delivery requires the exact run id');
-      const phase = command === 't3-amend-prepare' ? 'prepare' : 'ack';
-      const number = nativeAmendmentDelivery(run.id, values['request-id'], values['attempt-id'], phase);
-      if (phase === 'ack') ensureWatcher(run.parent.mailbox);
-      console.log(JSON.stringify({ runId: run.id, number, phase }));
       return;
     }
     case 'amend': {

@@ -346,3 +346,21 @@ test('routed OpenCode retains its native transport and read-only team capability
     assert.equal(readRun(run.id)!.state, 'stopped'); assert.equal(f.controller.childDetail(f.id, run.id)!.child.managed, false);
   } finally { await f.cleanup(); }
 });
+
+test('root interruption fences delayed child startup and new delegation until explicit continuation', async () => {
+  const f = await fixture();
+  const unmarkRoot = markWaiter(f.address.mailbox);
+  try {
+    process.env.CHILD_FIXTURE_DELAY = '700';
+    const late = await spawn({ role: 'builder', task: 'Delayed synthetic launch.', cwd: f.root, keep: true, model: 'codex/fixture', effort: 'high' });
+    delete process.env.CHILD_FIXTURE_DELAY;
+    await until(() => readMeta(childTargetId(late.id), f.root)?.pid);
+    await f.controller.action(f.id, { requestId: 'pause-root', action: 'interrupt', revision: f.controller.session(f.id)!.revision });
+    assert.throws(() => managedConsoleParent(f.address, f.root), /paused/);
+    await assert.rejects(spawn({ role: 'builder', task: 'Must not start while paused.', cwd: f.root, keep: true, model: 'codex/fixture', effort: 'high' }), /paused/);
+    await until(() => ['failed', 'disconnected'].includes(f.controller.childDetail(f.id, late.id)?.child.state ?? ''));
+    assert.equal(f.wires(late).filter(w => w.method === 'turn/start').length, 0);
+    await f.controller.message(f.id, { requestId: 'human-continue', text: 'hold' });
+    assert.equal(managedConsoleParent(f.address, f.root)?.id, f.id);
+  } finally { delete process.env.CHILD_FIXTURE_DELAY; unmarkRoot(); await f.cleanup(); }
+});

@@ -1,4 +1,6 @@
-/** Public browser contract. Host process handles, credentials and raw RPC stay server-side. */
+import type { McpServer } from './mcp-config.ts';
+
+/** Public client contract. Host process handles, credentials and raw RPC stay server-side. */
 export type ConsoleHost = 'codex' | 'claude';
 export type ConsoleMode = 'cos' | 'advisor';
 export type ConsoleAccess = 'default' | 'workspace' | 'full';
@@ -134,6 +136,19 @@ export interface ConsoleTeam {
 export interface ConsoleChildDetail extends Omit<ConsoleDetail, 'session'> { child: ConsoleChild }
 export interface ConsoleChildMutation { child: ConsoleChild; command: ConsoleCommand }
 export interface ConsoleChildAction extends Omit<ConsoleAction, 'action'> { action: 'interrupt' | 'resume' | 'stop' }
+/** Append/update records, not truncated transcript snapshots. Cursors are session-bound. */
+export type ConsoleChange =
+  | { kind: 'event'; event: ConsoleEvent }
+  | { kind: 'session'; session: ConsoleSession }
+  | { kind: 'requests'; requests: ConsoleRequest[] }
+  | { kind: 'command'; command: ConsoleCommand };
+export interface ConsoleFeed {
+  cursor: string;
+  changes: (ConsoleChange & { cursor: string })[];
+  more: boolean;
+  /** A reset/recovery cannot reconstruct history that predates the journal. */
+  gap?: { reason: 'expired' | 'invalid' | 'legacy' | 'interrupted-write' };
+}
 
 export interface ConsoleLaunch {
   requestId: string;
@@ -145,6 +160,8 @@ export interface ConsoleLaunch {
   effort?: string;
   access?: ConsoleAccess;
   prompt: string;
+  /** Private launch configuration; never copied into a public session. */
+  mcpServers?: McpServer[];
 }
 
 export interface ConsoleMessage {
@@ -156,7 +173,7 @@ export interface ConsoleMessage {
 
 export type ConsoleAction = {
   requestId: string;
-  action: 'interrupt' | 'resume' | 'close';
+  action: 'interrupt' | 'resume' | 'suspend' | 'close';
   revision: number;
 };
 

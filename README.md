@@ -82,6 +82,15 @@ The advisor decides what to do itself and what to delegate. Inside [herdr](https
 crew appears in panes beside it; anywhere else, children run as `claude --bg` sessions and
 `codex exec` runs.
 
+To use an ACP desktop/editor client, configure a local agent command of `crew acp`.
+Choose the lead's Codex or Claude model from your roster and the **Advisor** or
+**Chief of staff** workflow before the first message. You talk to that root; it
+delegates and communicates with workers through Crew. Worker transcripts, tools,
+and exact native approvals stream through the same ACP connection. Clients can
+optionally use Crew's metadata to show workers as read-only child conversations.
+The CLI has no client-specific runtime dependency. See the [ACP contract and
+limits](adapters/acp/README.md).
+
 To work entirely in the browser, run `crew console` and open the printed local URL.
 Choose a project, CoS or advisor, and an installed host; describe the outcome and launch.
 Talk to the root and inspect its team from the [web console](#console).

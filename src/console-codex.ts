@@ -1,5 +1,6 @@
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { codexMcpServers } from './mcp-config.ts';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { ConsoleAnswer, ConsoleRequest, ConsoleState, CommandState } from './console-types.ts';
@@ -128,7 +129,7 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
     for (const waiters of turnWaiters.values()) for (const wake of waiters) wake();
     turnWaiters.clear();
     if (!closing) setState('disconnected', error);
-    void shutdown().catch(error => setState('disconnected', message(error)));
+    void shutdown().catch(cleanup => setState('disconnected', `${error}; cleanup failed: ${message(cleanup)}`));
   }
   function write(value: object): Promise<void> {
     if (!child || dead || closing || !child.stdin.writable) return Promise.reject(new TransportError('crew: Codex app-server is disconnected', false));
@@ -372,6 +373,7 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
         roots = access === 'workspace' || options.child ? workspaceRoots(options, extra) : [...new Set(extra.map(path => resolve(options.launch.cwd, path)))];
       }
       const config: ObjectValue = {};
+      if (options.launch.mcpServers?.length) config.mcp_servers = codexMcpServers(options.launch.mcpServers);
       if (options.launch.effort) config.model_reasoning_effort = options.launch.effort;
       if (roots.length) config['sandbox_workspace_write.writable_roots'] = roots;
       const params = { cwd: options.launch.cwd, developerInstructions: options.instructions, ...(options.launch.model ? { model: options.launch.model } : {}), ...(sandbox ? { sandbox } : {}), ...(Object.keys(config).length ? { config } : {}) };
@@ -394,7 +396,8 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
         callbacks.command(options.launch.requestId, 'failed', message(error));
         setState('failed', message(error)); dead = true;
       } else if (!dead) disconnect(message(error));
-      await shutdown();
+      try { await shutdown(); }
+      catch (cleanup) { throw new Error(`${message(error)}; cleanup failed: ${message(cleanup)}`, { cause: error }); }
       throw error;
     }
   }
@@ -419,16 +422,32 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
     })();
     if (!child || child.exitCode !== null || child.signalCode !== null) return;
     const owned = child;
-    return stopPromise ??= new Promise<void>(resolveClosed => {
+    return stopPromise ??= new Promise<void>((resolveClosed, rejectClosed) => {
+      const hasLiveGroup = (): boolean => execFileSync('ps', ['-ax', '-o', 'pgid=', '-o', 'stat='], { encoding: 'utf8', timeout: 2000 })
+        .trim().split('\n').some(line => {
+          const [group, state] = line.trim().split(/\s+/);
+          return Number(group) === owned.pid && !state?.startsWith('Z');
+        });
       const kill = (signal: NodeJS.Signals): void => {
         if (process.platform !== 'win32' && owned.pid) {
-          try { process.kill(-owned.pid, signal); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+          try { process.kill(-owned.pid, signal); }
+          catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            // A startup failure can close stdout before Node reaps the child.
+            // Darwin rejects signals to a zombie-only group with EPERM.
+            if (code !== 'ESRCH' && !(code === 'EPERM' && !hasLiveGroup())) throw error;
+          }
         } else owned.kill(signal);
       };
-      const timer = setTimeout(() => kill('SIGKILL'), 1000);
-      owned.once('close', () => { clearTimeout(timer); resolveClosed(); });
-      kill('SIGTERM');
-    });
+      const closed = (): void => { clearTimeout(timer); resolveClosed(); };
+      const signal = (value: NodeJS.Signals): void => {
+        try { kill(value); }
+        catch (error) { clearTimeout(timer); owned.off('close', closed); rejectClosed(error); }
+      };
+      const timer = setTimeout(() => signal('SIGKILL'), 1000);
+      owned.once('close', closed);
+      signal('SIGTERM');
+    }).catch(error => { stopPromise = undefined; throw error; });
   }
   return {
     capabilities: { activeInput: 'steer', interrupt: true, approvals: true, questions: true },
@@ -500,7 +519,8 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
       } catch (error) { callbacks.command(answer.requestId, transmitted ? 'uncertain' : 'failed', message(error)); throw error; }
     },
     close() {
-      return closePromise ??= (async () => { closing = true; disconnect('crew: Codex console closed'); await shutdown(); setState('closed'); })();
+      return closePromise ??= (async () => { closing = true; disconnect('crew: Codex console closed'); await shutdown(); setState('closed'); })()
+        .catch(error => { closePromise = undefined; throw error; });
     },
   };
 }
