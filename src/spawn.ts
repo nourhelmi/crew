@@ -12,6 +12,7 @@ import { RESULT_HEADINGS } from './result.ts';
 import { briefPath, findRun, home, listRuns, loadConfig, mailDir, newId, packetPath, readJson, readRun, resultPath, retained, runDir, updateRun, withLock, writeRun } from './store.ts';
 import type { Config, Effort, Host, Role, Route, RunMeta } from './types.ts';
 import { managedConsoleParent, prepareConsoleChild } from './console-children.ts';
+import { assertSpawnBoundary, rootSpawnBoundary } from './stop-boundary.ts';
 
 export const ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), '..');
 const skillPath = (role: Role): string => join(ROOT, 'skills', `advisor-role-${role}`, 'SKILL.md');
@@ -264,6 +265,7 @@ export async function spawn(options: SpawnOptions): Promise<RunMeta> {
     throw new Error(`crew: a live run is already named "${options.name}"`);
   }
   const parent = self();
+  const stopBoundary = rootSpawnBoundary(parent.mailbox);
   let checks: string | undefined;
   if (options.checks) {
     if (options.role !== 'checker') throw new Error('crew: --checks is for checkers');
@@ -291,6 +293,7 @@ export async function spawn(options: SpawnOptions): Promise<RunMeta> {
 
   // Routing awaits an external process; reserve the name from fresh state afterwards.
   withLock('spawn', () => {
+    assertSpawnBoundary(stopBoundary);
     const visited = new Set<string>();
     let mailbox = parent.mailbox;
     for (;;) {
@@ -344,7 +347,7 @@ export async function spawn(options: SpawnOptions): Promise<RunMeta> {
       : run.launcher === 'bg' ? launchClaudeBg(run, args, extra)
       : await launchExec(run, args, extra);
   } catch (error) {
-    updateRun(id, current => ({ ...current, state: 'failed' }));
+    updateRun(id, current => current.state === 'stopped' ? undefined : { ...current, state: 'failed' });
     throw error;
   }
   // A fast child can settle (and its hooks record ids) before launch returns: merge, never overwrite.

@@ -20,6 +20,7 @@ import { configPath, findRun, listRuns, loadConfig, readJson, resultPath, retain
 import { HOSTS, ROLES, type Address, type Host, type Role, type RunMeta } from './types.ts';
 import { ensureWatcher, wait, waitHint, watch } from './wait.ts';
 import { stopRun } from './retire.ts';
+import { stopRootChildren } from './stop-boundary.ts';
 
 const HELP = `crew: advisor crews on native Claude Code and Codex
 
@@ -44,6 +45,7 @@ const HELP = `crew: advisor crews on native Claude Code and Codex
   crew dashboard [--port N]    Compatibility alias for crew console.
   crew resume <run>            Resume an exited headless session with its recorded launch settings.
   crew stop <run>              Stop a run and close its pane.
+  crew stop --children-of HOST-SESSION   Stop a native root's tree, including pending launches.
   crew route --role R --task T Show where a task would go, without launching.
   crew router [status|on|off|reset] [--global]
                                Jev routing for this agent session, or (run in a plain terminal)
@@ -109,6 +111,7 @@ async function main(argv: string[]): Promise<void> {
     args: rest, allowPositionals: true, strict: true,
     options: {
       role: { type: 'string' }, task: { type: 'string' }, packet: { type: 'string' }, model: { type: 'string' },
+      'children-of': { type: 'string' },
       effort: { type: 'string' }, name: { type: 'string' }, cwd: { type: 'string' }, keep: { type: 'boolean' },
       'dry-run': { type: 'boolean' }, timeout: { type: 'string' }, file: { type: 'string' }, all: { type: 'boolean' },
       host: { type: 'string' }, json: { type: 'boolean' }, quiet: { type: 'boolean' }, global: { type: 'boolean' },
@@ -244,6 +247,12 @@ async function main(argv: string[]): Promise<void> {
       break;
     }
     case 'stop': {
+      if (values['children-of']) {
+        if (positionals.length) fail('crew: choose a run or --children-of, not both');
+        await stopRootChildren(values['children-of']);
+        console.log(`stopped children of ${values['children-of']}`);
+        return;
+      }
       const run = findRun(positionals[0] ?? fail('crew: crew stop <run>')) ?? fail('crew: no such run');
       await stopRun(run);
       console.log(`stopped ${run.name}`);
