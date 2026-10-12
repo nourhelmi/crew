@@ -234,6 +234,32 @@ describe('settlement', () => {
     assert.equal(mail.stall('b-test', 'again'), undefined);
     assert.match(mail.takeUnread('claude-root')[0]?.text ?? '', /no terminal result/);
   });
+  it('does not stall a resumed host using an earlier liveness probe', () => {
+    const observed = run({ pid: 101, turn: 1 });
+    store.updateRun(observed.id, current => ({ ...current, pid: 202, turn: 2 }));
+    assert.equal(mail.stall(observed.id, 'codex exec exited', observed), undefined);
+    assert.equal(store.readRun(observed.id)?.state, 'running');
+    assert.deepEqual(mail.takeUnread('claude-root'), []);
+    const current = store.readRun(observed.id)!;
+    assert.equal(mail.stall(current.id, 'replacement exited', current), 'queued');
+    assert.equal(store.readRun(current.id)?.state, 'stalled');
+  });
+  it('does not stall a host whose PID was published after the probe', () => {
+    const observed = run({ pid: 101, turn: 2 });
+    store.updateRun(observed.id, current => ({ ...current, pid: 202 }));
+    assert.equal(mail.stall(observed.id, 'codex exec exited', observed), undefined);
+    assert.equal(store.readRun(observed.id)?.state, 'running');
+    assert.deepEqual(mail.takeUnread('claude-root'), []);
+  });
+  it('does not stall while resume is locked but has not published a new host', () => {
+    const observed = run({ pid: 101, turn: 1 });
+    store.withLock(`resume-${observed.id}`, () => {
+      assert.equal(mail.stall(observed.id, 'codex exec exited', observed), undefined);
+    });
+    assert.equal(store.readRun(observed.id)?.state, 'running');
+    assert.equal(existsSync(join(store.runDir(observed.id), '.stalled')), false);
+    assert.deepEqual(mail.takeUnread('claude-root'), []);
+  });
 });
 
 describe('hooks', () => {
@@ -366,7 +392,7 @@ describe('launch shape', () => {
     const config = store.loadConfig();
     const claude = argv('claude', { host: 'claude', model: 'claude-opus-5-5', effort: 'high', strategy: 'jev' }, 'adv', config, 'GO');
     assert.deepEqual(claude.slice(0, 6), ['--model', 'claude-opus-5-5', '--effort', 'high', '--name', 'adv']);
-    assert.deepEqual(claude.slice(-5), ['--add-dir', ROOT_DIR, '--permission-mode', 'auto', 'GO']);
+    assert.deepEqual(claude.slice(-6), ['--add-dir', ROOT_DIR, '--permission-mode', 'auto', '--', 'GO']);
     const codex = argv('codex', { host: 'codex', model: 'gpt-6.1-sol', effort: 'xhigh', strategy: 'jev' }, 'b', config, 'GO');
     assert.deepEqual(codex, ['--model', 'gpt-6.1-sol', '-c', 'model_reasoning_effort="xhigh"', '-c', 'check_for_update_on_startup=false', 'GO']);
   });
@@ -704,6 +730,32 @@ describe('waking the parent', async () => {
 
 describe('watcher', async () => {
   const { watch } = await import('../src/wait.ts');
+  it('does not report the replacement host stalled when a liveness probe races resume', async (t) => {
+    const oldPid = 999_998;
+    const newPid = 999_999;
+    run({ pid: oldPid, turn: 1 });
+    let now = Date.now();
+    const clock = t.mock.method(Date, 'now', () => now);
+    const kill = t.mock.method(process, 'kill', (pid: number, signal?: number | string) => {
+      assert.equal(signal, 0, 'the watcher only probes liveness');
+      assert.equal(pid, oldPid);
+      store.updateRun('b-test', current => ({ ...current, pid: newPid, turn: 2 }));
+      now += 1_000; // End watch after this sweep without depending on wall-clock timing.
+      throw Object.assign(new Error('old host exited'), { code: 'ESRCH' });
+    });
+    try {
+      await watch('claude-root', 1, 100);
+      assert.equal(kill.mock.callCount(), 1);
+      assert.equal(store.readRun('b-test')?.pid, newPid);
+      assert.equal(store.readRun('b-test')?.state, 'running');
+      assert.equal(existsSync(join(store.runDir('b-test'), '.stalled')), false);
+      assert.deepEqual(mail.takeUnread('claude-root'), []);
+    } finally {
+      store.updateRun('b-test', ({ pid: _, ...current }) => ({ ...current, state: 'stopped' }));
+      kill.mock.restore();
+      clock.mock.restore();
+    }
+  });
   it('sweeps for a parent that is not waiting, then exits with no live children', async () => {
     run({ launcher: 'exec', pid: 999_999 }); // its process is gone
     run({ id: 'b-done', name: 'builder-y' });

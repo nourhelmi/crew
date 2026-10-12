@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { activeDescendants, candidate, currentAssignment, packetHash, packetMail, snapshot, unaccepted } from './assignment.ts';
 import { agentStatus, prompt } from './herdr.ts';
-import { requestResume } from './resume.ts';
+import { requestResume, resuming } from './resume.ts';
 import { pushCodex, registeredSocket } from './codex-mail.ts';
 import { reviewed } from './outcome.ts';
 import { progressLine, readResult } from './result.ts';
@@ -287,9 +287,11 @@ export function paused(id: string, line: string): Delivery | undefined {
 }
 
 /** A child that disappeared without a terminal result. Reported once. */
-export function stall(id: string, why: string): Delivery | undefined {
+export function stall(id: string, why: string, observed?: Pick<RunMeta, 'turn' | 'pid' | 'bgId'>): Delivery | undefined {
   let fresh: RunMeta | undefined;
   updateRun(id, run => {
+    // A liveness probe may finish after resume has published a replacement host.
+    if (observed && (resuming(id) || run.turn !== observed.turn || run.pid !== observed.pid || run.bgId !== observed.bgId)) return undefined;
     if (run.state !== 'running' || !claim(id, 'stalled')) return undefined;
     fresh = { ...run, state: 'stalled' };
     return fresh;

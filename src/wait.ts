@@ -64,7 +64,7 @@ function sweep(mailbox: string, checkBg: boolean): void {
           const needsLaunch = run.launcher !== 'herdr' && run.launcher !== 'console' && run.sessionId && run.launch && lastMail && lastMail !== run.resumedMail;
           if (why && !needsLaunch) {
             if (run.keep && run.assignment?.status !== 'active' && hasResult && !unread(run.id).mails.length) settle(run.id, true);
-            else stall(run.id, why);
+            else stall(run.id, why, run);
           }
         }
       }

@@ -92,7 +92,8 @@ export function argv(host: Host, r: Route, name: string, config: Config, firstPr
     codex: ['--model', r.model, '-c', `model_reasoning_effort="${r.effort}"`, '-c', 'check_for_update_on_startup=false',
       ...(roots.length ? ['-c', `sandbox_workspace_write.writable_roots=${JSON.stringify(roots)}`] : [])],
   };
-  return [...base[host], ...config.args[host], firstPrompt];
+  // Claude's variadic --add-dir would otherwise consume the bootstrap prompt.
+  return [...base[host], ...config.args[host], ...(host === 'claude' ? ['--'] : []), firstPrompt];
 }
 
 /** Env for children launched from this process; drop host markers so nested CLIs start clean. */
