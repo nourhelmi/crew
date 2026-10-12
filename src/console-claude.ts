@@ -42,6 +42,7 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
   let busy = false;
   let interrupting = false;
   let turnEnded = false;
+  let turnError: string | undefined;
   let hostStateSeen = false;
   let hostIdle = true;
   let awaitingAck: PendingAck | undefined;
@@ -122,11 +123,16 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
     busy = false;
     finishStreams();
     idleWaiter?.resolve(); idleWaiter = undefined;
-    setState(interrupting ? 'interrupted' : 'idle');
-    if (!interrupting) void pump();
+    if (turnError) {
+      for (const input of queue.splice(0)) cb.command(input.requestId, 'failed', turnError);
+      setState('failed', turnError);
+    } else {
+      setState(interrupting ? 'interrupted' : 'idle');
+      if (!interrupting) void pump();
+    }
   }
   async function deliver(input: PendingInput): Promise<CommandState> {
-    busy = true; turnEnded = false; hostIdle = false;
+    busy = true; turnEnded = false; turnError = undefined; hostIdle = false;
     const turnId = randomUUID();
     cb.identity({ sessionId, turnId });
     setState('running');
@@ -323,6 +329,7 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
       if (message.is_error) {
         const error = string(message.result) || array(message.errors).map(string).join('\n') || `Claude turn failed: ${string(message.subtype)}`;
         if (!ready) throw new Error(error);
+        turnError = preview(error);
         cb.event({ kind: 'status', text: preview(error) });
       }
       maybeIdle();

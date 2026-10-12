@@ -104,6 +104,27 @@ it('starts without sending a prompt, persists UUID identity, and resumes exactly
   assert.equal(resumed.users()[0]?.session_id, id);
 });
 
+it('keeps native turn errors visible after idle and rejects undelivered queued input', async t => {
+  const f=fixture(t);
+  await f.host.start();
+  const session=f.identities[0]!.sessionId;
+  assert.equal(await f.host.send('Fail this synthetic turn','failed-turn'),'delivered');
+  assert.equal(await f.host.send('Queued input','queued-after-failure'),'queued');
+  f.emit({type:'result',session_id:session,is_error:true,subtype:'error_during_execution',result:'Synthetic authentication failure'});
+  f.emit({type:'system',session_id:session,subtype:'session_state_changed',state:'idle'});
+  await until(()=>f.states.at(-1)?.state==='failed');
+  assert.ok(f.events.some(e=>e.kind==='status' && e.text==='Synthetic authentication failure'));
+  assert.deepEqual(f.states.at(-1),{state:'failed',error:'Synthetic authentication failure'});
+  assert.equal(f.commands.findLast(c=>c.id==='failed-turn')?.state,'delivered','Input acknowledgment does not claim successful turn execution');
+  assert.equal(f.commands.findLast(c=>c.id==='queued-after-failure')?.state,'failed');
+  assert.equal(f.users().length,1,'Turn failure must not dispatch the queued input');
+  assert.equal(await f.host.send('Explicit continuation','continuation'),'delivered');
+  assert.equal(f.states.at(-1)?.state,'running');
+  f.emit({fixture:'result'});
+  await until(()=>f.states.at(-1)?.state==='idle');
+  assert.equal(f.states.at(-1)?.error,undefined);
+});
+
 it('binds checkpoint and Crew caller ownership to the exact native UUID without hooks or skill expansion, including resume', async t => {
   const f = fixture(t, { mode: 'workflow' }); await f.host.start();
   const id = f.identities[0]!.sessionId;
