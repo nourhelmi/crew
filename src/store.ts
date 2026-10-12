@@ -22,6 +22,8 @@ export function loadConfig(): Config {
   let fromRoster = {};
   try { fromRoster = rosterDefaults(loadRoster()); } catch { /* reported by crew roster */ }
   return {
+    // Lead-only settings are validated at the console catalog boundary, never in worker hooks.
+    ...(user.leadModels === undefined ? {} : { leadModels: user.leadModels }),
     defaults: { ...DEFAULT_CONFIG.defaults, ...fromRoster, ...user.defaults },
     router: { ...DEFAULT_CONFIG.router, ...user.router },
     args: { ...DEFAULT_CONFIG.args, ...user.args },

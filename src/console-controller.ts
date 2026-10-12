@@ -14,6 +14,7 @@ import { belongsToRoot, childRun, consoleChildDetail, consoleTeam, ownedChild } 
 import type { RunMeta } from './types.ts';
 import { validateMcpServers } from './mcp-config.ts';
 import { processExists } from './console-process.ts';
+import { parseModel } from './route.ts';
 
 export const hostCapabilities = (host: 'codex' | 'claude'): ConsoleCapabilities => ({ accessModes: host === 'codex' ? ['default', 'workspace', 'full'] : ['default', 'full'], activeInput: host === 'codex' ? 'steer' : 'queue', interrupt: true, approvals: true, questions: true });
 export function rootInstructions(mode: ConsoleLaunch['mode']): string {
@@ -35,6 +36,21 @@ const commandAvailable = (name: string): boolean => (process.env.PATH ?? '').spl
   try { accessSync(join(dir, name), constants.X_OK); return true; } catch { return false; }
 });
 export function consoleProviders(): ConsoleProvider[] {
+  const configured: unknown = loadConfig().leadModels;
+  if (configured !== undefined && !Array.isArray(configured)) throw new ConsoleError('leadModels must be an array of model@effort strings.');
+  const leads = (configured ?? []).map((spec: unknown, index: number) => {
+    const where = `leadModels[${index}]`;
+    if (typeof spec !== 'string' || !spec.trim() || /\s|\0/.test(spec.trim()) || spec.split('@').length > 2) {
+      throw new ConsoleError(`${where} must be a native model followed by @effort.`);
+    }
+    let parsed: ReturnType<typeof parseModel>;
+    try { parsed = parseModel(spec); }
+    catch (error) { throw new ConsoleError(`${where}: ${(error as Error).message}`); }
+    if (parsed.host !== 'codex' && parsed.host !== 'claude') throw new ConsoleError(`${where} must use Codex or Claude Code.`);
+    if (parsed.effort === undefined) throw new ConsoleError(`${where} requires an explicit @effort for lead model switching.`);
+    if (parsed.model.length > 160) throw new ConsoleError(`${where} model must contain at most 160 characters.`);
+    return { ...parsed, effort: parsed.effort };
+  });
   let roster: ReturnType<typeof loadRoster>;
   try { roster = loadRoster(); } catch { roster = undefined; }
   return (['codex', 'claude'] as const).map(host => {
@@ -45,6 +61,12 @@ export function consoleProviders(): ConsoleProvider[] {
       const item = models.get(id) ?? { id, label: id, efforts: [] };
       if (!item.efforts.includes(entry.effort)) item.efforts.push(entry.effort);
       models.set(id, item);
+    }
+    for (const entry of leads) {
+      if (entry.host !== host) continue;
+      const item = models.get(entry.model) ?? { id: entry.model, label: entry.model, efforts: [] };
+      if (!item.efforts.includes(entry.effort)) item.efforts.push(entry.effort);
+      models.set(entry.model, item);
     }
     const available = commandAvailable(host);
     return { id: host, label: host === 'codex' ? 'Codex' : 'Claude Code', available, ...(!available ? { reason: `${host} CLI is not installed on PATH.` } : {}), models: [...models.values()], capabilities: hostCapabilities(host) };

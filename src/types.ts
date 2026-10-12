@@ -123,6 +123,8 @@ export interface Mail {
 export type Delivery = 'waiter' | 'opencode-plugin' | 'herdr-prompt' | 'headless-resume' | 'codex-steer' | 'codex-start' | 'queued';
 
 export interface Config {
+  /** Additional manually selected console/ACP leads, independent of worker routing: `model@effort`. */
+  leadModels?: string[];
   /** Role defaults when the Jev router is off or fails; `model@effort`. */
   defaults: Record<Role, string>;
   router: { enabled: boolean; command: string; timeoutMs: number };

@@ -260,7 +260,7 @@ export class AcpServer {
       if (this.initialized) throw new AcpError('Connection already initialized.');
       if (!Number.isSafeInteger(params.protocolVersion) || Number(params.protocolVersion) < 1) throw new AcpError('Invalid protocol version.');
       this.capabilities = optionalObject(params.clientCapabilities); this.initialized = true;
-      return { protocolVersion: 1, agentInfo: { name: 'crew', title: 'Crew', version: '0.16.1' }, agentCapabilities: { loadSession: true, sessionCapabilities: { list: {} }, promptCapabilities: { image: false, audio: false, embeddedContext: false }, mcpCapabilities: { http: true, sse: false }, _meta: { crew: { version: 1, questions: true } } }, authMethods: [] };
+      return { protocolVersion: 1, agentInfo: { name: 'crew', title: 'Crew', version: '0.16.2' }, agentCapabilities: { loadSession: true, sessionCapabilities: { list: {} }, promptCapabilities: { image: false, audio: false, embeddedContext: false }, mcpCapabilities: { http: true, sse: false }, _meta: { crew: { version: 1, questions: true } } }, authMethods: [] };
     }
     if (!this.initialized) throw new AcpError('Initialize the ACP connection first.', -32002);
     if (method === 'session/list') {

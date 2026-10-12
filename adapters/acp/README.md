@@ -19,9 +19,10 @@ version. Clients that cannot fall back to v1 must refuse the connection.
 - Stdio and HTTP MCP configuration travels through private native protocol setup.
   SSE is unsupported. Changed MCP configuration on load first suspends the owned
   tree, then refreshes its private configuration without changing native IDs.
-- Models are enabled, available Codex/Claude roster entries, identified as
-  `host/model`. The `default` model alias resolves to the session's selected
-  roster model. There is no fabricated `crew-auto` model.
+- Models are enabled, available Codex/Claude roster entries plus optional
+  manually configured lead models, identified as `host/model`. The `default`
+  model alias resolves to the session's selected model. There is no fabricated
+  `crew-auto` model.
 - Advisor/CoS, lead model and effort can change in the same session. An active
   root finishes its current turn before a queued selection applies; approvals
   and cancellation remain available meanwhile. Only the root pipe reconnects,
@@ -39,6 +40,26 @@ version. Clients that cannot fall back to v1 must refuse the connection.
 Human messages go to the root advisor or CoS only. There is no worker messaging,
 worker amendment endpoint, external child-control endpoint, or separate child
 chat transport in this adapter. The native Crew workflow owns delegation.
+
+## Additional lead models
+
+Add `leadModels` to your Crew config (`~/.config/crew/config.json`, or
+`$CREW_CONFIG`) to offer models for manually selected advisor/CoS leads without
+adding them to the worker roster or changing worker defaults or routing:
+
+```json
+{
+  "leadModels": ["codex/gpt-6-astra@high", "codex/gpt-6-astra@max"]
+}
+```
+
+Entries use Crew's normal `model@effort` syntax, including host aliases, with an
+explicit effort required for model switching. Only Codex and Claude are supported
+here; availability still requires the corresponding CLI on `PATH` and access to the model through your
+account. Duplicate model/effort entries are merged, and roster choices keep
+their existing order and defaults. Reload your ACP agent's model list
+after editing the config. Invalid entries produce a catalog error and do not
+affect worker routing or hooks.
 
 ## Worker visibility
 
