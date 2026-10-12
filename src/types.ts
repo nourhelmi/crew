@@ -18,7 +18,7 @@ export interface Route {
   reason?: string;
 }
 
-export type Launcher = 'herdr' | 'bg' | 'exec' | 'console';
+export type Launcher = 'herdr' | 'bg' | 'exec' | 'console' | 't3';
 
 /** Anything that can receive mail: a crew run, or a root session. */
 export interface Address {
@@ -75,6 +75,12 @@ export interface RunMeta {
   launcher: Launcher;
   /** Verified console ancestry and a dedicated native provider supervisor. */
   console?: { sessionId: string; rootSessionId: string };
+  /** Native T3 child identity, cross-checked by the authenticated owning bridge. */
+  t3?: { threadId: string; taskId: string };
+  /** A pending native launch keeps its idempotency key across uncertain bridge outcomes. */
+  t3Request?: { action: 'start' | 'resume'; requestId: string; mailId?: string; priorMail?: string };
+  /** Confirmed native retirement permits deleting the private bridge credential snapshot. */
+  t3Stopped?: boolean;
   createdAt: string;
   state: RunState;
   herdr?: { pane: string; agent: string; session?: string; closed?: boolean };

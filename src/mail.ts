@@ -7,7 +7,7 @@ import { requestResume, resuming } from './resume.ts';
 import { pushCodex, registeredSocket } from './codex-mail.ts';
 import { reviewed } from './outcome.ts';
 import { progressLine, readResult } from './result.ts';
-import { appendMail, changePacket, findRun, hasWaiter, mailDir, newId, packetPath, readJson, readRun, resultPath, runDir, unread, updateRun, withLock, writeJson } from './store.ts';
+import { appendMail, changePacket, findRun, hasWaiter, mailDir, nativeAmendmentPath, newId, packetPath, readJson, readRun, resultPath, runDir, unread, updateRun, withLock, writeJson } from './store.ts';
 import type { Address, Delivery, Host, Mail, RunMeta } from './types.ts';
 
 export function runAddress(run: RunMeta): Address {
@@ -110,15 +110,28 @@ export function send(from: Address, to: Address, text: string, kind: 'message' |
  * Scope, authorization and done-when changes go into the child's packet, never only into
  * mail: children treat plain messages as advice. Only the run's parent may amend it.
  */
-export function amend(from: Address, runRef: string, text: string): { run: RunMeta; number: number; delivery: Delivery } {
+export function amend(from: Address, runRef: string, text: string, nativeRequestId?: string): { run: RunMeta; number: number; delivery: Delivery } {
   const run = findRun(runRef);
   if (!run) throw new Error(`crew: no run matches "${runRef}" (see crew ls)`);
   if (run.parent.mailbox !== from.mailbox) throw new Error(`crew: only ${run.name}'s parent can amend its packet; send advice with crew msg`);
+  if (nativeRequestId !== undefined && (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(nativeRequestId) || run.launcher !== 't3' || !run.t3)) {
+    throw new Error('crew: native amendments require a bound T3 worker and a valid request id');
+  }
   const packet = packetPath(run.id);
   let number = 0;
   const notice: Mail = { id: newId('m'), at: new Date().toISOString(), kind: 'amendment', from, text: '' };
   const amended = updateRun(run.id, current => {
     if (current.state === 'stopped') throw new Error(`crew: ${current.name} is stopped; spawn a new run for new work`);
+    if (current.parent.mailbox !== from.mailbox) throw new Error(`crew: only ${current.name}'s parent can amend its packet`);
+    const hashText = createHash('sha256').update(text.trim()).digest('hex');
+    if (nativeRequestId) {
+      const existing = readJson<{ hash: string; number: number }>(nativeAmendmentPath(run.id, nativeRequestId));
+      if (existing) {
+        if (existing.hash !== hashText) throw new Error('crew: native amendment request id was reused with different text');
+        number = existing.number;
+        return undefined;
+      }
+    }
     const assignment = currentAssignment(current);
     number = assignment.revision + 1;
     const hash = readResult(resultPath(run.id))?.hash;
@@ -126,10 +139,11 @@ export function amend(from: Address, runRef: string, text: string): { run: RunMe
     return changePacket(current, {
       assignment: { ...unaccepted(assignment), revision: number, status: 'active' },
       amendment: { number, ...(hash ? { resultHash: hash } : {}) }, notice,
+      ...(nativeRequestId ? { nativeAmendment: { requestId: nativeRequestId, hash: hashText, number } } : {}),
       packet: `${readFileSync(packet, 'utf8')}\n## Amendment ${number} (${notice.at})\n\n${text.trim()}\n`,
     });
   }) ?? run;
-  return { run: amended, number, delivery: deliver(runAddress(amended), notice) };
+  return { run: amended, number, delivery: nativeRequestId ? 'queued' : deliver(runAddress(amended), notice) };
 }
 
 /** New outcome, same retained member/host/model. Old packets and result history remain inspectable. */
@@ -315,7 +329,9 @@ export function waiting(id: string, blocked: boolean): Delivery | undefined {
   if (!run || !blocked) return undefined;
   return deliver(run.parent, {
     id: newId('m'), at: new Date().toISOString(), kind: 'waiting', from: fromRun(run),
-    text: run.launcher === 'console'
+    text: run.launcher === 't3'
+      ? `is waiting on a native approval or question in CrewCode (run ${run.name}, ${run.id}, thread ${run.t3?.threadId ?? 'starting'}); open its native thread to answer`
+      : run.launcher === 'console'
       ? `is waiting on a native approval or question in the Crew console (run ${run.name}, ${run.id}); agent mail cannot answer a native human request`
       : run.bgId
       ? `is waiting on an approval, question or folder-trust dialog in background session ${run.bgId} (answer it: claude attach ${run.bgId})`

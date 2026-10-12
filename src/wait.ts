@@ -13,6 +13,7 @@ import { alive, hasWaiter, listRuns, mailDir, markWaiter, mtime, readRun, result
 import type { Address, Host, Mail, RunMeta } from './types.ts';
 import { ownedChild } from './console-children.ts';
 import { publicSession, supervisorAlive } from './console-store.ts';
+import { retireT3Bridge, t3Worker, type T3Worker } from './t3-client.ts';
 
 const LIVENESS_EVERY_MS = 5_000;
 const BG_EVERY_MS = 20_000;
@@ -21,7 +22,9 @@ const BATCH_MS = 750;
 type Bg = ReturnType<typeof bgSession>;
 
 /** Why a live child is gone, or undefined while it still runs (or was not checked this sweep). */
-function gone(run: RunMeta, herdrStatus: AgentStatus | undefined, bg: Bg | 'unchecked'): string | undefined {
+function gone(run: RunMeta, herdrStatus: AgentStatus | undefined, bg: Bg | 'unchecked', t3?: T3Worker): string | undefined {
+  if (run.launcher === 't3') return t3 && ['idle', 'interrupted', 'failed', 'stopped'].includes(t3.state)
+    ? `its native T3 session is ${t3.state}` : undefined;
   if (run.launcher === 'console') {
     const meta = ownedChild(run);
     const session = run.console && publicSession(run.console.sessionId);
@@ -39,7 +42,7 @@ function gone(run: RunMeta, herdrStatus: AgentStatus | undefined, bg: Bg | 'unch
   return undefined;
 }
 
-function sweep(mailbox: string, checkBg: boolean): void {
+async function sweep(mailbox: string, checkBg: boolean): Promise<void> {
   for (const listed of listRuns()) {
     if (listed.parent.mailbox !== mailbox) continue;
     const run = reopen(listed);
@@ -54,14 +57,24 @@ function sweep(mailbox: string, checkBg: boolean): void {
       if (run.state === 'running' && !resuming(run.id)) {
         const herdrStatus = run.herdr && !run.herdr.closed ? agentStatus(run.herdr.agent, run.herdr.session) : undefined;
         const bg: Bg | 'unchecked' = run.launcher === 'bg' && checkBg ? bgSession(run.bgId ?? run.sessionId ?? '', run.launch?.env) : 'unchecked';
+        let t3: T3Worker | undefined;
+        if (run.launcher === 't3') {
+          try { t3 = await t3Worker(run, 'status'); }
+          catch { /* unavailable is unknown, not proof the native worker exited */ }
+          if (t3?.state === 'stopped') {
+            retireT3Bridge(run.id);
+            continue;
+          }
+          if (t3) waiting(run.id, t3.state === 'waiting');
+        }
         // An approval, question or folder-trust dialog needs a human or the parent.
         if (run.launcher === 'herdr' && herdrStatus !== 'unknown') waiting(run.id, herdrStatus === 'blocked');
         if (bg !== 'unchecked' && bg !== 'unknown') waiting(run.id, bg?.status === 'blocked');
         if (run.launcher === 'console' && run.console) waiting(run.id, publicSession(run.console.sessionId)?.state === 'waiting');
         if (!hasResult || unread(run.id).mails.length || run.keep) {
-          const why = gone(run, herdrStatus, bg);
+          const why = gone(run, herdrStatus, bg, t3);
           const lastMail = unread(run.id).mails.at(-1)?.id;
-          const needsLaunch = run.launcher !== 'herdr' && run.launcher !== 'console' && run.sessionId && run.launch && lastMail && lastMail !== run.resumedMail;
+          const needsLaunch = run.launcher !== 'herdr' && run.launcher !== 'console' && (run.sessionId || run.launcher === 't3') && run.launch && lastMail && lastMail !== run.resumedMail;
           if (why && !needsLaunch) {
             if (run.keep && run.assignment?.status !== 'active' && hasResult && !unread(run.id).mails.length) settle(run.id, true);
             else stall(run.id, why, run);
@@ -96,7 +109,7 @@ export async function wait(timeoutMs: number): Promise<Mail[]> {
       const now = Date.now();
       if (now - lastSweep >= LIVENESS_EVERY_MS) {
         const checkBg = now - lastBg >= BG_EVERY_MS;
-        sweep(me.mailbox, checkBg);
+        await sweep(me.mailbox, checkBg);
         lastSweep = now;
         if (checkBg) lastBg = now;
       }
@@ -128,7 +141,7 @@ export async function watch(mailbox: string, everyMs = LIVENESS_EVERY_MS, maxMs 
   while (Date.now() < deadline && watched(mailbox).length) {
     if (!hasWaiter(mailbox)) {
       const checkBg = Date.now() - lastBg >= BG_EVERY_MS;
-      sweep(mailbox, checkBg);
+      await sweep(mailbox, checkBg);
       if (checkBg) lastBg = Date.now();
       warm();
     }
@@ -233,12 +246,12 @@ export function liveChildren(mailbox: string): RunMeta[] {
 /** Children the watcher keeps sweeping: running ones, and blocked ones still alive to answer. */
 function watched(mailbox: string): RunMeta[] {
   return listRuns().filter(run => run.parent.mailbox === mailbox && (run.state === 'running'
-    || (run.state !== 'stopped' && run.launch && run.sessionId && unread(run.id).mails.at(-1)?.id !== run.resumedMail && unread(run.id).mails.length)
+    || (run.state !== 'stopped' && run.launch && (run.sessionId || run.launcher === 't3') && unread(run.id).mails.at(-1)?.id !== run.resumedMail && unread(run.id).mails.length)
     || hasPendingSettlement(run.id) || (run.settled?.notice && !run.settled.notified)
     || (run.state === 'done' && !run.keep && run.herdr && !run.herdr.closed)
     || (run.state === 'blocked' && (run.launcher === 'exec' ? alive(run.pid)
       : run.launcher === 'herdr' ? Boolean(run.herdr && !run.herdr.closed && agentStatus(run.herdr.agent, run.herdr.session))
-      : run.launcher === 'console' ? supervisorAlive(ownedChild(run)) : false))));
+      : run.launcher === 'console' ? supervisorAlive(ownedChild(run)) : run.launcher === 't3'))));
 }
 
 export { format };

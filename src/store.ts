@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -67,8 +67,11 @@ export interface PacketChange {
   packet: string;
   notice: Mail;
   draft?: string;
+  nativeAmendment?: { requestId: string; hash: string; number: number };
 }
 const packetChangePath = (id: string): string => join(runDir(id), 'packet-change.json');
+export const nativeAmendmentPath = (id: string, requestId: string): string =>
+  join(runDir(id), 't3-amendments', `${createHash('sha256').update(requestId).digest('hex')}.json`);
 
 function applyPacketChange(meta: RunMeta, change: PacketChange): RunMeta {
   writeFileSync(packetPath(meta.id), change.packet, { mode: 0o600 });
@@ -78,8 +81,11 @@ function applyPacketChange(meta: RunMeta, change: PacketChange): RunMeta {
     try { return JSON.parse(line).id === change.notice.id; } catch { return false; }
   }); } catch { /* first mail */ }
   if (!delivered) appendMail(meta.id, change.notice);
+  if (change.nativeAmendment) writeJson(nativeAmendmentPath(meta.id, change.nativeAmendment.requestId), change.nativeAmendment);
   const { amendment: _, ...rest } = meta;
   return { ...rest, state: 'running', assignment: change.assignment,
+    // The native composer owns dispatch of this message, so watchers must not launch a second turn.
+    ...(change.nativeAmendment ? { resumedMail: change.notice.id } : {}),
     ...(change.assignmentHistory ? { assignmentHistory: change.assignmentHistory } : {}),
     ...(change.amendment ? { amendment: change.amendment } : {}) };
 }

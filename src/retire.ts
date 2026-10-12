@@ -7,15 +7,50 @@ import type { RunMeta } from './types.ts';
 import { ownedChild } from './console-children.ts';
 import { processExists, terminateOwnedProcess, terminateOwnedTree } from './console-process.ts';
 import { publicSession, readMeta, supervisorAlive } from './console-store.ts';
+import { retireT3Bridge, t3Worker } from './t3-client.ts';
 
-export async function stopRun(run: RunMeta, visited = new Set<string>(), waitForConsole = true): Promise<void> {
+/** A confirmed native parent Stop covers its T3 descendants without their possibly expired tokens. */
+function retireNativeTree(id: string): void {
+  const runs = listRuns();
+  const visited = new Set<string>();
+  const visit = (runId: string): void => {
+    if (visited.has(runId)) return;
+    visited.add(runId);
+    const run = readRun(runId);
+    if (run?.launcher === 't3') retireT3Bridge(runId);
+    for (const child of runs) if (child.parent.mailbox === runId) visit(child.id);
+  };
+  visit(id);
+}
+
+export async function stopRun(run: RunMeta, visited = new Set<string>(), waitForConsole = true, nativeCascade = false): Promise<void> {
   if (visited.has(run.id)) return;
   visited.add(run.id);
   const { current, children } = withLock('spawn', () => ({
     current: updateRun(run.id, live => ({ ...live, state: 'stopped' })) ?? run,
     children: listRuns().filter(child => child.parent.mailbox === run.id),
   }));
-  await Promise.all(children.map(child => stopRun(child, visited, waitForConsole)));
+  if (current.launcher === 't3' && !nativeCascade) {
+    // Fence the Crew tree first, stopping external descendants by recorded ownership. The
+    // parent's authenticated native cascade covers T3 descendants whose tokens may be stale.
+    const childrenStopped = await Promise.allSettled(children.map(child => stopRun(child, visited, waitForConsole, true)));
+    const failures = childrenStopped.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+    try {
+      // Owning cancellation is not proof it succeeded. Keep retry credentials until
+      // the native service separately confirms its whole subtree is quiescent.
+      const confirmed = current.t3Stopped || process.env.CREW_T3_STOP_CONFIRMED === '1';
+      const fenceOnly = process.env.CREW_T3_STOP_OWNED === '1' && !confirmed;
+      if (!confirmed && !fenceOnly) {
+        const result = await t3Worker(current, 'stop');
+        if (result.state !== 'stopped') throw new Error(`crew: ${current.name}'s native T3 stop is unconfirmed; retry crew stop`);
+      }
+      if (!fenceOnly) retireNativeTree(current.id);
+    } catch (error) { failures.push(error); }
+    if (failures.length) throw new AggregateError(failures, `crew: ${current.name}'s tree stop is incomplete; retry crew stop`);
+    return;
+  }
+  await Promise.all(children.map(child => stopRun(child, visited, waitForConsole, nativeCascade)));
+  if (current.launcher === 't3') return; // Its native ancestor will confirm and retire its credentials.
   if (current.launcher === 'console') {
     const meta = ownedChild(current);
     if (!meta) {

@@ -5,6 +5,8 @@ import { bgSession, hostEnv, launchClaudeBg, launchExec, ROOT } from './spawn.ts
 import { alive, home, mtime, readRun, runDir, unread, updateRun, withLockAsync } from './store.ts';
 import type { RunMeta } from './types.ts';
 import { terminateOwnedTree } from './console-process.ts';
+import { randomUUID } from 'node:crypto';
+import { finishT3Request, retireT3Bridge, t3Worker } from './t3-client.ts';
 
 /** Do not diagnose the intentional host exit in the middle of a serialized relaunch. */
 export function resuming(id: string): boolean {
@@ -15,7 +17,7 @@ export function resuming(id: string): boolean {
 /** Schedule a headless turn without blocking the sender's mailbox/run locks. */
 export function requestResume(run: RunMeta): boolean {
   if (run.launcher === 'console') return false; // Its owned supervisor watches the run mailbox.
-  if (run.launcher === 'herdr' || run.state === 'stopped' || !run.sessionId || !run.launch) return false;
+  if (run.launcher === 'herdr' || run.state === 'stopped' || (!run.sessionId && run.launcher !== 't3') || !run.launch) return false;
   if (unread(run.id).mails.at(-1)?.id === run.resumedMail) return false;
   const log = openSync(join(runDir(run.id), 'resume.log'), 'a');
   try {
@@ -47,14 +49,53 @@ export async function resume(id: string, force = false): Promise<boolean> {
     if (!run) throw new Error(`crew: no run matches "${id}"`);
     if (run.state === 'stopped') throw new Error(`crew: ${run.name} is stopped; spawn a new run for new work`);
     if (run.launcher === 'herdr') throw new Error(`crew: ${run.name} uses a Herdr pane; wake it with crew msg or crew amend`);
-    if (!run.launch || !run.sessionId) throw new Error(`crew: ${run.name} lacks recorded launch/session data; spawn a new run`);
+    if (!run.launch || (!run.sessionId && run.launcher !== 't3')) throw new Error(`crew: ${run.name} lacks recorded launch/session data; spawn a new run`);
     if ((run.turn ?? 0) !== requestedTurn) return false;
     const lastMail = unread(id).mails.at(-1)?.id;
     if (!force && (!lastMail || lastMail === run.resumedMail)) return false;
     (await import('./wait.ts')).ensureWatcher(run.parent.mailbox);
+    if (run.launcher === 't3') {
+      // Retry an ambiguous bridge outcome with the same key, even if the accepted turn is running.
+      if (!run.t3Request) {
+        const status = await t3Worker(run, 'status');
+        if (['starting', 'running', 'waiting'].includes(status.state)) return false;
+        if (status.state === 'stopped') {
+          retireT3Bridge(id);
+          throw new Error(`crew: ${run.name} is stopped; spawn a new run for new work`);
+        }
+      }
+      const request = run.t3Request ?? { action: 'resume' as const, requestId: randomUUID(),
+        ...(lastMail ? { mailId: lastMail } : {}), ...(run.resumedMail ? { priorMail: run.resumedMail } : {}) };
+      const current = updateRun(id, live => live.state === 'stopped' || live.resumedMail !== run.resumedMail ? undefined : {
+        ...live, state: 'running', ...(!run.t3Request ? { turn: requestedTurn + 1 } : {}), t3Request: request,
+      });
+      if (!current || current.state === 'stopped' || current.t3Request?.requestId !== request.requestId) return false;
+      try { unlinkSync(join(runDir(id), '.stalled')); } catch { /* new liveness episode */ }
+      try {
+        const result = await t3Worker(current, request.action, request.requestId);
+        finishT3Request(id, request.requestId);
+        if (readRun(id)?.state === 'stopped') {
+          const stopped = readRun(id)!;
+          if (!stopped.t3Stopped && result.state !== 'stopped') {
+            const response = await t3Worker(stopped, 'stop');
+            if (response.state !== 'stopped') throw new Error('crew: T3 worker stop is unconfirmed; retry crew stop');
+          }
+          retireT3Bridge(id);
+          return false;
+        }
+        if (result.state === 'stopped') {
+          retireT3Bridge(id);
+          return false;
+        }
+      } catch (error) {
+        (await import('./mail.ts')).stall(id, 'native T3 resume failed; reconnect CrewCode and retry');
+        throw error;
+      }
+      return true;
+    }
     if (run.launcher === 'exec' && alive(run.pid)) return false;
     if (run.launcher === 'bg') {
-      const session = bgSession(run.bgId ?? run.sessionId, run.launch.env);
+      const session = bgSession(run.bgId ?? run.sessionId!, run.launch.env);
       // Claude copies --resume when already running: only a positively idle session is safe.
       if (!session || session === 'unknown' || !['done', 'idle', 'completed', 'stopped', 'exited'].includes(session.status ?? '')) return false;
     }
