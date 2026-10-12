@@ -73,7 +73,12 @@ export async function terminateOwnedProcess(handle: OwnedProcess): Promise<void>
     if (!alive()) return;
     verify();
     try { process.kill(grouped ? -handle.pid : handle.pid, value); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // Darwin can return EPERM for a group whose last live member just became
+      // a zombie. Confirm retirement; a denied signal to any live member fails.
+      if (code !== 'ESRCH' && !(code === 'EPERM' && !alive())) throw error;
+    }
   };
   signal('SIGTERM');
   const deadline = Date.now() + 4000;
