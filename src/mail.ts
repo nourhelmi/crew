@@ -301,7 +301,7 @@ export function stall(id: string, why: string): Delivery | undefined {
   });
 }
 
-/** A child stuck on an approval/question dialog in its pane. Reported once per episode. */
+/** A child waiting on native human input. Reported once per episode. */
 export function waiting(id: string, blocked: boolean): Delivery | undefined {
   let run: RunMeta | undefined;
   updateRun(id, current => {
@@ -313,7 +313,9 @@ export function waiting(id: string, blocked: boolean): Delivery | undefined {
   if (!run || !blocked) return undefined;
   return deliver(run.parent, {
     id: newId('m'), at: new Date().toISOString(), kind: 'waiting', from: fromRun(run),
-    text: run.bgId
+    text: run.launcher === 'console'
+      ? `is waiting on a native approval or question in the Crew console (run ${run.name}, ${run.id}); agent mail cannot answer a native human request`
+      : run.bgId
       ? `is waiting on an approval, question or folder-trust dialog in background session ${run.bgId} (answer it: claude attach ${run.bgId})`
       : `is waiting on an approval, question or folder-trust dialog in herdr pane ${run.herdr?.pane ?? '?'} (look: crew read ${run.name})`,
   });

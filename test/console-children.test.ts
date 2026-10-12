@@ -11,14 +11,14 @@ import { metaPath, readMeta, readReceipt, readView, sessionDir } from '../src/co
 import { createDashboardServer } from '../src/dashboard.ts';
 import { DashboardObserver } from '../src/dashboard-observe.ts';
 import { spawn } from '../src/spawn.ts';
-import { assign, settle, takeUnread } from '../src/mail.ts';
+import { assign, settle, takeUnread, waiting } from '../src/mail.ts';
 import { ownRun, self } from '../src/identity.ts';
 import { runHook } from '../src/hook.ts';
 import { resume } from '../src/resume.ts';
 import { stopRun } from '../src/retire.ts';
 import { processExists } from '../src/console-process.ts';
 import { setSessionRouter } from '../src/settings.ts';
-import { appendMail, listRuns, mailDir, readRun, resultPath, updateRun, writeJson, writeRun } from '../src/store.ts';
+import { appendMail, listRuns, mailDir, readRun, resultPath, unread, updateRun, writeJson, writeRun } from '../src/store.ts';
 import type { ConsoleChildMutation } from '../src/console-types.ts';
 import type { RunMeta } from '../src/types.ts';
 
@@ -108,6 +108,9 @@ test('both managed providers retain child identity and policy; exact native answ
     f.emit(claude, { type: 'control_request', request_id: 'allow1', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'echo synthetic' } } });
     const claudeRequest = await until(() => f.controller.childDetail(f.id, claude.id)?.requests[0]);
     const codexRequest = f.controller.childDetail(f.id, codex.id)!.requests[0]!;
+    waiting(codex.id, true);
+    const attention = unread(f.address.mailbox).mails.find(mail => mail.kind === 'waiting' && mail.from.mailbox === codex.id);
+    assert.match(attention!.text, /Crew console/); assert.doesNotMatch(attention!.text, /herdr pane|claude attach/);
     const team = await fetch(`${f.origin}/api/console/sessions/${f.id}/team`).then(r => r.json());
     assert.equal(team.children.length, 2); assert.equal(team.pendingRequests.length, 2);
     assert.equal(f.controller.bootstrap().sessions.length, 1);
