@@ -33,7 +33,7 @@ test('ACP drives actual Crew supervisors and both native provider transports wit
   for (const key of ['CREW_RUN', 'CREW_MAILBOX', 'CREW_ROUTER', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_SESSION_ID', 'CODEX_THREAD_ID', 'HERDR_ENV', 'HERDR_PANE_ID', 'HERDR_SESSION', 'CREW_CONSOLE_SESSION', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'CODEX_API_KEY']) delete process.env[key];
   Object.assign(process.env, { HOME: root, CREW_HOME: root, CREW_CONFIG: join(root, 'config.json'), CREW_ROSTER: join(root, 'roster.json'), CODEX_HOME: join(root, 'codex-home'), CLAUDE_CONFIG_DIR: join(root, 'claude-home'), ADVISOR_STATE_DIR: join(root, 'advisor') });
   writeJson(process.env.CREW_CONFIG!, { router: { enabled: false }, args: { codex: ['--sandbox', 'workspace-write', '--ask-for-approval', 'on-request'], claude: ['--permission-mode', 'default'] } });
-  writeJson(process.env.CREW_ROSTER!, { models: ['codex', 'claude'].map(host => ({ model: `${host}/fixture`, effort: 'high', roles: ['builder', 'advisor'], cost: 0, use: 'isolated fixture' })) });
+  writeJson(process.env.CREW_ROSTER!, { models: ['codex', 'claude'].flatMap(host => ['fixture', 'alternate'].map(model => ({ model: `${host}/${model}`, effort: 'high', roles: ['builder', 'advisor'], cost: 0, use: 'isolated fixture' }))) });
   mkdirSync(join(root, 'bin'));
   for (const host of ['codex', 'claude']) {
     // These executables import only the fake peers: no native CLI/auth or model request can run.
@@ -46,7 +46,7 @@ await import(${JSON.stringify(resolve(`test/fixtures/console-${host}.ts`))});\n`
   writeFileSync(join(root, 'bin', 'herdr'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
   process.env.PATH = `${join(root, 'bin')}:${previous.PATH}`;
   const controller = new ConsoleController({ root, receiptWaitMs: 3000,
-    providers: () => (['codex', 'claude'] as const).map(id => ({ id, label: id, available: true, models: [{ id: 'fixture', label: 'Fixture', efforts: ['high'] }], capabilities: hostCapabilities(id) })),
+    providers: () => (['codex', 'claude'] as const).map(id => ({ id, label: id, available: true, models: ['fixture', 'alternate'].map(model => ({ id: model, label: model, efforts: ['high'] })), capabilities: hostCapabilities(id) })),
     startSupervisor: async id => {
       if (id.startsWith('s-') && !roots.includes(id)) roots.push(id);
       const child = spawn(process.execPath, [resolve('src/console-supervisor.ts'), sessionDir(id, root)], { env: { ...process.env }, stdio: 'ignore' });
@@ -98,8 +98,30 @@ await import(${JSON.stringify(resolve(`test/fixtures/console-${host}.ts`))});\n`
     const childText = await until(() => client.messages.find(message => message.params?.update?.content?.text === 'Child stream proof'));
     assert.equal(childText.params.update._meta.crew.runId, claude.id);
     assert.ok(client.messages.some(message => message.params?.update?._meta?.crew.runId === claude.id && message.params.update.sessionUpdate === 'tool_call'));
+    const workerPids = [codex, claude].map(run => readMeta(childTargetId(run.id), root)!.identity!.provider!.pid);
+    let configured = false;
+    const configuration = client.call('session/set_mode', { sessionId, modeId: 'cos' }).then(result => { configured = true; return result; });
+    await until(() => readdirSync(join(sessionDir(rootId, root), 'commands')).some(name => {
+      const receipt = JSON.parse(readFileSync(join(sessionDir(rootId, root), 'commands', name), 'utf8'));
+      return receipt.intent?.kind === 'configure' && receipt.phase === 'pending';
+    }));
+    assert.equal(configured, false); assert.equal(controller.session(rootId)!.mode, 'advisor');
     const cancel = await client.call('session/cancel', { sessionId }); assert.ok(cancel.result, JSON.stringify(cancel.error));
     assert.equal((await prompt).result.stopReason, 'cancelled');
+    const changed = await configuration; assert.ok(changed.result, JSON.stringify(changed.error));
+    assert.equal(controller.session(rootId)!.mode, 'cos');
+    const injectedInstructions = () => wires(rootId).filter(wire => wire.method === 'thread/inject_items');
+    assert.equal(injectedInstructions().length, 1);
+    const cosInjection = injectedInstructions()[0]; assert.ok(cosInjection);
+    assert.equal(cosInjection.params.threadId, nativeId);
+    assert.equal(cosInjection.params.items[0].role, 'developer');
+    assert.ok(cosInjection.params.items[0].content[0].text.includes('chief of staff'));
+    const modelChange = await client.call('session/set_model', { sessionId, modelId: 'codex/alternate' });
+    assert.ok(modelChange.result, JSON.stringify(modelChange.error));
+    assert.equal(readMeta(rootId, root)!.identity!.sessionId, nativeId);
+    assert.ok(wires(rootId).some(wire => wire.method === 'thread/resume' && wire.params.threadId === nativeId && wire.params.model === 'alternate' && wire.params.developerInstructions.includes('chief of staff')));
+    assert.equal(injectedInstructions().length, 1, 'Model-only changes must not repeat workflow instructions');
+    assert.deepEqual([codex, claude].map(run => readMeta(childTargetId(run.id), root)!.identity!.provider!.pid), workerPids);
     for (const id of [rootId, childTargetId(codex.id), childTargetId(claude.id)]) assert.equal(readMeta(id, root)!.mailPaused, true);
     const ownedIds = [rootId, childTargetId(codex.id), childTargetId(claude.id)];
     const providerPids = ownedIds.map(id => readMeta(id, root)!.identity!.provider!.pid);
@@ -112,9 +134,16 @@ await import(${JSON.stringify(resolve(`test/fixtures/console-${host}.ts`))});\n`
     assert.equal(readRun(codex.id)!.sessionId, codex.sessionId); assert.notEqual(readRun(codex.id)!.state, 'stopped');
     const reloaded = connect(); await reloaded.call('initialize', { protocolVersion: 1 });
     assert.ok((await reloaded.call('session/load', { sessionId, cwd: root, mcpServers: [] })).result);
+    const returnMode = await reloaded.call('session/set_mode', { sessionId, modeId: 'advisor' });
+    assert.ok(returnMode.result, JSON.stringify(returnMode.error));
+    const returnModel = await reloaded.call('session/set_model', { sessionId, modelId: 'codex/fixture' });
+    assert.ok(returnModel.result, JSON.stringify(returnModel.error));
     assert.equal((await reloaded.call('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'events' }] })).result.stopReason, 'end_turn');
     assert.equal(readMeta(rootId, root)!.identity!.sessionId, nativeId);
     assert.ok(wires(rootId).some(wire => wire.method === 'thread/resume' && wire.params.threadId === nativeId));
+    assert.equal(injectedInstructions().length, 2, 'Offline workflow change is refreshed exactly once on resume');
+    const advisorInjection = injectedInstructions()[1]; assert.ok(advisorInjection);
+    assert.ok(advisorInjection.params.items[0].content[0].text.includes('advisor'));
     assert.equal(controller.bootstrap().sessions.length, 1);
   } finally {
     unmark?.();

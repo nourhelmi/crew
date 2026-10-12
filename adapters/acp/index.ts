@@ -31,6 +31,7 @@ export interface AcpController {
   childEvents(id: string, run: string, cursor?: string, limit?: number): Feed;
   launch(value: unknown): Promise<ConsoleMutation>;
   message(id: string, value: unknown): Promise<ConsoleMutation>;
+  configure(id: string, value: unknown): Promise<ConsoleMutation>;
   action(id: string, value: unknown): Promise<ConsoleMutation>;
   answer(id: string, value: unknown): Promise<ConsoleMutation>;
   childAction(id: string, run: string, value: unknown): Promise<ConsoleChildMutation>;
@@ -48,6 +49,7 @@ interface LiveSession {
   commands: Map<string, ConsoleCommand>;
   active?: ActivePrompt;
   delivery?: Promise<ConsoleMutation>;
+  configuration?: Promise<unknown>;
   changed: Set<() => void>;
 }
 const freshRequest = (): string => `acp-${randomBytes(16).toString('hex')}`;
@@ -89,17 +91,21 @@ export class AcpServer {
     return this.controller.bootstrap().providers.filter(p => p.available).flatMap(provider => provider.models.map(model => ({ modelId: `${provider.id}/${model.id}`, name: `${provider.label} · ${model.label}`, host: provider.id, model: model.id, efforts: model.efforts ?? [], accessModes: provider.capabilities.accessModes ?? ['default'] })));
   }
   private model(id: string) { const model = this.models().find(m => m.modelId === id); if (!model) throw new AcpError('Choose an available model from the Crew roster.'); return model; }
+  private sessionModels(saved: AcpSession) {
+    const host = saved.modelId.split('/')[0];
+    return this.models().filter(model => !saved.launchRequestId || model.host === host);
+  }
   private config(saved: AcpSession) {
     const model = this.models().find(m => m.modelId === saved.modelId);
     return [
-      { id: 'model', name: 'Lead model', category: 'model', type: 'select', currentValue: saved.modelId, options: this.models().map(m => ({ value: m.modelId, name: m.name })) },
+      { id: 'model', name: 'Lead model', category: 'model', type: 'select', currentValue: saved.modelId, options: this.sessionModels(saved).map(m => ({ value: m.modelId, name: m.name })) },
       { id: 'mode', name: 'Crew workflow', category: 'mode', type: 'select', currentValue: saved.mode, options: modes.map(m => ({ value: m.id, name: m.name, description: m.description })) },
       ...(model?.efforts.length ? [{ id: 'effort', name: 'Reasoning effort', category: 'thought_level', type: 'select', currentValue: saved.effort ?? model.efforts[0], options: model.efforts.map(value => ({ value, name: value })) }] : []),
       { id: 'access', name: 'Native permissions', category: '_crew_access', type: 'select', currentValue: saved.access, options: (model?.accessModes ?? ['default']).map(value => ({ value, name: value === 'default' ? 'Host default' : value === 'full' ? 'Full access' : 'Workspace' })) },
     ];
   }
   private setup(saved: AcpSession) {
-    return { modes: { currentModeId: saved.mode, availableModes: modes }, models: { currentModelId: saved.modelId, availableModels: this.models().map(({ modelId, name }) => ({ modelId, name })) }, configOptions: this.config(saved) };
+    return { modes: { currentModeId: saved.mode, availableModes: modes }, models: { currentModelId: saved.modelId, availableModels: this.sessionModels(saved).map(({ modelId, name }) => ({ modelId, name })) }, configOptions: this.config(saved) };
   }
   private requireSession(value: unknown): LiveSession {
     const id = text(value, 'sessionId', 128);
@@ -254,7 +260,7 @@ export class AcpServer {
       if (this.initialized) throw new AcpError('Connection already initialized.');
       if (!Number.isSafeInteger(params.protocolVersion) || Number(params.protocolVersion) < 1) throw new AcpError('Invalid protocol version.');
       this.capabilities = optionalObject(params.clientCapabilities); this.initialized = true;
-      return { protocolVersion: 1, agentInfo: { name: 'crew', title: 'Crew', version: '0.16.0' }, agentCapabilities: { loadSession: true, sessionCapabilities: { list: {} }, promptCapabilities: { image: false, audio: false, embeddedContext: false }, mcpCapabilities: { http: true, sse: false }, _meta: { crew: { version: 1, questions: true } } }, authMethods: [] };
+      return { protocolVersion: 1, agentInfo: { name: 'crew', title: 'Crew', version: '0.16.1' }, agentCapabilities: { loadSession: true, sessionCapabilities: { list: {} }, promptCapabilities: { image: false, audio: false, embeddedContext: false }, mcpCapabilities: { http: true, sse: false }, _meta: { crew: { version: 1, questions: true } } }, authMethods: [] };
     }
     if (!this.initialized) throw new AcpError('Initialize the ACP connection first.', -32002);
     if (method === 'session/list') {
@@ -276,12 +282,20 @@ export class AcpServer {
       if (saved.cwd !== cwdInput(params.cwd)) throw new AcpError('Session cwd cannot change.');
       const servers = mcpInput(params.mcpServers ?? []);
       const existing = this.live.get(saved.id);
-      if (existing?.active) throw new AcpError('Cannot load while a prompt is active.');
+      if (existing?.active || existing?.configuration) throw new AcpError('Cannot load while a prompt or configuration change is active.');
       if (!existing && this.live.size >= 32) throw new AcpError('Connection session limit reached.');
       this.store.claim(saved.id);
       const live = existing ?? this.install(saved);
       this.loading.add(saved.id);
       try {
+        // A disconnect may follow native acceptance before the ACP response/save.
+        // The controller's committed selection is authoritative on reconnect.
+        const native = live.saved.consoleId ? this.controller.session(live.saved.consoleId) : undefined;
+        if (native?.model) {
+          live.saved.modelId = `${native.host}/${native.model}`; live.saved.mode = native.mode;
+          if (native.effort) live.saved.effort = native.effort; else delete live.saved.effort;
+          this.store.save(live.saved);
+        }
         if (JSON.stringify(servers) !== JSON.stringify(live.saved.mcpServers)) {
           if (live.saved.consoleId) {
             await this.controller.suspend(live.saved.consoleId);
@@ -296,24 +310,64 @@ export class AcpServer {
     }
     const live = this.requireSession(params.sessionId);
     if (method === 'session/set_mode' || method === 'session/set_model' || method === 'session/set_config_option') {
-      const key = method === 'session/set_mode' ? 'mode' : method === 'session/set_model' ? 'model' : text(params.configId, 'configId', 64);
-      const requested = text(method === 'session/set_mode' ? params.modeId : method === 'session/set_model' ? params.modelId : params.value, 'setting', 256);
-      const value = key === 'model' && requested === 'default' ? live.saved.modelId : requested;
-      const current = key === 'model' ? live.saved.modelId : key === 'mode' ? live.saved.mode : key === 'effort' ? live.saved.effort : key === 'access' ? live.saved.access : undefined;
-      if (value === current) return method === 'session/set_config_option' ? { configOptions: this.config(live.saved) } : {};
-      if (live.saved.launchRequestId) throw new AcpError('Model, workflow and permissions are fixed after launch. Start a new session to change them.', -32004);
-      if (key === 'model') { const model = this.model(value); live.saved.modelId = value; delete live.saved.effort; if (model.efforts[0]) live.saved.effort = model.efforts[0]; if (!model.accessModes.includes(live.saved.access)) live.saved.access = 'default'; }
-      else if (key === 'mode') { if (value !== 'advisor' && value !== 'cos') throw new AcpError('Unknown Crew workflow.'); live.saved.mode = value; live.saved.title = `Crew ${value}`; }
-      else if (key === 'effort') { if (!this.model(live.saved.modelId).efforts.includes(value)) throw new AcpError('Unsupported reasoning effort.'); live.saved.effort = value; }
-      else if (key === 'access') { if (!this.model(live.saved.modelId).accessModes.includes(value as AcpSession['access'])) throw new AcpError('Unsupported native permission mode.'); live.saved.access = value as AcpSession['access']; }
-      else throw new AcpError('Unknown session configuration option.');
-      this.store.save(live.saved); this.update(live, { sessionUpdate: 'config_option_update', configOptions: this.config(live.saved) });
-      if (key === 'mode') this.update(live, { sessionUpdate: 'current_mode_update', currentModeId: live.saved.mode });
-      return method === 'session/set_config_option' ? { configOptions: this.config(live.saved) } : {};
+      // Serialize selections, but leave approvals/cancel independent while a change
+      // waits for the native root's next turn boundary.
+      const operation = (live.configuration ?? Promise.resolve()).catch(() => {}).then(() => this.configure(live, method, params));
+      live.configuration = operation;
+      try { return await operation; } finally { if (live.configuration === operation) delete live.configuration; }
     }
     if (method === 'session/prompt') return this.track(this.prompt(live, promptText(params.prompt)));
     if (method === 'session/cancel') { await this.cancel(live); return {}; }
     throw new AcpError(`Unsupported method: ${method}`, -32601);
+  }
+  private async configure(live: LiveSession, method: string, params: JsonObject): Promise<unknown> {
+    if (this.closing) throw new AcpError('ACP connection is closing.', -32004);
+    await live.delivery;
+    if (this.closing) throw new AcpError('ACP connection is closing.', -32004);
+    const key = method === 'session/set_mode' ? 'mode' : method === 'session/set_model' ? 'model' : text(params.configId, 'configId', 64);
+    const requested = text(method === 'session/set_mode' ? params.modeId : method === 'session/set_model' ? params.modelId : params.value, 'setting', 256);
+    const value = key === 'model' && requested === 'default' ? live.saved.modelId : requested;
+    const current = key === 'model' ? live.saved.modelId : key === 'mode' ? live.saved.mode : key === 'effort' ? live.saved.effort : key === 'access' ? live.saved.access : undefined;
+    if (value === current) return method === 'session/set_config_option' ? { configOptions: this.config(live.saved) } : {};
+    const selected = { ...live.saved };
+    if (key === 'model') {
+      const model = this.model(value);
+      if (selected.launchRequestId && model.host !== selected.modelId.split('/')[0]) throw new AcpError('This chat keeps its native provider. Choose another model from the same provider, or start a new chat to switch between Codex and Claude.', -32004);
+      selected.modelId = value;
+      if (!selected.effort || !model.efforts.includes(selected.effort)) { delete selected.effort; if (model.efforts[0]) selected.effort = model.efforts[0]; }
+      if (!model.accessModes.includes(selected.access)) selected.access = 'default';
+    } else if (key === 'mode') {
+      if (value !== 'advisor' && value !== 'cos') throw new AcpError('Unknown Crew workflow.');
+      selected.mode = value; selected.title = `Crew ${value}`;
+    } else if (key === 'effort') {
+      if (!this.model(selected.modelId).efforts.includes(value)) throw new AcpError('Unsupported reasoning effort.');
+      selected.effort = value;
+    } else if (key === 'access') {
+      if (selected.launchRequestId) throw new AcpError('Native permission policy is fixed after launch. Start a new session to change it.', -32004);
+      if (!this.model(selected.modelId).accessModes.includes(value as AcpSession['access'])) throw new AcpError('Unsupported native permission mode.');
+      selected.access = value as AcpSession['access'];
+    } else throw new AcpError('Unknown session configuration option.');
+    if (selected.consoleId) {
+      const session = this.controller.session(selected.consoleId);
+      if (!session) throw new AcpError('Recorded native session is unavailable.', -32004);
+      const model = this.model(selected.modelId);
+      const mutation = await this.controller.configure(selected.consoleId, { requestId: freshRequest(), revision: session.revision, host: model.host, model: model.model, mode: selected.mode, ...(selected.effort ? { effort: selected.effort } : {}) });
+      for (;;) {
+        if (this.closing) throw new AcpError('Configuration was interrupted by disconnect. Load the session to read its current settings.', -32004);
+        await this.poll();
+        const receipt = live.commands.get(mutation.command.requestId) ?? mutation.command;
+        if (receipt.state === 'delivered') break;
+        if (receipt.state !== 'queued') throw new AcpError(receipt.error ?? 'Native configuration change was not confirmed.', -32004);
+        const native = this.controller.session(selected.consoleId);
+        if (!native || ['closed', 'failed', 'disconnected'].includes(native.state)) throw new AcpError('Native session disconnected before the configuration change was confirmed. Retry after resuming the session.', -32004);
+        if (this.closing) throw new AcpError('Configuration was interrupted by disconnect.', -32004);
+        await new Promise<void>(resolve => live.changed.add(resolve));
+      }
+    }
+    live.saved = selected; this.store.save(selected);
+    this.update(live, { sessionUpdate: 'config_option_update', configOptions: this.config(selected) });
+    if (key === 'mode') this.update(live, { sessionUpdate: 'current_mode_update', currentModeId: selected.mode });
+    return method === 'session/set_config_option' ? { configOptions: this.config(selected) } : {};
   }
   private async prompt(live: LiveSession, prompt: string): Promise<unknown> {
     if (live.active) throw new AcpError('A prompt is already active; cancel it before sending another.', -32004);
@@ -321,6 +375,8 @@ export class AcpServer {
     const active: ActivePrompt = { requestId: freshRequest(), cancelled: false };
     live.active = active;
     try {
+      await live.configuration;
+      if (this.closing || active.cancelled) return { stopReason: 'cancelled' };
       let mutation: ConsoleMutation;
       if (!live.saved.consoleId) {
         if (live.saved.launchRequestId) throw new AcpError('Previous launch outcome is uncertain; do not replay it.', -32004);
@@ -331,6 +387,7 @@ export class AcpServer {
         this.store.save(live.saved);
         live.delivery = this.controller.launch({ requestId: active.requestId, cwd: live.saved.cwd, host: model.host, model: model.model, mode: live.saved.mode, access: live.saved.access, ...(live.saved.effort ? { effort: live.saved.effort } : {}), mcpServers: live.saved.mcpServers, prompt });
         mutation = await live.delivery;
+        this.update(live, { sessionUpdate: 'config_option_update', configOptions: this.config(live.saved) });
       } else {
         const session = this.controller.session(live.saved.consoleId);
         if (!session) throw new AcpError('Recorded native launch is unavailable; start a new session.', -32004);
@@ -389,6 +446,7 @@ export class AcpServer {
   }
   private async disconnect(): Promise<void> {
     this.closing = true; clearInterval(this.timer); this.wire.close();
+    for (const live of this.live.values()) { for (const wake of live.changed) wake(); live.changed.clear(); }
     await this.pollPromise;
     await Promise.allSettled([...this.commands]);
     const failures: unknown[] = [];

@@ -19,6 +19,8 @@ export interface HostOptions {
   /** Explicit child identity; roots must never inherit CREW_RUN. */
   child?: { runId: string };
   instructions: string;
+  /** Reapply the authoritative workflow contract in an existing native session. */
+  instructionsChanged?: boolean;
   /** Server-configured host CLI options, never browser-supplied. */
   args?: string[];
   identity?: HostIdentity;

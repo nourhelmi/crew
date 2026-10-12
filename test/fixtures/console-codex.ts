@@ -1,4 +1,4 @@
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 
 // Isolated stdio peer: no Codex executable, credentials, state or model calls.
@@ -9,13 +9,17 @@ record({ kind: 'launch', pid: process.pid, args: process.argv.slice(2), cwd: pro
 const send = (value: object) => process.stdout.write(JSON.stringify(value) + '\n');
 const notify = (method: string, params: object) => send({ method, params });
 let threadId = 'thread-new', turnId = '', counter = 0;
+let developerInstructions = '';
 let requestId: string | number = 101;
 const turn = (id: string, status = 'inProgress', items: object[] = []) => ({ id, status, items, error: null });
 const event = (method: string, params: object = {}) => notify(method, { threadId, turnId, ...params });
 const finish = (status = 'completed', items: object[] = []) => { event('turn/completed', { turn: turn(turnId, status, items) }); turnId = ''; };
 function publish(text: string): void {
   const settings = scenario();
-  if (text === 'long-stream') {
+  if (text === 'report-instructions') {
+    event('item/completed', { item: { id: 'instructions', type: 'agentMessage', text: developerInstructions } });
+    finish();
+  } else if (text === 'long-stream') {
     event('item/started', { item: { id: 'cmd', type: 'commandExecution', command: 'long output', status: 'inProgress' } });
     event('item/commandExecution/outputDelta', { itemId: 'cmd', delta: 'old'.repeat(10_000) });
     event('item/commandExecution/outputDelta', { itemId: 'cmd', delta: 'new'.repeat(10_000) });
@@ -76,10 +80,23 @@ input.on('line', line => {
   if (wire.method === 'initialized') return;
   if (wire.method === 'config/read') { response({ config: { sandbox_workspace_write: { writable_roots: settings.configuredRoots || [], network_access: true } }, origins: {}, layers: null }); return; }
   if (wire.method === 'thread/start' || wire.method === 'thread/resume') {
+    // Native resume retains the prior model-visible developer message even when
+    // its developerInstructions configuration field changes.
+    if (wire.method === 'thread/resume') {
+      try { developerInstructions = readFileSync(`${log}.instructions`, 'utf8'); }
+      catch { developerInstructions = String(settings.persistedInstructions ?? 'Prior workflow'); }
+    } else { developerInstructions = wire.params.developerInstructions; writeFileSync(`${log}.instructions`, developerInstructions); }
     threadId = settings.wrongThread ? 'wrong-thread' : wire.params.threadId || settings.threadId || 'thread-new';
     turnId = settings.activeResume ? 'turn-resumed' : '';
     response({ thread: { id: threadId, status: { type: settings.activeResume || settings.missingActiveTurn ? 'active' : 'idle', activeFlags: [] }, turns: turnId ? [turn(turnId)] : [] }, sandbox: { type: 'readOnly', networkAccess: false } });
     return;
+  }
+  if (wire.method === 'thread/inject_items') {
+    if (settings.rejectInjection) { send({ id: wire.id, error: { code: -32602, message: 'instruction refresh rejected' } }); return; }
+    if (wire.params.threadId !== threadId || turnId) { send({ id: wire.id, error: { code: -32602, message: 'thread is not idle' } }); return; }
+    for (const item of wire.params.items) if (item.type === 'message' && item.role === 'developer') developerInstructions = item.content.map((content: { text?: string }) => content.text ?? '').join('\n');
+    writeFileSync(`${log}.instructions`, developerInstructions);
+    response({}); return;
   }
   if (wire.method === 'turn/start' || wire.method === 'turn/steer') {
     const text = wire.params.input[0].text;

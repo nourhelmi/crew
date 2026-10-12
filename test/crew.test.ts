@@ -561,6 +561,38 @@ describe('router switch', async () => {
 });
 
 describe('checkpoint transfer', () => {
+  it('explicit workflow changes update the same checkpoint owner while omitted mode preserves it', () => {
+    const home = mkdtempSync(join(tmpdir(), 'crew-ckpt-mode-'));
+    try {
+      const repo = join(home, 'repo');
+      execFileSync('git', ['init', '-q', repo]);
+      const cli = join(ROOT_DIR, 'skills', 'advisor', 'scripts', 'advisor-state-cli.mjs');
+      const run = (...args: string[]) => JSON.parse(execFileSync(process.execPath,
+        [cli, 'init', '--cwd', repo, '--workstream', 'tests', ...args], {
+          env: { PATH: process.env.PATH!, HOME: home, CODEX_THREAD_ID: '01a0d84d-4683-7499-9114-bebe61cef2db' },
+          encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+        }));
+      const original = run();
+      assert.equal(original.mode, 'advisor');
+      const content = '# Accepted workstream\n\nKeep this outcome and existing worker handles.\n';
+      writeFileSync(original.paths.workstream, content);
+      for (const [expected, args] of [
+        ['cos', ['--mode', 'cos']], ['cos', []],
+        ['advisor', ['--mode', 'advisor']], ['advisor', []],
+        ['cos', ['--mode', 'cos']],
+      ] as const) {
+        const current = run(...args);
+        assert.equal(current.mode, expected);
+        assert.equal(current.state.mode, expected);
+        assert.deepEqual(current.identity, original.identity);
+        assert.deepEqual(current.paths, original.paths);
+        assert.equal(current.state.initializedAt, original.state.initializedAt);
+        assert.equal(current.content, content);
+        assert.ok(readFileSync(current.paths.session, 'utf8').includes(`- Advisor mode: \`${expected}\``));
+      }
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
   it('resumes a workstream owned by a gone session only when its exact owner is named', () => {
     const home = mkdtempSync(join(tmpdir(), 'crew-ckpt-'));
     const repo = join(home, 'repo');

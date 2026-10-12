@@ -2,11 +2,11 @@ import { randomBytes } from 'node:crypto';
 import { unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { rootEnv } from './console-controller.ts';
+import { configuredLaunch, rootEnv, rootInstructions } from './console-controller.ts';
 import { appendConsoleChanges, consoleArgsHash, ConsoleError, ensureConsoleJournal, metaPath, readMeta, readReceipt, readView, receiptPath, receipts, sessionDir, writeView } from './console-store.ts';
 import type { ConsoleMeta, ConsoleReceipt, ConsoleView } from './console-store.ts';
 import type { ConsoleHostAdapter, HostCallbacks, HostEvent, HostFactory } from './console-host.ts';
-import type { ConsoleAnswer, ConsoleChange, ConsoleCommand, ConsoleEvent, ConsoleState } from './console-types.ts';
+import type { ConsoleAnswer, ConsoleChange, ConsoleCommand, ConsoleEvent, ConsoleLaunch, ConsoleState } from './console-types.ts';
 import { hasWaiter, home, loadConfig, mailDir, readJson, readRun, unread, updateRun, withLock, withLockAsync, writeJson } from './store.ts';
 import { retireRoot, stopRun } from './retire.ts';
 import { childRun, managedConsoleParent, ownedChild } from './console-children.ts';
@@ -53,6 +53,8 @@ export class ConsoleSupervisor {
         // Configuration can be refreshed while suspended, under this same owner lock.
         // Bind the latest private launch only after winning ownership.
         this.meta = readMeta(this.id, this.root) ?? this.meta;
+        this.view = readView(this.id, this.root) ?? this.view;
+        Object.assign(this.view.session, { mode: this.meta.launch.mode, model: this.meta.launch.model, effort: this.meta.launch.effort });
         if (this.meta.args) { this.meta.argsHash ??= consoleArgsHash(this.meta.args); delete this.meta.args; }
         return true;
       }
@@ -176,8 +178,8 @@ export class ConsoleSupervisor {
       command: (requestId, state, error) => { if (live()) this.command(requestId, state, error); },
     };
   }
-  private async connect(): Promise<void> {
-    const args = loadConfig().args[this.meta.launch.host];
+  private async connect(launch: ConsoleLaunch = this.meta.launch, instructions = this.meta.instructions): Promise<void> {
+    const args = loadConfig().args[launch.host];
     if (this.meta.argsHash && this.meta.argsHash !== consoleArgsHash(args)) throw new ConsoleError('Native host configuration changed. Restore the recorded configuration or start a new session.', 409, 'HOST_CONFIG_CHANGED');
     const generation = ++this.generation;
     const current = (): void => {
@@ -188,6 +190,8 @@ export class ConsoleSupervisor {
       }
     };
     current(); this.clearRequests(); this.state('starting');
+    const instructionsChanged = instructions !== this.meta.instructions || this.meta.instructionsRefresh === true;
+    if (instructionsChanged) this.meta.instructionsRefresh = true;
     delete this.meta.suspended; this.heartbeat();
     try {
       if (this.adapter) await this.adapter.close();
@@ -196,10 +200,10 @@ export class ConsoleSupervisor {
       current();
       this.eventKeys.clear();
       let factory = this.factory;
-      if (!factory) factory = this.meta.launch.host === 'codex' ? (await import('./console-codex.ts')).createCodexHost : (await import('./console-claude.ts')).createClaudeHost;
+      if (!factory) factory = launch.host === 'codex' ? (await import('./console-codex.ts')).createCodexHost : (await import('./console-claude.ts')).createClaudeHost;
       current();
-      const childArgs = this.meta.child && this.meta.launch.host === 'claude' ? [...args, ...[...writableRoots(this.meta.launch.cwd), ROOT].flatMap(root => ['--add-dir', root])] : args;
-      this.adapter = factory({ launch: this.meta.launch, instructions: this.meta.instructions, args: childArgs,
+      const childArgs = this.meta.child && launch.host === 'claude' ? [...args, ...[...writableRoots(launch.cwd), ROOT].flatMap(root => ['--add-dir', root])] : args;
+      this.adapter = factory({ launch, instructions, ...(instructionsChanged ? { instructionsChanged: true } : {}), args: childArgs,
         env: { ...rootEnv(), CREW_HOME: this.root, CREW_CONSOLE_SESSION: this.meta.child?.rootSessionId ?? this.id, ...(this.meta.child ? { CREW_RUN: this.meta.child.runId,
           ...(this.meta.child.router === undefined ? {} : { CREW_ROUTER: this.meta.child.router ? 'on' : 'off' }) } : {}) },
         ...(this.meta.child ? { child: { runId: this.meta.child.runId } } : {}), callbacks: this.callbacks(this.generation), ...(this.meta.identity ? { identity: this.meta.identity } : {}) });
@@ -254,6 +258,17 @@ export class ConsoleSupervisor {
         this.validateAnswer(intent.payload);
         if (!this.adapter) throw new ConsoleError('Provider is disconnected.', 409, 'SUPERVISOR_UNAVAILABLE');
         await this.adapter.answer(intent.payload); this.finish(receipt, 'delivered');
+      } else if (intent.kind === 'configure') {
+        if (this.meta.child) throw new ConsoleError('Only the root lead can be configured.', 409, 'ROOT_REQUIRED');
+        const launch = configuredLaunch(this.meta.launch, intent.payload);
+        if (launch.mode !== this.meta.launch.mode || launch.model !== this.meta.launch.model || launch.effort !== this.meta.launch.effort) {
+          const instructions = rootInstructions(launch.mode);
+          await this.connect(launch, instructions);
+          this.meta.launch = launch; this.meta.instructions = instructions; delete this.meta.instructionsRefresh; this.heartbeat();
+          Object.assign(this.view.session, { mode: launch.mode, model: launch.model, effort: launch.effort, revision: this.view.session.revision + 1 });
+          this.event({ kind: 'status', text: `Lead configuration updated: ${launch.mode}, ${launch.model ?? 'provider default'}${launch.effort ? ` (${launch.effort})` : ''}.` });
+        }
+        this.finish(receipt, 'delivered');
       } else {
         if (intent.payload.action !== 'suspend' && receipt.requestId !== this.recoveryRequestId && intent.payload.revision !== this.view.session.revision) throw new ConsoleError('Session changed before this action could run.', 409, 'STALE_REVISION');
         const action = intent.payload.action;
@@ -270,6 +285,7 @@ export class ConsoleSupervisor {
           if (!['idle', 'interrupted', 'disconnected', 'failed'].includes(this.view.session.state)) throw new ConsoleError('Interrupt before resuming.', 409, 'UNSUPPORTED_ACTION');
           this.meta.mailPaused = false; this.heartbeat();
           await this.connect();
+          delete this.meta.instructionsRefresh; this.heartbeat();
           if (this.meta.child) {
             const run = updateRun(this.meta.child.runId, current => {
               if (current.state === 'stopped') return undefined;
@@ -328,6 +344,20 @@ export class ConsoleSupervisor {
         if (!run || run.state === 'stopped' || root?.retiring || !root) { await this.close(); return; }
       }
       for (const receipt of receipts(this.id, this.root).filter(r => r.phase === 'pending')) {
+        if (receipt.intent.kind === 'configure') {
+          if (!this.view.commands[receipt.requestId]) this.command(receipt.requestId, 'queued');
+          if (['failed', 'disconnected', 'closed'].includes(this.view.session.state)) {
+            this.finish(receipt, 'failed', 'Provider disconnected before the lead configuration could apply. Resume this chat and select it again.');
+            continue;
+          }
+          // A selected configuration applies to the next turn. Existing native
+          // inputs and human decisions finish without interruption or replay.
+          const queuedInput = receipts(this.id, this.root).some(r => r.phase !== 'pending' && r.command.state === 'queued' && ['message', 'launch'].includes(r.intent.kind));
+          const next = configuredLaunch(this.meta.launch, receipt.intent.payload);
+          const changed = next.mode !== this.meta.launch.mode || next.model !== this.meta.launch.model || next.effort !== this.meta.launch.effort;
+          if (changed && (!['idle', 'interrupted'].includes(this.view.session.state) || this.view.requests.length || queuedInput)) continue;
+        }
+        if (receipt.intent.kind === 'message' && receipts(this.id, this.root).some(r => r.phase === 'pending' && r.intent.kind === 'configure')) continue;
         await this.process(receipt);
         if (this.closed) break;
       }

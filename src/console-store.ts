@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { home, readJson, withLock, writeJson } from './store.ts';
 import type { HostIdentity } from './console-host.ts';
 import { processExists } from './console-process.ts';
-import type { ConsoleAction, ConsoleAnswer, ConsoleChange, ConsoleCommand, ConsoleDetail, ConsoleEvent, ConsoleFeed, ConsoleLaunch, ConsoleMessage, ConsoleRequest, ConsoleSession } from './console-types.ts';
+import type { ConsoleAction, ConsoleAnswer, ConsoleChange, ConsoleCommand, ConsoleConfiguration, ConsoleDetail, ConsoleEvent, ConsoleFeed, ConsoleLaunch, ConsoleMessage, ConsoleRequest, ConsoleSession } from './console-types.ts';
 
 export class ConsoleError extends Error {
   readonly status: number;
@@ -20,6 +20,8 @@ export function sessionDir(id: string, root = home()): string {
 export interface ConsoleMeta {
   launch: ConsoleLaunch;
   instructions: string;
+  /** A native instruction refresh may have landed before its selection commit. */
+  instructionsRefresh?: boolean;
   /** A Crew run with a live owned pipe, not another console root. */
   child?: { runId: string; rootSessionId: string; router?: boolean };
   /** Bind policy without duplicating credential-bearing native CLI arguments. */
@@ -47,6 +49,7 @@ export interface ConsoleView {
 export type ConsoleIntent = { kind: 'launch'; payload: ConsoleLaunch }
   | { kind: 'message'; payload: ConsoleMessage }
   | { kind: 'action'; payload: ConsoleAction }
+  | { kind: 'configure'; payload: ConsoleConfiguration }
   | { kind: 'answer'; payload: ConsoleAnswer };
 export interface ConsoleReceipt {
   requestId: string;
@@ -111,6 +114,9 @@ export function publicSession(id: string, root = home()): ConsoleSession | undef
   if (!stored) return;
   const session = { ...stored };
   const meta = readMeta(id, root);
+  // Selection commits in private metadata before its public projection. Recover
+  // that commit even if the owner died between the two atomic file writes.
+  if (meta) Object.assign(session, { mode: meta.launch.mode, model: meta.launch.model, effort: meta.launch.effort });
   if (!['closed', 'failed', 'disconnected'].includes(session.state) && !supervisorAlive(meta)
     && (meta?.identity || Date.now() - Date.parse(session.createdAt) > 10_000)) {
     session.state = 'disconnected'; session.error = 'The owned supervisor is unavailable. Resume explicitly to recover the recorded session.';

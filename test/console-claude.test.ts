@@ -17,7 +17,7 @@ async function until(predicate: () => boolean): Promise<void> {
   const deadline = Date.now() + 3000;
   while (!predicate()) { if (Date.now() > deadline) assert.fail('Fixture did not reach expected state'); await delay(5); }
 }
-function fixture(t: TestContext, overrides: { mode?: string; identity?: HostIdentity; access?: 'default' | 'workspace' | 'full'; args?: string[]; executable?: string; stateDir?: string; mcpServers?: McpServer[] } = {}) {
+function fixture(t: TestContext, overrides: { mode?: string; identity?: HostIdentity; access?: 'default' | 'workspace' | 'full'; args?: string[]; executable?: string; stateDir?: string; mcpServers?: McpServer[]; selection?: Partial<Pick<HostOptions['launch'], 'cwd' | 'mode' | 'model' | 'effort'>>; instructions?: string } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'crew-console-claude-'));
   for (const name of ['claude', 'crew', 'codex']) mkdirSync(join(dir, name));
   for (const name of ['input.ndjson', 'output.ndjson']) writeFileSync(join(dir, name), '');
@@ -32,13 +32,13 @@ function fixture(t: TestContext, overrides: { mode?: string; identity?: HostIden
   const cancelled: string[] = [];
   const commands: { id: string; state: CommandState; error?: string | undefined }[] = [];
   const options: HostOptions & { args?: string[] } = {
-    launch: { cwd: dir, mode: 'cos', host: 'claude', requestId: 'launch', prompt: 'Must not be replayed', model: 'fixture', effort: 'high', access: overrides.access ?? 'default', ...(overrides.mcpServers ? { mcpServers: overrides.mcpServers } : {}) },
+    launch: { cwd: dir, mode: 'cos', host: 'claude', requestId: 'launch', prompt: 'Must not be replayed', model: 'fixture', effort: 'high', access: overrides.access ?? 'default', ...overrides.selection, ...(overrides.mcpServers ? { mcpServers: overrides.mcpServers } : {}) },
     // No inherited real host state or credential paths, even when a test fails.
     env: { PATH: process.env.PATH, CLAUDE_FIXTURE_DIR: dir, ...(overrides.mode ? { CLAUDE_FIXTURE_MODE: overrides.mode } : {}),
       CLAUDE_CONFIG_DIR: join(dir, 'claude'), CREW_HOME: join(dir, 'crew'), CODEX_HOME: join(dir, 'codex'), CREW_RUN: 'must-be-scrubbed', ANTHROPIC_API_KEY: 'fixture-only',
       ADVISOR_STATE_DIR: overrides.stateDir ?? join(dir, 'advisor'), CLAUDE_SESSION_ID: 'foreign-claude',
       CLAUDE_CODE_SESSION_ID: 'foreign-claude', CREW_MAILBOX: 'claude-foreign', CODEX_THREAD_ID: 'foreign-codex', CREW_OPENCODE_SESSION: 'foreign-opencode' },
-    instructions: 'Fixture parent CoS/advisor contract', executable: overrides.executable ?? executable,
+    instructions: overrides.instructions ?? 'Fixture parent CoS/advisor contract', executable: overrides.executable ?? executable,
     callbacks: {
       identity(value) { identities.push(value); },
       state(state, error) { states.push({ state, error }); },
@@ -103,6 +103,40 @@ it('starts without sending a prompt, persists UUID identity, and resumes exactly
   assert.equal(await resumed.host.send('New input only', 'third'), 'delivered');
   await until(() => resumed.users().length === 1);
   assert.equal(resumed.users()[0]?.session_id, id);
+});
+
+it('idle root reconnect applies model, effort and workflow without forking the Claude conversation', async t => {
+  const original = fixture(t, { instructions: 'Original CoS workflow', args: ['--permission-mode', 'auto'] });
+  await original.host.start();
+  await original.host.send('first human input', 'first-turn');
+  original.emit({ fixture: 'result' });
+  await until(() => original.states.at(-1)?.state === 'idle');
+  const sessionId = original.identities.at(-1)!.sessionId;
+  await original.host.close();
+  const resumed = fixture(t, {
+    identity: { sessionId }, args: ['--permission-mode', 'auto'],
+    selection: { cwd: original.dir, mode: 'advisor', model: 'replacement-model', effort: 'low' },
+    instructions: 'Replacement advisor workflow',
+  });
+  await resumed.host.start();
+  const launch = resumed.launched();
+  assert.equal(launch.sessionId, sessionId);
+  assert.equal(launch.crewMailbox, `claude-${sessionId}`);
+  assert.equal(launch.cwd, realpathSync(original.dir));
+  assert.notEqual(launch.pid, original.launched().pid);
+  assert.ok(launch.args.includes(`--resume=${sessionId}`));
+  assert.equal(launch.args.some((arg: string) => /^(?:--fork-session|--session-id|--continue)(?:=|$)/.test(arg)), false);
+  assert.equal(launch.args[launch.args.indexOf('--model') + 1], 'replacement-model');
+  assert.equal(launch.args[launch.args.indexOf('--effort') + 1], 'low');
+  assert.equal(launch.args[launch.args.indexOf('--permission-mode') + 1], 'auto');
+  const instructions = launch.args[launch.args.indexOf('--append-system-prompt') + 1];
+  assert.ok(instructions.startsWith('Replacement advisor workflow\n'));
+  assert.equal(instructions.includes('Original CoS workflow'), false);
+  assert.equal(resumed.users().length, 0);
+  await resumed.host.send('second human input', 'second-turn');
+  assert.equal(resumed.users().length, 1);
+  assert.equal(resumed.users()[0]!.session_id, sessionId);
+  assert.equal(resumed.users()[0]!.message.content, 'second human input');
 });
 
 it('keeps native turn errors visible after idle and rejects undelivered queued input', async t => {

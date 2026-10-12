@@ -25,11 +25,12 @@ class FakeController implements AcpController {
   actions: Obj[] = [];
   answers: Obj[] = [];
   messages: Obj[] = [];
+  configurations: Obj[] = [];
   suspended: string[] = [];
   refreshed: { id: string; servers: unknown }[] = [];
   finishImmediately = false;
   constructor(root: string) { this.root = root; }
-  bootstrap() { return { providers: (['codex', 'claude'] as const).map(id => ({ id, label: id, available: true, models: [{ id: `${id}-model`, label: `${id} model`, efforts: ['high', 'low'] }], capabilities: hostCapabilities(id) })) }; }
+  bootstrap() { return { providers: (['codex', 'claude'] as const).map(id => ({ id, label: id, available: true, models: ['', '-other'].map(suffix => ({ id: `${id}-model${suffix}`, label: `${id} model${suffix}`, efforts: ['high', 'low'] })), capabilities: hostCapabilities(id) })) }; }
   detail(id: string) { return this.roots.get(id); }
   session(id: string) { return this.roots.get(id)?.session; }
   requests(id: string) { return this.roots.get(id)?.requests ?? []; }
@@ -50,7 +51,7 @@ class FakeController implements AcpController {
   async launch(value: unknown): Promise<ConsoleMutation> {
     const launch = value as ConsoleLaunch; this.launches.push(launch);
     const id = `s-${createHash('sha256').update(launch.requestId).digest('hex').slice(0, 24)}`;
-    const session: ConsoleDetail['session'] = { id, title: 'Fixture root', cwd: launch.cwd, mode: launch.mode, host: launch.host, ...(launch.model ? { model: launch.model } : {}), access: launch.access ?? 'default', state: 'running', revision: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), rootNodeId: 'fixture', capabilities: hostCapabilities(launch.host), pendingRequests: 0 };
+    const session: ConsoleDetail['session'] = { id, title: 'Fixture root', cwd: launch.cwd, mode: launch.mode, host: launch.host, ...(launch.model ? { model: launch.model } : {}), ...(launch.effort ? { effort: launch.effort } : {}), access: launch.access ?? 'default', state: 'running', revision: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), rootNodeId: 'fixture', capabilities: hostCapabilities(launch.host), pendingRequests: 0 };
     const command: ConsoleCommand = { requestId: launch.requestId, state: 'delivered' };
     this.roots.set(id, { session, commands: [command], events: [], requests: [] });
     this.event(id, { kind: 'user', text: launch.prompt, command } as Omit<ConsoleEvent, 'id' | 'sequence' | 'at'>);
@@ -63,6 +64,13 @@ class FakeController implements AcpController {
     detail.session.state = 'running'; const command: ConsoleCommand = { requestId: input.requestId, state: 'delivered' }; detail.commands!.push(command);
     this.event(id, { kind: 'user', text: input.text, command } as Omit<ConsoleEvent, 'id' | 'sequence' | 'at'>);
     if (this.finishImmediately) this.finish(id, 'Follow-up answer');
+    return { session: detail.session, command };
+  }
+  async configure(id: string, value: unknown): Promise<ConsoleMutation> {
+    const input = value as Obj; this.configurations.push({ id, ...input }); const detail = this.roots.get(id)!;
+    Object.assign(detail.session, { model: input.model, mode: input.mode, effort: input.effort });
+    const command: ConsoleCommand = { requestId: input.requestId, state: 'delivered' };
+    const logs = this.logs.get(id) ?? []; logs.push({ cursor: String(logs.length + 1), kind: 'command', command }); this.logs.set(id, logs);
     return { session: detail.session, command };
   }
   async action(id: string, value: unknown): Promise<ConsoleMutation> {
@@ -101,7 +109,7 @@ test('ACP negotiates v1 truthfully, defers launch and applies roster model/workf
     const mcpServers = [{ name: 'fixture', command: '/not-executed', args: [], env: [{ name: 'PRIVATE_FIXTURE', value: 'not-a-real-secret' }] }];
     const created = (await c.call('session/new', { cwd: f.root, mcpServers })).result; const sessionId = created.sessionId;
     assert.equal(f.controller.launches.length, 0); assert.equal(statSync(c.server.store.path(sessionId)).mode & 0o777, 0o600);
-    assert.equal(created.models.availableModels.length, 2);
+    assert.equal(created.models.availableModels.length, 4);
     await c.call('session/set_model', { sessionId, modelId: 'claude/claude-model' });
     await c.call('session/set_mode', { sessionId, modeId: 'cos' });
     await c.call('session/set_config_option', { sessionId, configId: 'effort', value: 'low' });
@@ -109,7 +117,7 @@ test('ACP negotiates v1 truthfully, defers launch and applies roster model/workf
     const result = await c.call('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'Build it' }] });
     assert.equal(result.result.stopReason, 'end_turn'); assert.equal(f.controller.launches.length, 1);
     assert.equal(f.controller.launches[0]!.host, 'claude'); assert.equal(f.controller.launches[0]!.mode, 'cos'); assert.equal(f.controller.launches[0]!.effort, 'low'); assert.deepEqual(f.controller.launches[0]!.mcpServers, mcpServers);
-    assert.equal((await c.call('session/set_mode', { sessionId, modeId: 'advisor' })).error.code, -32004);
+    assert.ok((await c.call('session/set_mode', { sessionId, modeId: 'advisor' })).result);
     assert.ok(!JSON.stringify(c.messages).includes('not-a-real-secret'));
   } finally { await f.cleanup(); }
 });
@@ -219,6 +227,123 @@ test('ACP accepts default model alias and repeated actual selection without chan
     assert.ok((await c.call('session/set_model', { sessionId, modelId: 'codex/codex-model' })).result);
     assert.equal((await c.call('session/set_model', { sessionId, modelId: 'claude/claude-model' })).error.code, -32004);
     assert.equal(f.controller.launches.length, 1);
+  } finally { await f.cleanup(); }
+});
+
+test('ACP changes lead model, effort and workflow in the same chat without changing its workers', async () => {
+  const f = fixture(); try {
+    const c = f.connect(); await c.init(); f.controller.finishImmediately = true;
+    const sessionId = (await c.call('session/new', { cwd: f.root })).result.sessionId;
+    await c.call('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'First turn' }] });
+    const id = c.server.store.read(sessionId).consoleId!;
+    const child = f.controller.addChild(id); child.state = 'idle';
+    const before = structuredClone(child);
+    const changed = await c.call('session/set_config_option', { sessionId, configId: 'model', value: 'codex/codex-model-other' });
+    assert.ok(changed.result, JSON.stringify(changed.error));
+    const models = changed.result.configOptions.find((option: Obj) => option.id === 'model');
+    assert.equal(models.currentValue, 'codex/codex-model-other');
+    assert.ok(models.options.every((option: Obj) => option.value.startsWith('codex/')));
+    assert.ok((await c.call('session/set_config_option', { sessionId, configId: 'effort', value: 'low' })).result);
+    assert.ok((await c.call('session/set_mode', { sessionId, modeId: 'cos' })).result);
+    assert.equal((await c.call('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'Continue' }] })).result.stopReason, 'end_turn');
+    assert.equal(f.controller.session(id)!.model, 'codex-model-other');
+    assert.equal(f.controller.session(id)!.mode, 'cos'); assert.equal(f.controller.session(id)!.effort, 'low');
+    assert.deepEqual(child, before); assert.equal(f.controller.launches.length, 1);
+    assert.equal(f.controller.messages.at(-1)!.id, id);
+    assert.ok((await c.call('session/set_model', { sessionId, modelId: 'codex/codex-model' })).result);
+    assert.ok((await c.call('session/set_mode', { sessionId, modeId: 'advisor' })).result);
+    await c.server.close(); const next = f.connect(); await next.init();
+    const loaded = (await next.call('session/load', { sessionId, cwd: f.root })).result;
+    assert.equal(loaded.modes.currentModeId, 'advisor'); assert.equal(loaded.models.currentModelId, 'codex/codex-model');
+    assert.equal(loaded.configOptions.find((option: Obj) => option.id === 'effort').currentValue, 'low');
+    assert.equal(next.server.store.read(sessionId).consoleId, id);
+  } finally { await f.cleanup(); }
+});
+
+test('ACP waits for a queued change while approvals and the current prompt continue independently', async () => {
+  const f = fixture(); try {
+    const c = f.connect(); await c.init(); const sessionId = (await c.call('session/new', { cwd: f.root })).result.sessionId;
+    const prompt = c.call('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'Work' }] });
+    const id = await waitFor(() => [...f.controller.roots.keys()][0]);
+    const apply = f.controller.configure.bind(f.controller); let queued: Obj | undefined;
+    f.controller.configure = async (target, value) => { queued = value as Obj; return { session: f.controller.session(target)!, command: { requestId: queued.requestId, state: 'queued' } }; };
+    let changed = false;
+    const change = c.call('session/set_mode', { sessionId, modeId: 'cos' }).then(result => { changed = true; return result; });
+    await waitFor(() => queued); assert.equal(changed, false);
+    assert.equal(c.server.store.read(sessionId).mode, 'advisor');
+    const detail = f.controller.detail(id)!; detail.session.state = 'waiting';
+    detail.requests = [{ id: 'permission-during-change', kind: 'approval', title: 'Existing turn approval', description: '', options: [{ id: 'allow', label: 'Allow' }] }];
+    const permission = await waitFor(() => c.messages.find(message => message.method === 'session/request_permission'));
+    await c.server.receive({ jsonrpc: '2.0', id: permission.id, result: { outcome: { outcome: 'selected', optionId: 'allow' } } });
+    await waitFor(() => f.controller.answers.length === 1); assert.equal(changed, false);
+    f.controller.finish(id); await apply(id, queued);
+    assert.ok((await change).result); assert.equal((await prompt).result.stopReason, 'end_turn');
+    assert.equal(c.server.store.read(sessionId).mode, 'cos');
+    assert.equal(f.controller.actions.length, 0); assert.equal(f.controller.suspended.length, 0);
+  } finally { await f.cleanup(); }
+});
+
+test('ACP configures after a racing first launch and serializes subsequent selections', async () => {
+  const f = fixture(); let release!: () => void; try {
+    const c = f.connect(); await c.init(); f.controller.finishImmediately = true;
+    const sessionId = (await c.call('session/new', { cwd: f.root })).result.sessionId;
+    const launch = f.controller.launch.bind(f.controller);
+    f.controller.launch = async input => { await new Promise<void>(resolve => { release = resolve; }); return launch(input); };
+    const prompt = c.call('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'First' }] });
+    await waitFor(() => release);
+    const cos = c.call('session/set_mode', { sessionId, modeId: 'cos' });
+    const advisor = c.call('session/set_mode', { sessionId, modeId: 'advisor' });
+    assert.equal(f.controller.configurations.length, 0); release();
+    assert.equal((await prompt).result.stopReason, 'end_turn');
+    assert.ok((await cos).result); assert.ok((await advisor).result);
+    assert.deepEqual(f.controller.configurations.map(config => config.mode), ['cos', 'advisor']);
+    assert.equal(c.server.store.read(sessionId).mode, 'advisor'); assert.equal(f.controller.launches.length, 1);
+  } finally { release?.(); await f.cleanup(); }
+});
+
+test('ACP leaves rejected configuration unchanged and reconciles accepted native state after reconnect', async () => {
+  const f = fixture(); try {
+    const c = f.connect(); await c.init(); f.controller.finishImmediately = true;
+    const sessionId = (await c.call('session/new', { cwd: f.root })).result.sessionId;
+    await c.call('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'First' }] });
+    const id = c.server.store.read(sessionId).consoleId!;
+    f.controller.configure = async () => { throw new Error('Native model rejected'); };
+    assert.match((await c.call('session/set_model', { sessionId, modelId: 'codex/codex-model-other' })).error.message, /Native model rejected/);
+    assert.equal(c.server.store.read(sessionId).modelId, 'codex/codex-model');
+    const native = f.controller.session(id)!; native.model = 'codex-model-other'; native.mode = 'cos'; native.effort = 'low';
+    await c.server.close(); const next = f.connect(); await next.init();
+    const loaded = (await next.call('session/load', { sessionId, cwd: f.root })).result;
+    assert.equal(loaded.models.currentModelId, 'codex/codex-model-other'); assert.equal(loaded.modes.currentModeId, 'cos');
+    assert.equal(next.server.store.read(sessionId).consoleId, id);
+  } finally { await f.cleanup(); }
+});
+
+test('ACP disconnect releases a pending configuration without waiting for the active turn to finish', async () => {
+  const f = fixture(); try {
+    const c = f.connect(); await c.init(); const sessionId = (await c.call('session/new', { cwd: f.root })).result.sessionId;
+    const prompt = c.call('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'Work' }] });
+    const id = await waitFor(() => [...f.controller.roots.keys()][0]); let queued = false;
+    f.controller.configure = async (target, value) => { queued = true; return { session: f.controller.session(target)!, command: { requestId: (value as Obj).requestId, state: 'queued' } }; };
+    const change = c.call('session/set_mode', { sessionId, modeId: 'cos' });
+    await waitFor(() => queued); await c.server.close();
+    await Promise.all([change, prompt]); assert.deepEqual(f.controller.suspended, [id]);
+    assert.equal(c.server.store.read(sessionId).mode, 'advisor');
+  } finally { await f.cleanup(); }
+});
+
+test('ACP releases pending configuration when its native owner disappears, so the chat can recover', async () => {
+  const f = fixture(); try {
+    const c = f.connect(); await c.init(); const sessionId = (await c.call('session/new', { cwd: f.root })).result.sessionId;
+    const prompt = c.call('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'Work' }] });
+    const id = await waitFor(() => [...f.controller.roots.keys()][0]); let queued = false;
+    f.controller.configure = async (target, value) => { queued = true; return { session: f.controller.session(target)!, command: { requestId: (value as Obj).requestId, state: 'queued' } }; };
+    const change = c.call('session/set_mode', { sessionId, modeId: 'cos' });
+    await waitFor(() => queued); f.controller.session(id)!.state = 'disconnected';
+    assert.match((await change).error.message, /disconnected/); assert.ok((await prompt).error);
+    assert.equal(c.server.store.read(sessionId).mode, 'advisor');
+    f.controller.finishImmediately = true;
+    assert.equal((await c.call('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'Recover' }] })).result.stopReason, 'end_turn');
+    assert.equal(f.controller.launches.length, 1); assert.equal(f.controller.actions.at(-1)!.action, 'resume');
   } finally { await f.cleanup(); }
 });
 

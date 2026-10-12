@@ -387,6 +387,13 @@ export function createCodexHost(options: HostOptions): ConsoleHostAdapter {
       if (object(thread.status).type === 'active' && !string(active?.id)) throw new Error('crew: active Codex thread has no current turn id');
       turnId = active ? string(active.id) || undefined : undefined;
       identity(); // Supervisor persists this synchronously before any input is accepted.
+      if (options.identity && options.instructionsChanged) {
+        // thread/resume accepts developerInstructions as configuration, but does
+        // not replace the prior developer message in model-visible history.
+        // Append the explicitly selected workflow before accepting the next input.
+        if (turnId) throw new Error('crew: cannot refresh Codex instructions during an active turn');
+        await rpc('thread/inject_items', { threadId: sessionId, items: [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text: options.instructions }] }] });
+      }
       ready = true; currentState();
       earlyBytes = 0;
       for (const wire of early.splice(0)) receive(JSON.stringify(wire));

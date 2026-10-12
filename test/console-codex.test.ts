@@ -107,10 +107,73 @@ test('Codex resumes only the supplied identity, discovers the current turn, and 
   assert.equal(resume.params.threadId, 'exact-thread');
   assert.equal('path' in resume.params || 'history' in resume.params, false);
   assert.equal(f.wires().some(w => w.method === 'thread/start' || w.method?.startsWith('turn/')), false);
+  assert.equal(f.wires().some(w => w.method === 'thread/inject_items'), false);
   assert.equal(JSON.stringify(f.wires()).includes('--last'), false);
   assert.deepEqual(f.identities.at(-1), { sessionId: 'exact-thread', turnId: 'turn-resumed' });
   assert.equal(await f.host.send('new input', 'new-1'), 'delivered');
   assert.equal(f.wires().find(w => w.method === 'turn/steer')!.params.expectedTurnId, 'turn-resumed');
+});
+
+test('idle root reconnect applies model, effort and workflow instructions to the exact Codex thread', async t => {
+  const original = fixture(t, {
+    launch: { requestId: 'original', cwd: process.cwd(), mode: 'cos', host: 'codex', prompt: '', model: 'original-model', effort: 'high' },
+    instructions: 'Original CoS workflow',
+  });
+  await original.host.start();
+  await original.host.send('events', 'first-turn');
+  await until(() => original.states.at(-1)?.state === 'idle');
+  const identity = original.identities.at(-1)!;
+  await original.host.close();
+  const resumed = fixture(t, {
+    identity,
+    launch: { requestId: 'updated', cwd: process.cwd(), mode: 'advisor', host: 'codex', prompt: '', model: 'replacement-model', effort: 'low' },
+    instructions: 'Replacement advisor workflow',
+    instructionsChanged: true,
+  });
+  await resumed.host.start();
+  const request = resumed.wires().find(w => w.method === 'thread/resume')!;
+  assert.equal(request.params.threadId, identity.sessionId);
+  assert.equal(request.params.model, 'replacement-model');
+  assert.equal((request.params.config as Record<string, unknown>).model_reasoning_effort, 'low');
+  assert.equal(request.params.developerInstructions, 'Replacement advisor workflow');
+  assert.deepEqual(resumed.wires().find(w => w.method === 'thread/inject_items')!.params, { threadId: identity.sessionId, items: [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'Replacement advisor workflow' }] }] });
+  assert.deepEqual(resumed.identities, [{ sessionId: identity.sessionId }]);
+  assert.notEqual(resumed.providers[0]!.pid, original.providers[0]!.pid);
+  assert.equal(resumed.wires().some(w => w.method === 'thread/start' || w.method?.startsWith('turn/')), false);
+  assert.equal(JSON.stringify(resumed.wires()).includes('Original CoS workflow'), false);
+  await resumed.host.send('new human input', 'second-turn');
+  const turn = resumed.wires().find(w => w.method === 'turn/start')!;
+  assert.equal(turn.params.threadId, identity.sessionId);
+  assert.deepEqual(turn.params.input, [{ type: 'text', text: 'new human input', text_elements: [] }]);
+});
+
+test('explicit workflow refresh reaches the next native turn in both directions without replaying input', async t => {
+  for (const mode of ['cos', 'advisor'] as const) {
+    const instructions = `Current Crew workflow: ${mode}`;
+    const f = fixture(t, {
+      identity: { sessionId: 'same-root' }, instructions, instructionsChanged: true,
+      launch: { requestId: 'changed', cwd: process.cwd(), mode, host: 'codex', prompt: 'DO_NOT_REPLAY' },
+    }, { persistedInstructions: `Current Crew workflow: ${mode === 'cos' ? 'advisor' : 'cos'}` });
+    await f.host.start();
+    assert.deepEqual(f.wires().filter(w => w.method).map(w => w.method), ['initialize', 'initialized', 'thread/resume', 'thread/inject_items']);
+    assert.equal(f.events.length, 0, 'refresh cannot create an assistant turn');
+    await f.host.send('report-instructions', `input-${mode}`);
+    await until(() => f.states.at(-1)?.state === 'idle');
+    assert.equal(f.events.find(event => event.kind === 'assistant')?.text, instructions);
+    assert.equal(f.wires().filter(w => w.method === 'thread/inject_items').length, 1);
+    assert.equal(f.wires().filter(w => w.method === 'turn/start').length, 1);
+    assert.equal(JSON.stringify(f.wires()).includes('DO_NOT_REPLAY'), false);
+  }
+});
+
+test('workflow refresh refuses an active native turn and fails closed when injection is rejected', async t => {
+  for (const settings of [{ activeResume: true }, { rejectInjection: true }]) {
+    const f = fixture(t, { identity: { sessionId: 'same-root' }, instructionsChanged: true }, settings);
+    await assert.rejects(f.host.start(), /active turn|instruction refresh rejected/);
+    assert.equal(f.wires().some(w => w.method?.startsWith('turn/')), false);
+    assert.equal(await f.host.send('must remain unsent', 'after-failed-refresh'), 'failed');
+    assert.equal(f.wires().some(w => w.method?.startsWith('turn/')), false);
+  }
 });
 
 test('resume fails closed for mismatched identity or active thread without a turn id', async t => {

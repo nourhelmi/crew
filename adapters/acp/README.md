@@ -22,10 +22,15 @@ version. Clients that cannot fall back to v1 must refuse the connection.
 - Models are enabled, available Codex/Claude roster entries, identified as
   `host/model`. The `default` model alias resolves to the session's selected
   roster model. There is no fabricated `crew-auto` model.
-- Advisor/CoS, lead model, effort and native permission mode are selected **before
-  the first prompt**. The native process is launched only on that prompt. A
-  repeated current selection is harmless; changing a launched configuration
-  requires a new session.
+- Advisor/CoS, lead model and effort can change in the same session. An active
+  root finishes its current turn before a queued selection applies; approvals
+  and cancellation remain available meanwhile. Only the root pipe reconnects,
+  retaining its exact native identity, conversation, checkpoint and workers.
+  Both Advisor → CoS and CoS → Advisor update the existing checkpoint mode.
+  After launch, available lead models belong to that session's native provider;
+  switching between Codex and Claude requires a new session. Native permission
+  policy is also fixed after launch. Initial native launch still waits for the
+  first prompt, and selecting the current value is harmless.
 - The prompt stays open until the root and managed descendants are quiescent.
   Running, starting, or approval-waiting workers keep it open. Cancel interrupts
   the root and reachable managed workers, including idle workers with possible

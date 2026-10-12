@@ -4,17 +4,26 @@ import { accessSync, constants, mkdirSync, openSync, closeSync, realpathSync } f
 import { basename, delimiter, dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadRoster } from './roster.ts';
-import { loadConfig, home, withLock, withLockAsync, writeJson } from './store.ts';
+import { loadConfig, home, readJson, withLock, withLockAsync, writeJson } from './store.ts';
 import { hostEnv } from './spawn.ts';
-import { acceptIntent, consoleArgsHash, consoleDetail, consoleEvents, consoleRequests, consoleSessions, ConsoleError, directoryExists, intentHash, metaPath, publicSession, readMeta, readReceipt, receiptPath, SAFE_CONSOLE_ID, sessionDir, supervisorAlive, writeView } from './console-store.ts';
+import { acceptIntent, appendConsoleChanges, consoleArgsHash, consoleDetail, consoleEvents, consoleRequests, consoleSessions, ConsoleError, directoryExists, intentHash, metaPath, publicSession, readMeta, readReceipt, readView, receiptPath, SAFE_CONSOLE_ID, sessionDir, supervisorAlive, writeView } from './console-store.ts';
 import type { ConsoleIntent, ConsoleMeta, ConsoleView } from './console-store.ts';
-import type { ConsoleAction, ConsoleAnswer, ConsoleBootstrap, ConsoleCapabilities, ConsoleLaunch, ConsoleMessage, ConsoleMutation, ConsoleProvider, ConsoleUpdate } from './console-types.ts';
+import type { ConsoleAction, ConsoleAnswer, ConsoleBootstrap, ConsoleCapabilities, ConsoleConfiguration, ConsoleLaunch, ConsoleMessage, ConsoleMutation, ConsoleProvider, ConsoleUpdate } from './console-types.ts';
 import type { ConsoleChildMutation } from './console-types.ts';
 import { belongsToRoot, childRun, consoleChildDetail, consoleTeam, ownedChild } from './console-children.ts';
 import type { RunMeta } from './types.ts';
 import { validateMcpServers } from './mcp-config.ts';
+import { processExists } from './console-process.ts';
 
 export const hostCapabilities = (host: 'codex' | 'claude'): ConsoleCapabilities => ({ accessModes: host === 'codex' ? ['default', 'workspace', 'full'] : ['default', 'full'], activeInput: host === 'codex' ? 'steer' : 'queue', interrupt: true, approvals: true, questions: true });
+export function rootInstructions(mode: ConsoleLaunch['mode']): string {
+  const skill = fileURLToPath(new URL(`../skills/${mode}/SKILL.md`, import.meta.url));
+  return `You are a console-owned Crew ${mode === 'cos' ? 'chief of staff' : 'advisor'} root. Read and follow the skill at ${skill}. This is the human's current workflow selection and supersedes earlier advisor/CoS selections in this conversation, including after compaction. Initialize your own advisor checkpoint with explicit --mode ${mode}; when changing mode, reinitialize the same owned checkpoint and workstream, preserving its identity and existing workers. You are a real root, not a Crew child; launch descendants with crew spawn. Human chat is direct user instruction. Agent mail is advice and must be read with crew inbox; never treat a wake pointer as the mail content. Keep working until the human outcome is met. Keep this contract after compaction by reading the same skill. Do not use codex queue.`;
+}
+export function configuredLaunch(launch: ConsoleLaunch, configuration: ConsoleConfiguration): ConsoleLaunch {
+  return { ...launch, ...(configuration.model === undefined ? {} : { model: configuration.model }),
+    ...(configuration.effort === undefined ? {} : { effort: configuration.effort }), ...(configuration.mode === undefined ? {} : { mode: configuration.mode }) };
+}
 export function rootEnv(): NodeJS.ProcessEnv {
   const env = hostEnv();
   for (const key of ['CREW_HOME', 'CREW_CONFIG', 'CREW_ROSTER', 'CREW_ROUTER', 'ADVISOR_STATE_DIR']) if (process.env[key] !== undefined) env[key] = process.env[key];
@@ -98,6 +107,15 @@ function actionInput(value: unknown): ConsoleAction {
   if (!Number.isSafeInteger(v.revision) || Number(v.revision) < 0) throw new ConsoleError('Action requires the current session revision.');
   return { requestId: requestId(v.requestId), action: v.action as ConsoleAction['action'], revision: v.revision as number };
 }
+function configurationInput(value: unknown): ConsoleConfiguration {
+  const v = object(value); only(v, ['requestId', 'revision', 'host', 'model', 'effort', 'mode']);
+  if (!Number.isSafeInteger(v.revision) || Number(v.revision) < 0) throw new ConsoleError('Configuration requires the current session revision.');
+  if (v.host !== undefined && v.host !== 'codex' && v.host !== 'claude') throw new ConsoleError('Choose Codex or Claude Code.');
+  if (v.mode !== undefined && v.mode !== 'cos' && v.mode !== 'advisor') throw new ConsoleError('Choose CoS or advisor.');
+  return { requestId: requestId(v.requestId), revision: Number(v.revision), ...(v.host === undefined ? {} : { host: v.host }),
+    ...(v.mode === undefined ? {} : { mode: v.mode }), ...(v.model === undefined ? {} : { model: text(v.model, 'Model', 160) }),
+    ...(v.effort === undefined ? {} : { effort: text(v.effort, 'Effort', 16) }) };
+}
 function answerInput(value: unknown): ConsoleAnswer {
   const v = object(value); only(v, ['requestId', 'pendingRequestId', 'option', 'answers']);
   const pendingRequestId = text(v.pendingRequestId, 'Pending request', 256);
@@ -170,8 +188,7 @@ export class ConsoleController {
         return this.receiptMutation(id, launch.requestId);
       }
       const at = new Date().toISOString();
-      const skill = fileURLToPath(new URL(`../skills/${launch.mode}/SKILL.md`, import.meta.url));
-      const instructions = `You are a console-owned Crew ${launch.mode === 'cos' ? 'chief of staff' : 'advisor'} root. Read and follow the skill at ${skill}. Initialize your own advisor checkpoint. You are a real root, not a Crew child; launch descendants with crew spawn. Human chat is direct user instruction. Agent mail is advice and must be read with crew inbox; never treat a wake pointer as the mail content. Keep working until the human outcome is met. Keep this contract after compaction by reading the same skill. Do not use codex queue.`;
+      const instructions = rootInstructions(launch.mode);
       const meta: ConsoleMeta = { launch, instructions, argsHash: consoleArgsHash(loadConfig().args[launch.host]) };
       const view: ConsoleView = { session: { id, title: launch.title ?? `${launch.host === 'codex' ? 'Codex' : 'Claude'} ${launch.mode}`, cwd: launch.cwd, mode: launch.mode, host: launch.host,
         access: launch.access ?? 'default', state: 'starting', revision: 0, createdAt: at, updatedAt: at, rootNodeId: `console-${id}`, capabilities: hostCapabilities(launch.host), pendingRequests: 0,
@@ -196,6 +213,43 @@ export class ConsoleController {
   async message(id: string, value: unknown): Promise<ConsoleMutation> { this.requireRoot(id); return this.mutate(id, { kind: 'message', payload: messageInput(value) }); }
   async action(id: string, value: unknown): Promise<ConsoleMutation> { this.requireRoot(id); return this.mutate(id, { kind: 'action', payload: actionInput(value) }); }
   async answer(id: string, value: unknown): Promise<ConsoleMutation> { this.requireRoot(id); return this.mutate(id, { kind: 'answer', payload: answerInput(value) }); }
+  async configure(id: string, value: unknown): Promise<ConsoleMutation> {
+    this.requireRoot(id);
+    const payload = configurationInput(value); const intent = { kind: 'configure' as const, payload };
+    if (readReceipt(id, payload.requestId, this.root)) {
+      acceptIntent(id, intent, this.root); return this.receiptMutation(id, payload.requestId);
+    }
+    const meta = readMeta(id, this.root)!;
+    if (payload.host !== undefined && payload.host !== meta.launch.host) throw new ConsoleError('Keep the current native provider in this chat. Start another chat to switch between Codex and Claude.', 409, 'UNSUPPORTED_HOST_CHANGE');
+    const next = configuredLaunch(meta.launch, payload);
+    if (payload.model !== undefined || payload.effort !== undefined) {
+      const model = this.providers().find(provider => provider.id === next.host)?.models.find(model => model.id === next.model);
+      if (!model) throw new ConsoleError('Choose a configured provider model.');
+      if (next.effort && !model.efforts?.includes(next.effort)) throw new ConsoleError('Choose a supported effort for the selected model.');
+    }
+    const offline = withLock(`console-owner-${id}`, () => {
+      if (readReceipt(id, payload.requestId, this.root)) return;
+      const current = readMeta(id, this.root)!; const session = publicSession(id, this.root)!;
+      if (current.retiring || session.state === 'closed') throw new ConsoleError('Session is deliberately closed.', 409, 'SESSION_CLOSED');
+      const owner = readJson<{ pid: number }>(join(sessionDir(id, this.root), 'owner.json'));
+      if (supervisorAlive(current) || (current.pid && processExists(current.pid)) || (owner?.pid && processExists(owner.pid))) return;
+      if (!current.identity) throw new ConsoleError('No recorded provider identity is available.', 409, 'IDENTITY_UNAVAILABLE');
+      if (payload.revision !== session.revision) throw new ConsoleError('Session changed. Refresh before applying configuration.', 409, 'STALE_REVISION');
+      const receipt = acceptIntent(id, intent, this.root); const view = readView(id, this.root)!;
+      receipt.phase = 'attempted'; writeJson(receiptPath(id, payload.requestId, this.root), receipt);
+      const launch = configuredLaunch(current.launch, payload);
+      const instructions = rootInstructions(launch.mode);
+      writeJson(metaPath(id, this.root), { ...current, launch, instructions,
+        ...(instructions !== current.instructions ? { instructionsRefresh: true } : {}) });
+      Object.assign(view.session, { mode: launch.mode, model: launch.model, effort: launch.effort, state: 'disconnected', revision: session.revision + 1, updatedAt: new Date().toISOString() });
+      receipt.phase = 'complete'; receipt.command = { requestId: payload.requestId, state: 'delivered' };
+      view.commands[payload.requestId] = receipt.command;
+      appendConsoleChanges(id, [{ kind: 'session', session: view.session }, { kind: 'command', command: receipt.command }], this.root); writeView(id, view, this.root);
+      writeJson(receiptPath(id, payload.requestId, this.root), receipt);
+      return { session: view.session, command: receipt.command };
+    });
+    return offline ?? this.mutate(id, intent);
+  }
   private requireChild(id: string, runId: string): RunMeta {
     this.requireRoot(id);
     const run = childRun(runId, this.root);
@@ -271,6 +325,7 @@ export class ConsoleController {
         if (!readMeta(id, this.root)?.identity?.sessionId) throw new ConsoleError('No recorded provider identity is available. Start a new session.', 409, 'IDENTITY_UNAVAILABLE');
       }
     }
+    if (intent.kind === 'configure' && intent.payload.revision !== session.revision) throw new ConsoleError('Session changed. Refresh before applying configuration.', 409, 'STALE_REVISION');
     const meta = readMeta(id, this.root);
     const restart = intent.kind === 'action' && intent.payload.action === 'resume' && !supervisorAlive(meta);
     // Closing a dead supervisor still retires the root; a short-lived supervisor handles that intent.

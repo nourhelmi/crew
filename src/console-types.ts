@@ -171,6 +171,16 @@ export interface ConsoleMessage {
   interrupt?: boolean;
 }
 
+/** Root selection for subsequent turns. Permissions and the native host stay fixed. */
+export interface ConsoleConfiguration {
+  requestId: string;
+  revision: number;
+  host?: ConsoleHost;
+  model?: string;
+  effort?: string;
+  mode?: ConsoleMode;
+}
+
 export type ConsoleAction = {
   requestId: string;
   action: 'interrupt' | 'resume' | 'suspend' | 'close';
