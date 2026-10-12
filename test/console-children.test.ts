@@ -32,7 +32,7 @@ async function fixture() {
   for (const key of ['CREW_RUN', 'CREW_MAILBOX', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_SESSION_ID', 'HERDR_ENV', 'HERDR_PANE_ID', 'HERDR_SESSION', 'CREW_CONSOLE_SESSION']) delete process.env[key];
   Object.assign(process.env, { HOME: root, CREW_HOME: root, CREW_CONFIG: join(root, 'config.json'), CREW_ROSTER: join(root, 'roster.json'), CODEX_HOME: join(root, 'codex-home'), CLAUDE_CONFIG_DIR: join(root, 'claude-home'), ADVISOR_STATE_DIR: join(root, 'advisor'), CODEX_THREAD_ID: 'before-root' });
   writeJson(process.env.CREW_CONFIG!, { router: { enabled: false }, args: { codex: ['--sandbox', 'workspace-write', '--ask-for-approval', 'on-request'], claude: ['--permission-mode', 'default'] } });
-  writeJson(process.env.CREW_ROSTER!, { models: [{ model: 'codex/fixture', effort: 'high', roles: ['builder'], cost: 0, use: 'test' }, { model: 'claude/fixture', effort: 'high', roles: ['builder'], cost: 0, use: 'test' }] });
+  writeJson(process.env.CREW_ROSTER!, { models: [{ model: 'codex/fixture', effort: 'high', roles: ['builder'], cost: 0, use: 'test' }, { model: 'claude/fixture', effort: 'high', roles: ['builder'], cost: 0, use: 'test' }, { model: 'opencode/fixture', effort: 'high', roles: ['builder'], cost: 0, use: 'test' }] });
   mkdirSync(join(root, 'bin'));
   for (const host of ['codex', 'claude']) {
     const source = resolve(`test/fixtures/console-${host}.ts`);
@@ -44,6 +44,8 @@ await import(${JSON.stringify(source)});\n`;
     writeFileSync(join(root, 'bin', host), script, { mode: 0o755 });
   }
   writeFileSync(join(root, 'bin', 'herdr'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
+  writeFileSync(join(root, 'bin', 'opencode'), `#!${process.execPath}\nimport {writeFileSync} from 'node:fs';import {join} from 'node:path';
+writeFileSync(join(process.env.CREW_HOME,'opencode-launch.json'),JSON.stringify({pid:process.pid,args:process.argv.slice(2),run:process.env.CREW_RUN,home:process.env.CREW_HOME}));setInterval(()=>{},1000);\n`, { mode: 0o755 });
   process.env.PATH = `${join(root, 'bin')}:${prior.PATH}`;
   const processes: ReturnType<typeof processSpawn>[] = [];
   const controller = new ConsoleController({ root, providers: () => [{ id: 'codex', label: 'fixture', available: true, models: [], capabilities: hostCapabilities('codex') }], receiptWaitMs: 3000,
@@ -292,5 +294,29 @@ test('resume preserves policy, active Claude mail waits for idle and interrupted
     const args = JSON.parse(readFileSync(join(f.root, 'providers', claude.id, 'launched.json'), 'utf8')).args;
     assert.deepEqual(args.slice(0, 2), ['--permission-mode', 'default']);
     assert.ok(args.includes(`--resume=${identity}`));
+  } finally { await f.cleanup(); }
+});
+
+test('routed OpenCode retains its native transport and read-only team capability; root retirement covers its ancestry', async () => {
+  const f = await fixture();
+  try {
+    const run = await spawn({ role: 'builder', task: 'Synthetic OpenCode packet.', cwd: f.root, keep: true, model: 'opencode/fixture', effort: 'high' });
+    const launch = await until(() => { try { return JSON.parse(readFileSync(join(f.root, 'opencode-launch.json'), 'utf8')); } catch { return false; } });
+    assert.equal(run.route.host, 'opencode'); assert.equal(run.route.model, 'fixture'); assert.equal(run.launcher, 'exec');
+    assert.equal(run.console, undefined); assert.equal(launch.run, run.id); assert.equal(launch.home, f.root);
+    assert.equal(launch.args[0], 'run'); assert.ok(launch.args.includes('fixture'));
+    const detail = f.controller.childDetail(f.id, run.id)!;
+    assert.equal(detail.child.managed, false); assert.equal(detail.child.capabilities.approvals, false);
+    assert.equal(detail.child.capabilities.interrupt, false); assert.equal(detail.requests.length, 0);
+    await assert.rejects(f.controller.childAction(f.id, run.id, { requestId: 'unsupported-controls', action: 'interrupt', revision: 0 }), /no console-owned native pipe/);
+    assert.equal(managedConsoleParent({ mailbox: run.id, host: 'opencode' }), undefined);
+    // The root retirement fence protects native subtrees even before their own stop snapshot.
+    writeJson(join(mailDir(f.address.mailbox), 'console-retired.json'), { consoleSessionId: f.id });
+    process.env.CREW_RUN = run.id;
+    await assert.rejects(spawn({ role: 'builder', task: 'Forbidden late descendant.', cwd: f.root, keep: true, model: 'codex/fixture', effort: 'high' }), /retired parent/);
+    delete process.env.CREW_RUN;
+    await f.controller.action(f.id, { requestId: 'close-opencode-team', action: 'close', revision: f.controller.detail(f.id)!.session.revision });
+    await until(() => !processExists(launch.pid));
+    assert.equal(readRun(run.id)!.state, 'stopped'); assert.equal(f.controller.childDetail(f.id, run.id)!.child.managed, false);
   } finally { await f.cleanup(); }
 });

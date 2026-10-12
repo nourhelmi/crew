@@ -71,7 +71,8 @@ missing tool. If delegation is unavailable, work directly where permitted.
 - **Where children appear.** Console-owned Codex/Claude descendants appear in the web team's
   tree with their own public stream, native approvals/questions and interrupt/resume/stop.
   Routing and child packets still govern them. An existing exec/bg child has no owned console
-  pipe; answer it in its original host. OpenCode cannot be a managed console descendant.
+  pipe; answer it in its original host. Routed OpenCode descendants retain their native
+  launcher and appear view-only; root retirement still stops them.
   Inside herdr, each crew child is a pane beside you; a finished
   one closes itself, a failed or blocked one stays open. Outside herdr (the Claude Code or
   Codex desktop app, a plain terminal), Claude children are `claude --bg` sessions

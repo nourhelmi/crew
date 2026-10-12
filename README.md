@@ -410,8 +410,9 @@ instead of being copied into the root's context.
 
 Work started outside the console remains visible and **view-only**. Pre-existing background or
 exec children have no console-owned pipe and need their original host for approvals. They are
-never silently adopted. OpenCode lacks a supported console approval transport and cannot be
-launched as a managed descendant. External member output comes from recorded
+never silently adopted. Routed OpenCode children retain their native OpenCode transport and
+appear as unmanaged/view-only; console approvals are unavailable for that host. Closing the
+root still stops those Crew descendants. External member output comes from recorded
 native transcripts or captured exec output, with bounded recent history and explicit source
 limitations. Hidden reasoning and injected harness context are omitted.
 

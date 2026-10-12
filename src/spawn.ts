@@ -290,19 +290,29 @@ export async function spawn(options: SpawnOptions): Promise<RunMeta> {
 
   // Routing awaits an external process; reserve the name from fresh state afterwards.
   withLock('spawn', () => {
-    if (readRun(parent.mailbox)?.state === 'stopped' || readJson(join(mailDir(parent.mailbox), 'console-retired.json'))) throw new Error('crew: a retired parent cannot launch new descendants');
+    const visited = new Set<string>();
+    let mailbox = parent.mailbox;
+    for (;;) {
+      if (visited.has(mailbox)) throw new Error('crew: cyclic parent ancestry cannot launch descendants');
+      visited.add(mailbox);
+      const ancestor = readRun(mailbox);
+      if (ancestor?.state === 'stopped' || readJson(join(mailDir(mailbox), 'console-retired.json'))) throw new Error('crew: a retired parent cannot launch new descendants');
+      if (!ancestor) break;
+      mailbox = ancestor.parent.mailbox;
+    }
     if (listRuns().some(current => current.name === run.name && retained(current))) {
       throw new Error(`crew: a live run is already named "${run.name}"`);
     }
     run.route = placed;
     const managed = managedConsoleParent(parent);
-    run.launcher = managed ? 'console' : inHerdr() ? 'herdr' : placed.host === 'claude' ? 'bg' : 'exec';
-    if (managed) run.console = { sessionId: `c-${id}`, rootSessionId: managed.id };
+    const controlled = placed.host !== 'opencode' ? managed : undefined;
+    run.launcher = controlled ? 'console' : inHerdr() ? 'herdr' : placed.host === 'claude' ? 'bg' : 'exec';
+    if (controlled) run.console = { sessionId: `c-${id}`, rootSessionId: controlled.id };
     mkdirSync(runDir(id), { recursive: true });
     writeFileSync(packetPath(id), options.task.endsWith('\n') ? options.task : `${options.task}\n`, { mode: 0o600 });
     writeFileSync(briefPath(id), `${bootstrap(run)}\n`, { mode: 0o600 });
     writeRun(run);
-    if (managed) {
+    if (controlled) {
       try { prepareConsoleChild(run); }
       catch (error) { updateRun(id, current => ({ ...current, state: 'failed' })); throw error; }
     }
