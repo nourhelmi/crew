@@ -18,7 +18,7 @@ import { resume } from '../src/resume.ts';
 import { stopRun } from '../src/retire.ts';
 import { processExists } from '../src/console-process.ts';
 import { setSessionRouter } from '../src/settings.ts';
-import { appendMail, listRuns, mailDir, readRun, resultPath, unread, updateRun, writeJson, writeRun } from '../src/store.ts';
+import { appendMail, listRuns, mailDir, markWaiter, readRun, resultPath, unread, updateRun, writeJson, writeRun } from '../src/store.ts';
 import type { ConsoleChildMutation } from '../src/console-types.ts';
 import type { RunMeta } from '../src/types.ts';
 
@@ -87,6 +87,9 @@ writeFileSync(join(process.env.CREW_HOME,'opencode-launch.json'),JSON.stringify(
 
 test('both managed providers retain child identity and policy; exact native answers isolate child/root and reconcile durable receipts', async () => {
   const f = await fixture();
+  // The root is held while a foreground reader inspects child waiting notices.
+  // Otherwise a synthetic 70ms mail turn can finish between revision capture and interrupt.
+  const unmarkRoot = markWaiter(f.address.mailbox);
   try {
     const codex = await f.child('codex'); const claude = await f.child('claude');
     assert.equal(codex.launcher, 'console'); assert.equal(claude.launcher, 'console');
@@ -117,7 +120,10 @@ test('both managed providers retain child identity and policy; exact native answ
     assert.equal(f.controller.detail(childTargetId(codex.id)), undefined);
     await assert.rejects(f.controller.childAnswer(f.id, claude.id, { requestId: 'cross-child', pendingRequestId: codexRequest.id, option: 'accept' }), /no longer pending/);
     await assert.rejects(f.controller.answer(f.id, { requestId: 'cross-root', pendingRequestId: codexRequest.id, option: 'accept' }), /no longer pending/);
-    await f.controller.action(f.id, { requestId: 'root-interrupt', action: 'interrupt', revision: f.controller.detail(f.id)!.session.revision });
+    const root = f.controller.detail(f.id)!.session;
+    assert.equal(root.state, 'running');
+    const interrupted = await f.controller.action(f.id, { requestId: 'root-interrupt', action: 'interrupt', revision: root.revision });
+    assert.equal(interrupted.command.state, 'delivered'); assert.equal(interrupted.session.state, 'interrupted');
     assert.equal(f.controller.team(f.id)!.pendingRequests.length, 2);
     const answer = { requestId: 'codex-answer', pendingRequestId: codexRequest.id, option: 'decline' };
     const response = await f.post(`/api/console/sessions/${f.id}/children/${codex.id}/answers`, answer);
@@ -140,7 +146,7 @@ test('both managed providers retain child identity and policy; exact native answ
     assert.equal(reload.childDetail(f.id, codex.id)!.commands!.find(c => c.requestId === answer.requestId)!.state, 'delivered');
     assert.equal((await fetch(`${f.origin}/api/console/sessions/foreign/children/${codex.id}`)).status, 404);
     assert.equal((await f.post(`/api/console/sessions/foreign/children/${codex.id}/answers`, answer)).status, 404);
-  } finally { await f.cleanup(); }
+  } finally { unmarkRoot(); await f.cleanup(); }
 });
 
 test('retained child assignment wake uses its run mailbox and same native session; cancellation, resume, stop and root close stay scoped', async () => {
