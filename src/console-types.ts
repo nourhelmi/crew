@@ -101,7 +101,38 @@ export interface ConsoleBootstrap {
 export interface ConsoleUpdate {
   sessions: ConsoleSession[];
   detail: ConsoleDetail | null;
+  team?: ConsoleTeam | null;
+  childDetail?: ConsoleChildDetail | null;
 }
+
+/** Native provider state is independent of packet settlement/acceptance. */
+export interface ConsoleChild {
+  runId: string;
+  rootSessionId: string;
+  title: string;
+  role: 'advisor' | 'builder' | 'checker';
+  host: 'codex' | 'claude' | 'opencode';
+  model: string;
+  effort: string;
+  cwd: string;
+  keep: boolean;
+  parentRunId?: string;
+  managed: boolean;
+  state: ConsoleState;
+  assignmentState: 'running' | 'done' | 'failed' | 'blocked' | 'stopped';
+  revision: number;
+  capabilities: ConsoleCapabilities;
+  pendingRequests: number;
+  error?: string;
+}
+export interface ConsoleTeam {
+  sessionId: string;
+  children: ConsoleChild[];
+  pendingRequests: { runId: string; request: ConsoleRequest }[];
+}
+export interface ConsoleChildDetail extends Omit<ConsoleDetail, 'session'> { child: ConsoleChild }
+export interface ConsoleChildMutation { child: ConsoleChild; command: ConsoleCommand }
+export interface ConsoleChildAction extends Omit<ConsoleAction, 'action'> { action: 'interrupt' | 'resume' | 'stop' }
 
 export interface ConsoleLaunch {
   requestId: string;

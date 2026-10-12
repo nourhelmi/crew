@@ -10,6 +10,7 @@ const assets = new Map([
   ['/dashboard.html', ['dashboard.html', 'text/html; charset=utf-8']],
   ['/dashboard.css', ['dashboard.css', 'text/css; charset=utf-8']],
   ['/dashboard.js', ['dashboard.js', 'text/javascript; charset=utf-8']],
+  ['/stream-format.js', ['stream-format.js', 'text/javascript; charset=utf-8']],
 ]);
 
 export function createDashboardServer(observer = new DashboardObserver(), intervalMs = 1_000, controller?: ConsoleController): Server {
