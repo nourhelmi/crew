@@ -1,0 +1,150 @@
+diff --git a/.gitignore b/.gitignore
+index 38bac103..4aa1ec76 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -45,3 +45,4 @@ node_modules/
+ 
+ # pnpm content-addressable store; never belongs in the repo.
+ .pnpm-store/
++.crewcode/
+diff --git a/README.md b/README.md
+index 8aa78f81..e682029a 100644
+--- a/README.md
++++ b/README.md
+@@ -1,4 +1,17 @@
+-# T3 Code
++# CrewCode
++
++T3 Code's workspace, powered by [Crew](https://github.com/nourhelmi/crew). Crew routes the advisor and workers across your installed coding agents; the app provides projects, conversations, diffs, terminals, and checkpoints.
++
++```bash
++pnpm install --frozen-lockfile
++pnpm crewcode --crew /absolute/path/to/crew/bin/crew
++```
++
++Requires Node 24.13.1 or newer in the 24.x line, pnpm 11, and an installed Crew with authenticated host CLIs. The launcher creates a separate `.crewcode` data directory, registers the local Crew provider, and selects automatic Crew routing. Open the web address printed by the dev runner.
++
++See [CrewCode setup and capabilities](docs/user/crewcode.md). This first integration uses ACP and is a source-run web app; it does not include repackaged desktop or mobile releases. The upstream MIT license and attribution are retained below.
++
++## Upstream T3 Code
+ 
+ T3 Code is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).
+ 
+diff --git a/apps/web/index.html b/apps/web/index.html
+index c2d16474..ca6e4058 100644
+--- a/apps/web/index.html
++++ b/apps/web/index.html
+@@ -477,13 +477,13 @@
+         cursor: pointer;
+       }
+     </style>
+-    <title>T3 Code (Alpha)</title>
++    <title>CrewCode</title>
+   </head>
+   <body>
+     <div id="root">
+       <div id="boot-shell">
+-        <div id="boot-shell-card" aria-label="T3 Code splash screen">
+-          <img id="boot-shell-logo" src="/apple-touch-icon.png" alt="T3 Code" />
++        <div id="boot-shell-card" aria-label="CrewCode splash screen">
++          <span style="font-size: 24px; font-weight: 600">CrewCode</span>
+         </div>
+       </div>
+     </div>
+diff --git a/apps/web/src/branding.test.ts b/apps/web/src/branding.test.ts
+index e1c87bcf..c869d970 100644
+--- a/apps/web/src/branding.test.ts
++++ b/apps/web/src/branding.test.ts
+@@ -47,7 +47,7 @@ describe("branding", () => {
+     expect(branding.HOSTED_APP_CHANNEL).toBe("nightly");
+     expect(branding.HOSTED_APP_CHANNEL_LABEL).toBe("Nightly");
+     expect(branding.APP_STAGE_LABEL).toBe("Nightly");
+-    expect(branding.APP_DISPLAY_NAME).toBe("T3 Code (Nightly)");
++    expect(branding.APP_DISPLAY_NAME).toBe("CrewCode (Nightly)");
+   });
+ 
+   it("does not label the latest hosted app channel", async () => {
+@@ -58,7 +58,7 @@ describe("branding", () => {
+     expect(branding.HOSTED_APP_CHANNEL).toBe("latest");
+     expect(branding.HOSTED_APP_CHANNEL_LABEL).toBe("Latest");
+     expect(branding.APP_STAGE_LABEL).toBe("Latest");
+-    expect(branding.APP_DISPLAY_NAME).toBe("T3 Code");
++    expect(branding.APP_DISPLAY_NAME).toBe("CrewCode");
+   });
+ 
+   it("ignores unknown hosted app channels", async () => {
+diff --git a/apps/web/src/branding.ts b/apps/web/src/branding.ts
+index 7fc57cf0..99e20534 100644
+--- a/apps/web/src/branding.ts
++++ b/apps/web/src/branding.ts
+@@ -16,7 +16,7 @@ export const HOSTED_APP_CHANNEL =
+   hostedAppChannel === "latest" || hostedAppChannel === "nightly" ? hostedAppChannel : null;
+ export const HOSTED_APP_CHANNEL_LABEL =
+   HOSTED_APP_CHANNEL === "nightly" ? "Nightly" : HOSTED_APP_CHANNEL === "latest" ? "Latest" : null;
+-export const APP_BASE_NAME = injectedDesktopAppBranding?.baseName ?? "T3 Code";
++export const APP_BASE_NAME = injectedDesktopAppBranding?.baseName ?? "CrewCode";
+ export const APP_STAGE_LABEL =
+   injectedDesktopAppBranding?.stageLabel ??
+   HOSTED_APP_CHANNEL_LABEL ??
+diff --git a/apps/web/src/components/onboarding/WelcomeWizard.tsx b/apps/web/src/components/onboarding/WelcomeWizard.tsx
+index 7da09e0b..f6703310 100644
+--- a/apps/web/src/components/onboarding/WelcomeWizard.tsx
++++ b/apps/web/src/components/onboarding/WelcomeWizard.tsx
+@@ -83,7 +83,6 @@ import { TerminalViewport } from "../ThreadTerminalDrawer";
+ import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
+ import { presentSavedCloudEnvironmentConnection } from "../cloud/cloudEnvironmentConnectionPresentation";
+ import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
+-import { T3Wordmark } from "../T3Wordmark";
+ import { Alert, AlertDescription } from "../ui/alert";
+ import { Button } from "../ui/button";
+ import { CommandBlock } from "../CommandBlock";
+@@ -232,10 +231,10 @@ export function WelcomeWizard({
+         initialFocus={() => document.getElementById("onboarding-pairing-url") ?? true}
+       >
+         <WizardHeader
+-          title="Set up T3 Code"
++          title="Set up CrewCode"
+           identity={
+-            <div className="flex items-baseline gap-1.5" role="img" aria-label="T3 Code">
+-              <T3Wordmark className="h-4 w-auto shrink-0" aria-hidden />
++            <div className="flex items-baseline gap-1.5" role="img" aria-label="CrewCode">
++              <span className="text-2xl font-medium tracking-tight">Crew</span>
+               <span className="text-2xl font-medium tracking-tight text-muted-foreground">
+                 Code
+               </span>
+diff --git a/apps/web/src/components/sidebar/SidebarChrome.tsx b/apps/web/src/components/sidebar/SidebarChrome.tsx
+index ae055293..ee432019 100644
+--- a/apps/web/src/components/sidebar/SidebarChrome.tsx
++++ b/apps/web/src/components/sidebar/SidebarChrome.tsx
+@@ -6,7 +6,6 @@ import { Link, useLocation, useNavigate } from "@tanstack/react-router";
+ import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
+ import { cn } from "../../lib/utils";
+ import { usePullRequestsSupported } from "../../state/environments";
+-import { T3Wordmark } from "../T3Wordmark";
+ import {
+   resolveEnvironmentIdentificationPillLabel,
+   resolveSidebarStageBackdropVariant,
+@@ -130,7 +129,7 @@ function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
+     // Center the visible capitals, without the font's ascender/descender space.
+     // Padding keeps ascenders and round-letter overshoot inside the truncation clip.
+     <span className="inline-flex min-w-0 items-baseline gap-1 text-sm font-medium tracking-tight">
+-      <T3Wordmark aria-label="T3" className="h-[1cap] w-auto shrink-0" />
++      <span className="shrink-0">Crew</span>
+       <span
+         className={cn(
+           "truncate [text-box:trim-both_cap_alphabetic] supports-[text-box:trim-both_cap_alphabetic]:py-1",
+diff --git a/package.json b/package.json
+index 8f18f5c2..ee164c14 100644
+--- a/package.json
++++ b/package.json
+@@ -3,6 +3,10 @@
+   "private": true,
+   "type": "module",
+   "scripts": {
++    "crewcode": "node scripts/crewcode/start.mjs",
++    "crewcode:setup": "node scripts/crewcode/setup.mjs",
++    "crewcode:acp": "node scripts/crewcode/acp.mjs",
++    "crewcode:test": "node scripts/crewcode/acp.node-test.mjs",
+     "prepare": "effect-tsgo patch && vp config --no-agent",
+     "dev": "node scripts/dev-runner.ts dev",
+     "dev:share": "node scripts/dev-runner.ts dev --share",

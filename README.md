@@ -85,6 +85,9 @@ crew appears in panes beside it; anywhere else, children run as `claude --bg` se
 For a browser view of the workstream, run `crew dashboard` and open the printed local URL.
 Select any member to follow its output. See the [dashboard](#dashboard) below.
 
+For a T3 Code workspace driven by your Crew, see [CrewCode](integrations/crewcode/README.md).
+Its setup command prepares a separate local app from the versioned source in this repository.
+
 **Requirements:** macOS or Linux, Node.js ≥ 24 (crew runs its TypeScript directly), and
 [Claude Code](https://code.claude.com) and/or the [Codex CLI](https://github.com/openai/codex),
 logged in. Optional: [herdr](https://herdr.dev) for visible panes, and
