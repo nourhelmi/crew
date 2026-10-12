@@ -1,3 +1,5 @@
+import type { OwnedProcess } from './console-process.ts';
+
 export const HOSTS = ['claude', 'codex', 'opencode'] as const;
 export type Host = (typeof HOSTS)[number];
 
@@ -80,6 +82,8 @@ export interface RunMeta {
   bgId?: string;
   /** `codex exec` process id. */
   pid?: number;
+  /** Launch-time PID identity for safe cancellation of detached exec tool descendants. */
+  ownedProcess?: OwnedProcess;
   /** Learned from the child's SessionStart hook. */
   sessionId?: string;
   threadId?: string;

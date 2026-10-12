@@ -5,7 +5,7 @@ import { listRuns, mailDir, readRun, updateRun, withLock, writeJson } from './st
 import { join } from 'node:path';
 import type { RunMeta } from './types.ts';
 import { ownedChild } from './console-children.ts';
-import { terminateOwnedProcess } from './console-process.ts';
+import { processExists, terminateOwnedProcess, terminateOwnedTree } from './console-process.ts';
 import { publicSession, readMeta, supervisorAlive } from './console-store.ts';
 
 export async function stopRun(run: RunMeta, visited = new Set<string>(), waitForConsole = true): Promise<void> {
@@ -50,8 +50,8 @@ export async function stopRun(run: RunMeta, visited = new Set<string>(), waitFor
     }
   }
   if (current.pid) {
-    try { process.kill(-current.pid, 'SIGTERM'); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+    if (current.ownedProcess?.pid === current.pid) await terminateOwnedTree(current.ownedProcess);
+    else if (processExists(current.pid)) throw new Error(`crew: ${current.name} lacks recorded exec process ownership; stop through its original host`);
   }
 }
 

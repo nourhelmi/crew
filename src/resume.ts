@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { bgSession, hostEnv, launchClaudeBg, launchExec, ROOT } from './spawn.ts';
 import { alive, home, mtime, readRun, runDir, unread, updateRun, withLockAsync } from './store.ts';
 import type { RunMeta } from './types.ts';
+import { terminateOwnedTree } from './console-process.ts';
 
 /** Do not diagnose the intentional host exit in the middle of a serialized relaunch. */
 export function resuming(id: string): boolean {
@@ -75,7 +76,7 @@ export async function resume(id: string, force = false): Promise<boolean> {
     }
     const fresh = updateRun(id, current => current.state === 'stopped' ? undefined : { ...current, ...launched });
     if (fresh?.state === 'stopped') {
-      if (launched.pid) { try { process.kill(-launched.pid, 'SIGTERM'); } catch { /* exited */ } }
+      if (launched.ownedProcess) await terminateOwnedTree(launched.ownedProcess);
       if (launched.bgId) { try { execFileSync('claude', ['stop', launched.bgId], { env: hostEnv(run.launch.env), stdio: 'ignore', timeout: 20_000 }); } catch { /* exited */ } }
       return false;
     }

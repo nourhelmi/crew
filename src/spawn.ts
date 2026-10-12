@@ -13,6 +13,7 @@ import { briefPath, findRun, home, listRuns, loadConfig, mailDir, newId, packetP
 import type { Config, Effort, Host, Role, Route, RunMeta } from './types.ts';
 import { managedConsoleParent, prepareConsoleChild } from './console-children.ts';
 import { assertSpawnBoundary, rootSpawnBoundary } from './stop-boundary.ts';
+import { processExists, recordProcess, terminateOwnedTree } from './console-process.ts';
 
 export const ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), '..');
 const skillPath = (role: Role): string => join(ROOT, 'skills', `advisor-role-${role}`, 'SKILL.md');
@@ -142,7 +143,7 @@ function ensureCodexDaemon(): void {
 }
 
 /** What a launcher learned; merged into the live metadata, which the child's hooks may already have updated. */
-type Launched = Pick<RunMeta, 'launcher'> & Partial<Pick<RunMeta, 'herdr' | 'bgId' | 'pid' | 'sessionId'>>;
+type Launched = Pick<RunMeta, 'launcher'> & Partial<Pick<RunMeta, 'herdr' | 'bgId' | 'pid' | 'sessionId' | 'ownedProcess'>>;
 
 /** The caller's open child panes in its herdr session, newest first. */
 export function childPanes(parentMailbox: string, session: string | undefined, except?: string): string[] {
@@ -255,7 +256,14 @@ export async function launchExec(run: RunMeta, args: string[], extra: Record<str
     await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
     child.unref();
     if (!child.pid) throw new Error(`${command} did not start`);
-    return { launcher: 'exec', pid: child.pid };
+    try {
+      return { launcher: 'exec', pid: child.pid, ownedProcess: recordProcess(child.pid, true) };
+    } catch (error) {
+      if (!processExists(child.pid)) return { launcher: 'exec', pid: child.pid };
+      // This PID came directly from our spawn, before it is exposed as a run.
+      try { process.kill(-child.pid, 'SIGKILL'); } catch { /* launch already exited */ }
+      throw error;
+    }
   } finally { closeSync(log); }
 }
 
@@ -355,7 +363,7 @@ export async function spawn(options: SpawnOptions): Promise<RunMeta> {
     ...(current.herdr ? { herdr: { ...launched.herdr, ...current.herdr } } : {}),
   })) ?? { ...run, ...launched };
   if (live.state === 'stopped') {
-    if (live.pid) { try { process.kill(-live.pid, 'SIGTERM'); } catch { /* already exited */ } }
+    if (live.ownedProcess) await terminateOwnedTree(live.ownedProcess);
     if (live.bgId) { try { execFileSync('claude', ['stop', live.bgId], { env: hostEnv(live.launch?.env), stdio: 'ignore', timeout: 20_000 }); } catch { /* cleanup retry via crew stop */ } }
     if (live.herdr && !live.herdr.closed) {
       if (closePane(live.herdr.pane, live.herdr.session)) updateRun(live.id, current => current.herdr ? { ...current, herdr: { ...current.herdr, closed: true } } : undefined);

@@ -50,6 +50,75 @@ export function processMatches(handle: OwnedProcess): boolean {
     return live.start === handle.start && live.fingerprint === handle.fingerprint;
   } catch (error) { if (!processExists(handle.pid)) return false; throw error; }
 }
+
+/** Cancel an exec worker including tool shells that started their own process groups. */
+export async function terminateOwnedTree(handle: OwnedProcess): Promise<void> {
+  if (!handle.group || process.platform === 'win32') throw new Error('Exec cancellation requires verified process-group ownership.');
+  const members = groupMembers(handle.pid);
+  if (!members.length) return;
+  if (processExists(handle.pid)) {
+    if (!processMatches(handle)) throw new Error('Provider process ownership changed. Refusing to stop an unrelated process.');
+  } else if (!handle.members?.some(member => members.includes(member.pid) && processMatches({ ...member, group: false }))) {
+    throw new Error('Provider wrapper exited with an unverified live process group. Stop requires its original owner.');
+  }
+  const frozen = new Map<number, OwnedProcess>();
+  const resumable = new Set<number>();
+  const signal = (owned: OwnedProcess, value: NodeJS.Signals): void => {
+    if (!processExists(owned.pid)) return;
+    if (!processMatches(owned)) throw new Error('Descendant process ownership changed. Refusing to signal a recycled PID.');
+    try { process.kill(owned.pid, value); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+  };
+  try {
+    // Freeze before walking PPIDs: no captured parent may fork or orphan a tool
+    // between its snapshot and cancellation. Detached descendants are frozen in
+    // turn, then a fresh snapshot closes their own in-flight spawn races.
+    process.kill(-handle.pid, 'SIGSTOP');
+    for (let pass = 0; ; pass++) {
+      const rows = execFileSync('ps', ['-ax', '-o', 'pid=', '-o', 'ppid=', '-o', 'pgid=', '-o', 'stat='], { encoding: 'utf8', timeout: 2000 })
+        .trim().split('\n').map(line => {
+          const [pid, parent, group, state] = line.trim().split(/\s+/);
+          return { pid: Number(pid), parent: Number(parent), group: Number(group), state: state ?? '' };
+        }).filter(row => !row.state.startsWith('Z'));
+      let found = false;
+      for (const row of rows) {
+        if (frozen.has(row.pid) || (row.group !== handle.pid && !frozen.has(row.parent))) continue;
+        if (row.pid <= 1 || row.pid === process.pid) throw new Error('Invalid descendant ownership during cancellation.');
+        let owned: OwnedProcess;
+        try { owned = { pid: row.pid, group: false, ...stamp(row.pid) }; }
+        catch (error) { if (!processExists(row.pid)) continue; throw error; }
+        frozen.set(row.pid, owned);
+        // Original group members were stopped above; restore them on a failed
+        // cancellation as well, rather than strand a partially frozen worker.
+        if (row.group === handle.pid || !row.state.includes('T')) resumable.add(row.pid);
+        signal(owned, 'SIGSTOP');
+        found = true;
+      }
+      if (!found) break;
+      if (pass >= 31) throw new Error('Owned process tree did not stabilize for cancellation.');
+    }
+    // Hard-stop the frozen tree. TERM plus CONT lets a handler spawn a new
+    // detached process before exiting, recreating the same orphan race.
+    for (const owned of [...frozen.values()].reverse()) signal(owned, 'SIGKILL');
+    const deadline = Date.now() + 4000;
+    while ([...frozen.values()].some(owned => processExists(owned.pid) && processMatches(owned))) {
+      if (Date.now() >= deadline) throw new Error('Owned process descendants did not stop; retry cancellation.');
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  } finally {
+    for (const pid of resumable) {
+      const owned = frozen.get(pid)!;
+      try { if (processExists(pid) && processMatches(owned)) process.kill(pid, 'SIGCONT'); }
+      catch { /* Ownership may have exited while cancellation was completing. */ }
+    }
+    try {
+      const remaining = groupMembers(handle.pid);
+      if (remaining.length && (processMatches(handle) || handle.members?.some(member => remaining.includes(member.pid) && processMatches({ ...member, group: false })))) {
+        process.kill(-handle.pid, 'SIGCONT');
+      }
+    } catch { /* Never resume a group whose ownership can no longer be proved. */ }
+  }
+}
 /** Explicit recovery may stop the recorded orphan, never an unrelated recycled PID. */
 export async function terminateOwnedProcess(handle: OwnedProcess): Promise<void> {
   if (!handle.group && process.platform !== 'win32') throw new Error('Legacy provider ownership lacks an owned process group. Close it through its original supervisor; recovery is blocked to avoid orphaned native hosts.');
