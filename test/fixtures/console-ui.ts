@@ -21,7 +21,13 @@ const snapshot: DashboardSnapshot = {nodes:[
 {id:'checker',parentId:'core',workstreamId:'managed-root',name:'delivery-checker',role:'checker',host:'codex',cwd:'/fixture/crew',state:'idle',waitingSince:at,createdAt:at,updatedAt:at,assignment:{id:'assignment-1',revision:1,createdAt:at,status:'accepted',submissions:[{ref:'submission-1',hash:'fixture',packetHash:'fixture-packet',revision:1,at,status:'PASS',result:'PASS: synthetic delivery proof',accepted:{submission:'submission-1',at,by:'parent'}}],accepted:{at,by:'parent',submission:'submission-1'}}},
 {id:'external-root',workstreamId:'external-root',name:'Library cleanup',role:'root',host:'claude',cwd:'/fixture/library',state:'untracked',createdAt:at,updatedAt:at}],workstreams:[{id:'managed-root',name:'Ship the Crew console',project:'crew',runs:3,running:2,attention:1,updatedAt:at},{id:'external-root',name:'Library cleanup',project:'library',runs:0,running:0,attention:0,updatedAt:at}],warnings:[]};
 const bootstrap: ConsoleBootstrap = {token:'synthetic-capability',providers:[{id:'codex',label:'Codex',available:true,defaultModel:'gpt-test',models:[{id:'gpt-test',label:'GPT fixture',efforts:['low','high']}],capabilities:capabilities as ConsoleSession['capabilities']},{id:'claude',label:'Claude Code',available:true,models:[{id:'claude-test',label:'Claude fixture'}],capabilities:{...capabilities,activeInput:'queue',accessModes:['default','full']} as ConsoleSession['capabilities']}],projects:[{cwd:'/fixture/crew',name:'Crew fixture'}],sessions};
-const receipts = new Map<string,{body:string;result:ConsoleMutation}>();
+// Fixture-local child contract mirrors the public API without importing a provider.
+const children = ['core','ui','checker'].map((runId,i)=>({runId,rootSessionId:'session-1',title:['console-core','console-ui','delivery-checker'][i]!,role:i===2?'checker':'advisor',host:i===1?'claude':'codex',model:'fixture-model',effort:'high',cwd:'/fixture/crew/'+('long-project-directory/'.repeat(6)),keep:true,managed:i!==2,state:'running' as ConsoleSession['state'],runState:i===2?'idle':'running',assignmentState:'active',revision:1,capabilities:{...capabilities,...(i===2?{interrupt:false,approvals:false,questions:false}:{})},pendingRequests:0}));
+const childDetails=new Map(children.map(child=>[child.runId,{child,events:[{id:'child-prose',sequence:1,at,kind:'assistant',text:'# Delivery evidence\n\nThe **member** owns this check. Use `crew inbox`.\n\n- Stable stream identity\n- Scoped approval\n\n| Claim | Proof |\n| --- | --- |\n| Delivery | fixture |\n\n```ts\nconst state = "running";\n```',streaming:true},{id:'child-tool',sequence:2,at,kind:'tool',title:'Verify request delivery',text:'{"path":"/fixture/crew","state":"completed"}',state:'completed'}] as ConsoleEvent[],requests:[] as ConsoleDetail['requests'],commands:[] as NonNullable<ConsoleDetail['commands']>}]));
+const observedEvents=[{id:'output',at,kind:'tool',title:'Verification',text:'Fixture output <script>window.injected=true</script>\nState remains private. No inbox consumed.'},{id:'observed-prose',at,kind:'message',title:'Agent',text:'# Member progress\n\nReviewed **delivery**.\n\n- one\n- two'}];
+const team=()=>({sessionId:'session-1',children,pendingRequests:[...childDetails.values()].flatMap(d=>d.requests.map(request=>({runId:d.child.runId,request})))});
+type ChildMutation = {child:(typeof children)[number];command:NonNullable<ConsoleDetail['commands']>[number]};
+const receipts = new Map<string,{body:string;result:ConsoleMutation | ChildMutation}>();
 const requests: {path:string;body:Record<string,unknown>;origin:string|undefined;token:boolean}[] = [];
 const clients = new Map<import('node:http').ServerResponse, URL>();
 let observerOnly = false, failNext = '', launchNumber = 1;
@@ -37,15 +43,37 @@ const server = createServer(async (req,res) => {
    const d = details.get(String(body.session || 'session-1'))!;
    if (body.state) {d.session.state = body.state as ConsoleSession['state'];d.session.revision++;}
    if (body.requests) d.requests = body.requests as ConsoleDetail['requests'];
+   const cd=childDetails.get(String(body.child || 'core'))!;
+   if(body.childRequests){cd.requests=body.childRequests as ConsoleDetail['requests'];cd.child.pendingRequests=cd.requests.length;cd.child.revision++;}
+   if(body.childState){cd.child.state=body.childState as ConsoleSession['state'];cd.child.revision++;}
+   if(body.childStreaming!==undefined){const e=cd.events[0];if(e?.kind==='assistant')e.text=String(body.childStreaming);}
+   if(body.childEvent)cd.events.push(body.childEvent as ConsoleEvent);
+   if(body.observedEvents)observedEvents.splice(0,observedEvents.length,...body.observedEvents as typeof observedEvents);
    if (body.event) d.events.push(body.event as ConsoleEvent);
    if (body.streaming !== undefined) { const e=d.events.find(e=>e.id==='stream-1');if(e?.kind==='assistant'){e.text=String(body.streaming);e.streaming=false;} }
    d.session.pendingRequests=d.requests.length;publish();return json(200,{fixture:true,requests});
   }
   requests.push({path:url.pathname,body,origin:req.headers.origin,token:req.headers['x-crew-token']===bootstrap.token});
   if(req.headers['x-crew-token']!==bootstrap.token || req.headers.origin!==origin)return json(403,{error:'Fixture origin or capability rejected',code:'FORBIDDEN'});
-  if (failNext) {const failure=failNext;failNext='';if(failure==='transport'){res.destroy();return;}if(failure==='server')return json(503,{error:'Synthetic uncertain delivery'});return json(400,{error:'Synthetic rejection',code:'INVALID_INPUT'});}
+  if (failNext) {const failure=failNext;failNext='';if(failure==='transport'){res.destroy();return;}if(failure==='server')return json(503,{error:'Synthetic uncertain delivery'});if(failure==='stale')return json(409,{error:'Request is no longer pending',code:'STALE_REQUEST'});return json(400,{error:'Synthetic rejection',code:'INVALID_INPUT'});}
   const old=receipts.get(String(body.requestId));
   if(old)return json(old.body===text?200:409,old.body===text?old.result:{error:'Request ID conflict',code:'REQUEST_ID_CONFLICT'});
+  const childRoute=/^\/api\/console\/sessions\/([^/]+)\/children\/([^/]+)\/(actions|answers)$/.exec(url.pathname);
+  if(childRoute){
+   const d=childDetails.get(childRoute[2]!);if(!d || !d.child.managed)return json(409,{error:'No console control connection',code:'CHILD_UNMANAGED'});
+   if(childRoute[3]==='actions'){
+    if(body.revision!==d.child.revision)return json(409,{error:'Member state changed. Refresh before acting.',code:'STALE_REVISION'});
+    d.child.state=body.action==='interrupt'?'interrupted':body.action==='stop'?'closed':'idle';
+   }else{
+    const request=d.requests.find(r=>r.id===body.pendingRequestId);
+    if(!request)return json(409,{error:'Request is no longer pending',code:'STALE_REQUEST'});
+    if(request.kind==='approval' && !request.options.some(o=>o.id===body.option))return json(400,{error:'Invalid approval option',code:'INVALID_INPUT'});
+    if(request.kind==='question' && request.questions.some(q=>!(body.answers as Record<string,unknown>)?.[q.id]))return json(400,{error:'Missing answer',code:'INVALID_INPUT'});
+    d.requests=d.requests.filter(r=>r.id!==body.pendingRequestId);d.child.pendingRequests=d.requests.length;
+   }
+   d.child.revision++;const result={child:d.child,command:{requestId:String(body.requestId),state:'delivered' as const}};d.commands.push(result.command);
+   receipts.set(String(body.requestId),{body:text,result});publish();return json(200,result);
+  }
   let s=sessions.find(s=>url.pathname.includes('/'+s.id+'/'));
   if(url.pathname==='/api/console/sessions'){
    const id='launched-'+(++launchNumber);s={...sessions[0]!,id,title:String(body.title||'New console session'),cwd:String(body.cwd),host:body.host as ConsoleSession['host'],mode:body.mode as ConsoleSession['mode'],model:String(body.model||''),access:body.access as ConsoleSession['access'],rootNodeId:'root-'+id,state:'running',capabilities:bootstrap.providers.find(p=>p.id===body.host)!.capabilities};sessions.unshift(s);
@@ -62,6 +90,10 @@ const server = createServer(async (req,res) => {
  }
  if(url.pathname==='/fixture')return json(200,{fixture:true,requests});
  if(url.pathname==='/api/console')return json(observerOnly?404:200,observerOnly?{error:'Observer only'}:bootstrap);
+ if(url.pathname==='/api/console/sessions/session-1/team')return json(200,team());
+ if(/^\/api\/console\/sessions\/[^/]+\/team$/.test(url.pathname))return json(200,{sessionId:url.pathname.split('/')[4],children:[],pendingRequests:[]});
+ const childRead=/^\/api\/console\/sessions\/session-1\/children\/([^/]+)$/.exec(url.pathname);
+ if(childRead){const d=childDetails.get(childRead[1]!);return json(d?200:404,d || {error:'No child'});}
  if(url.pathname.startsWith('/api/console/sessions/')){
   const d=details.get(url.pathname.split('/').at(-1)!);if(!d)return json(404,{error:'Not found'});
   const limit=Number(url.searchParams.get('before')||d.events.length),begin=Math.max(0,limit-12);
@@ -70,11 +102,11 @@ const server = createServer(async (req,res) => {
  if(url.pathname==='/api/events'){
   res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache','Connection':'keep-alive'});clients.set(res,url);publish();req.on('close',()=>clients.delete(res));return;
  }
- const assets=new Map([['/','dashboard.html'],['/dashboard.js','dashboard.js'],['/dashboard.css','dashboard.css']]);
+ const assets=new Map([['/','dashboard.html'],['/dashboard.js','dashboard.js'],['/dashboard.css','dashboard.css'],['/stream-format.js','stream-format.js']]);
  const asset=assets.get(url.pathname);if(!asset)return json(404,{error:'Not found'});
  res.writeHead(200,{'Content-Type':asset.endsWith('js')?'text/javascript':asset.endsWith('css')?'text/css':'text/html'});res.end(readFileSync(new URL('../../web/'+asset,import.meta.url)));
 });
 let origin='';
-function publish(){for(const [res,url] of clients){const d=details.get(url.searchParams.get('session')||'');const id=url.searchParams.get('node')||'';res.write('event: update\ndata: '+JSON.stringify({snapshot,detail:id?{id,source:'exec-log',updatedAt:at,truncated:false,events:[{id:'output',at,kind:'tool',title:'Verification',text:'Fixture output <script>window.injected=true</script>\nState remains private. No inbox consumed.'}],packet:'Outcome: prove delivery semantics.\nScope: synthetic fixture only.',result:'PASS: fixture submission',messages:[{at,from:'parent',kind:'message',text:'Verify the failure path.'}],warnings:[]}:null,...(!observerOnly?{console:{sessions,detail:d?{...d,events:d.events.slice(-12),...(d.events.length>12?{before:String(d.events.length-12)}:{})}:null}}:{})})+'\n\n');}}
+function publish(){for(const [res,url] of clients){const d=details.get(url.searchParams.get('session')||'');const id=url.searchParams.get('node')||'';const cd=childDetails.get(url.searchParams.get('run')||'');res.write('event: update\ndata: '+JSON.stringify({snapshot,detail:id?{id,source:'exec-log',updatedAt:at,truncated:false,events:observedEvents,packet:'# Mission\n\nOutcome: prove **delivery** semantics.\n\n- Synthetic fixture only',result:'# Status\n\nPASS: fixture submission\n\n## Evidence\n\nUse `submission-1`.',messages:[{at,from:'parent',kind:'message',text:'Verify the failure path.'}],warnings:[]}:null,...(!observerOnly?{console:{sessions,team:d?.session.id==='session-1'?team():null,childDetail:cd || null,detail:d?{...d,events:d.events.slice(-12),...(d.events.length>12?{before:String(d.events.length-12)}:{})}:null}}:{})})+'\n\n');}}
 server.listen(Number(process.env.CONSOLE_FIXTURE_PORT || 0),'127.0.0.1',()=>{const address=server.address();if(!address||typeof address==='string')throw new Error('No address');origin='http://127.0.0.1:'+address.port;console.log(origin);});
 for(const signal of ['SIGTERM','SIGINT'] as const)process.on(signal,()=>{for(const res of clients.keys())res.end();server.close();});

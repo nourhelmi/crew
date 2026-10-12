@@ -1,4 +1,5 @@
 // @ts-check
+import { renderProse, prettyOutput } from './stream-format.js';
 /** @typedef {import('../src/dashboard-observe.ts').DashboardSnapshot} Snapshot */
 /** @typedef {import('../src/dashboard-observe.ts').DashboardNode} Node */
 /** @typedef {import('../src/dashboard-observe.ts').DashboardDetail} Detail */
@@ -9,7 +10,7 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;',
 let snapshot = { nodes: [], workstreams: [], warnings: [] };
 /** @type {Detail | null} */
 let detail = null;
-const state = { stream: '', node: '', session: '', tab: ['output','activity','packet','result','messages'].includes(new URLSearchParams(location.search).get('view')) ? new URLSearchParams(location.search).get('view') : 'output', expanded: false, follow: true, query: '', conversationFollow: true };
+const state = { stream: '', node: '', session: '', tab: ['output','activity','packet','result','messages'].includes(new URLSearchParams(location.search).get('view')) ? new URLSearchParams(location.search).get('view') : 'output', expanded: false, follow: true, query: '', conversationFollow: true, rawOutput: false };
 let events;
 let detailHash = '';
 let snapshotHash = '';
@@ -26,8 +27,8 @@ const elapsed = at => {
   return m < 1 ? 'Just now' : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.floor(m/60)}h ago` : `${Math.floor(m/1440)}d ago`;
 };
 const time = at => at && Number.isFinite(Date.parse(at)) ? new Date(at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
-const status = n => n.consoleState ? ({starting:'Starting',running:'Running',idle:'Idle',waiting:'Needs your answer',interrupted:'Interrupted',disconnected:'Disconnected',failed:'Failed',closed:'Closed'}[n.consoleState] || n.consoleState) : n.waitingSince ? 'Needs attention' : ({idle:n.assignment?.status === 'accepted' ? 'Idle · accepted' : n.assignment?.status === 'submitted' ? 'Idle · submitted' : 'Retained idle',running:'Running',done:'Result ready',blocked:'Blocked',failed:'Failed',stalled:'Stalled',stopped:'Stopped',untracked:'Root session'}[n.state] || n.state);
-const attention = n => n.waitingSince || ['blocked','failed','stalled'].includes(n.state);
+const status = n => team?.children.find(c=>c.runId===n.id)?.pendingRequests ? 'Needs your answer' : n.consoleState ? ({starting:'Starting',running:'Running',idle:'Idle',waiting:'Needs your answer',interrupted:'Interrupted',disconnected:'Disconnected',failed:'Failed',closed:'Closed'}[n.consoleState] || n.consoleState) : n.waitingSince ? 'Needs attention' : ({idle:n.assignment?.status === 'accepted' ? 'Idle · accepted' : n.assignment?.status === 'submitted' ? 'Idle · submitted' : 'Retained idle',running:'Running',done:'Result ready',blocked:'Blocked',failed:'Failed',stalled:'Stalled',stopped:'Stopped',untracked:'Root session'}[n.state] || n.state);
+const attention = n => team?.children.find(c=>c.runId===n.id)?.pendingRequests || n.waitingSince || ['blocked','failed','stalled'].includes(n.state);
 const badge = n => `<span class="cw-status ${attention(n) ? 'attention' : n.state === 'running' ? '' : 'waiting'}"><span class="cw-dot"></span>${esc(status(n))}</span>`;
 const host = n => `<span class="cw-host ${n.host==='claude' ? 'claude' : ''}" aria-label="${esc(hostName(n.host))}">${n.host==='claude' ? '✳' : n.host==='codex' ? '›_' : 'o'}</span>`;
 
@@ -41,7 +42,7 @@ function connect() {
   setConnection(false, 'Connecting…');
   const params = new URLSearchParams();
   if (state.node) params.set('node', state.node);
-  if (state.session) params.set('session', state.session);
+  if (state.session) {params.set('session', state.session);if(state.node && state.node!==selectedSession()?.rootNodeId)params.set('run',state.node);}
   const source = new EventSource('/api/events' + (params.size ? '?' + params : ''));
   events = source;
   source.onopen = () => { if (events === source) setConnection(true, '● Connected locally'); };
@@ -55,6 +56,10 @@ function connect() {
       snapshot = update.snapshot;
       if (update.console && bootstrap) {
         bootstrap.sessions = update.console.sessions;
+        const oldTeam=JSON.stringify(team);
+        team=update.console.team?.sessionId===state.session?update.console.team:null;
+        if(update.console.childDetail?.child.runId===state.node)acceptChildDetail(update.console.childDetail);
+        if(oldTeam!==JSON.stringify(team)){renderSnapshot();renderTeamRequests();renderMemberControls();}
         renderSessions();
         if (update.console.detail?.session.id === state.session) acceptConsoleDetail(update.console.detail);
         else renderSession();
@@ -81,9 +86,9 @@ function select(id) {
   const n = snapshot.nodes.find(n=>n.id===id);
   if(!n)return;
   state.node=n.id;state.stream=n.workstreamId;
-  detail=null;detailHash='';snapshotHash='';
+  detail=null;childDetail=null;detailHash='';snapshotHash='';childLoad++;
   const url=new URL(location.href);url.searchParams.set('run',id);history.replaceState(null,'',url);
-  renderSnapshot();renderDetail();if(!state.session)renderSession();connect();
+  renderSnapshot();renderDetail();renderMemberControls();if(!state.session)renderSession();connect();loadChildDetail();
 }
 
 function renderStreams() {
@@ -142,13 +147,14 @@ let inspectorSelection = '';
 function renderDetail() {
   const signature = state.node + '/' + state.tab;
   const preserve = signature === inspectorSelection;
-  const selectors = ['.cw-document','.cw-activity-list'];
+  const selectors = ['.cw-document','.cw-activity-list','#member-output'];
   const scrolls = preserve ? selectors.map(selector => el('details').querySelector(selector)?.scrollTop || 0) : [];
-  const expandedTools = preserve ? [...el('details').querySelectorAll('.cw-event details')].map(d => d.open) : [];
+  const expandedTools = preserve ? new Set([...el('details').querySelectorAll('[data-event] details[open]')].map(d => d.closest('[data-event]').dataset.event)) : new Set();
   renderDetailContent();
   if (preserve) {
     selectors.forEach((selector,i) => { const e = el('details').querySelector(selector); if(e)e.scrollTop = scrolls[i]; });
-    el('details').querySelectorAll('.cw-event details').forEach((d,i) => d.open = !!expandedTools[i]);
+    el('details').querySelectorAll('[data-event] details').forEach(d => d.open = expandedTools.has(d.closest('[data-event]').dataset.event));
+    const output=el('member-output'); if(output && state.follow)output.scrollTop=output.scrollHeight;
   }
   inspectorSelection = signature;
 }
@@ -159,29 +165,50 @@ function renderDetailContent() {
   el('stage').classList.toggle('cw-expanded',state.expanded && state.tab==='output');
   if(!n)return;
   if(!detail){el('details').innerHTML='<p class="cw-subtitle">Reading agent output…</p>';return;}
-  const old=el('terminal-text');
+  const old=el('member-output');
   const scroll=old?.scrollTop || 0;
-  const source=({'codex-session':'Codex transcript','claude-session':'Claude transcript','exec-log':'Captured process output',unavailable:'No output source'})[detail.source];
-  const freshness=detail.updatedAt?'Last write '+elapsed(detail.updatedAt):'No recorded output';
+  const managedOutput=childDetail?.child.runId===n.id?childDetail:null;
+  const publicEvents=managedOutput?managedOutput.events:detail.events;
+  const displayEvents=managedOutput?publicEvents:publicEvents.map(e=>({...e,kind:e.kind==='message'?'assistant':e.kind==='result'?'tool':e.kind,state:e.kind==='result'?'Output':e.kind==='tool'?'Recorded':undefined}));
+  const source=managedOutput?`${hostName(n.host)} managed public stream`:({'codex-session':'Codex transcript','claude-session':'Claude transcript','exec-log':'Captured process output',unavailable:'No output source'})[detail.source];
+  const freshness=managedOutput?'Last public event '+elapsed(publicEvents.at(-1)?.at):detail.updatedAt?'Last write '+elapsed(detail.updatedAt):'No recorded output';
   const warnings=detail.warnings.length?`<p class="cw-detail-warning">${esc(detail.warnings.join(' '))}</p>`:'';
   if(state.tab==='output') {
-    const raw=detail.events.map(e=>`${e.at?'['+time(e.at)+'] ':''}${e.title}\n${e.text}`).join('\n\n');
+    const raw=publicEvents.map(e=>`${e.at?'['+time(e.at)+'] ':''}${e.title || e.kind}\n${e.text}`).join('\n\n');
     const bounded=raw.length>100_000 ? '[Earlier output omitted]\n'+raw.slice(-100_000) : raw;
-    el('details').innerHTML=warnings+`<div class="cw-output-toolbar"><span>${esc(source)}</span><button type="button" data-expand class="cw-output-action">${state.expanded?'↙ Back to crew':'↗ Expand'}</button></div><div class="cw-terminal"><div class="cw-terminal-brand"><span>${esc(hostName(n.host))} / ${esc(n.role)}</span><span>Read only</span></div><pre id="terminal-text" aria-label="Agent output">${esc(bounded || (detail.source==='unavailable'?'No saved transcript or captured output was found for this session. Existing agents are not restarted or attached to obtain output.':'Waiting for public messages or tool output.'))}</pre><div class="cw-terminal-end">${esc(freshness)}${detail.truncated?' · Recent output only':''}</div></div><div class="cw-output-controls"><button type="button" class="cw-play" data-follow aria-pressed="${state.follow}">${state.follow?'↓ Following output':'↓ Follow output'}</button><span class="cw-replay-status">Public transcript · not a TUI screen</span></div>`;
-    const terminal=el('terminal-text');
-    terminal.scrollTop=state.follow ? terminal.scrollHeight : scroll;
-    terminal.addEventListener('scroll',()=>{
-      if(terminal.scrollHeight-terminal.clientHeight-terminal.scrollTop>30 && state.follow){state.follow=false;const b=root.querySelector('[data-follow]');b.textContent='↓ Follow output';b.setAttribute('aria-pressed','false');}
-    },{passive:true});
+    const rows=publicEvents.slice(-150);
+    const short=(managedOutput?!!managedOutput.before:detail.truncated) || publicEvents.length>rows.length || raw.length>100_000;
+    const toolbar=`<div class="cw-output-toolbar"><span>${esc(source)}</span><div><button type="button" data-raw-output class="cw-output-action" aria-pressed="${state.rawOutput}">${state.rawOutput?'Readable view':'Raw view'}</button><button type="button" data-expand class="cw-output-action">${state.expanded?'↙ Back to crew':'↗ Expand'}</button></div></div>`;
+    const empty=detail.source==='unavailable'?'No saved transcript or captured output was found for this session. Existing agents are not restarted or attached to obtain output.':'Waiting for public messages or tool output.';
+    const signature=state.node+'/'+state.rawOutput;
+    let output=el('member-output');
+    if(!output || output.dataset.selection!==signature) {
+      el('details').innerHTML=warnings+toolbar+`<div id="member-output" class="cw-member-output" tabindex="0" aria-label="Agent output" data-selection="${esc(signature)}"></div><p class="cw-source-note" id="output-freshness"></p><div class="cw-output-controls"><button type="button" class="cw-play" data-follow aria-pressed="${state.follow}">${state.follow?'↓ Following output':'↓ Follow output'}</button><span class="cw-replay-status">Public transcript · read only</span></div>`;
+      output=el('member-output');
+      output.addEventListener('scroll',()=>{
+        if(output.scrollHeight-output.clientHeight-output.scrollTop>30 && state.follow){state.follow=false;const b=root.querySelector('[data-follow]');b.textContent='↓ Follow output';b.setAttribute('aria-pressed','false');}
+      },{passive:true});
+    } else {
+      el('details').querySelector('.cw-output-toolbar').outerHTML=toolbar;
+      const warning=el('details').querySelector('.cw-detail-warning');
+      if(warning)warning.remove();
+      if(warnings)el('details').insertAdjacentHTML('afterbegin',warnings);
+    }
+    if(state.rawOutput) output.innerHTML=`<pre id="terminal-text" class="cw-code">${esc(bounded || empty)}</pre>`;
+    else syncStream(output,displayEvents.slice(-150),n.name,empty);
+    el('output-freshness').textContent=freshness+(short?' · Recent output only':'');
+    const follow=root.querySelector('[data-follow]');follow.textContent=state.follow?'↓ Following output':'↓ Follow output';follow.setAttribute('aria-pressed',String(state.follow));
+    output.scrollTop=state.follow ? output.scrollHeight : scroll;
   } else if(state.tab==='activity') {
-    el('details').innerHTML=warnings+`<p class="cw-source-note">${esc(source)} · ${esc(freshness)}</p><div class="cw-activity-list">${detail.events.length?detail.events.slice(-35).reverse().map(e=>`<div class="cw-event"><span class="cw-time">${esc(e.at?time(e.at):e.kind)}</span><strong>${esc(e.title)}</strong>${e.kind==='message'?`<p>${esc(e.text)}</p>`:`<details><summary>Show ${esc(e.kind==='result'?'output':'details')}</summary><pre class="cw-code">${esc(e.text)}</pre></details>`}</div>`).join(''):'<p class="cw-subtitle">No public activity recorded yet.</p>'}</div>`;
+    el('details').innerHTML=warnings+`<p class="cw-source-note">${esc(source)} · ${esc(freshness)} · Latest 35 events</p><div class="cw-activity-list"></div>`;
+    syncStream(el('details').querySelector('.cw-activity-list'),displayEvents.slice(-35).reverse(),n.name,'No public activity recorded yet.');
   } else if(state.tab==='messages') {
     el('details').innerHTML=warnings+'<p class="cw-source-note">Mail history · reading here does not consume it.</p>'+(detail.messages.length?detail.messages.slice().reverse().map(m=>`<div class="cw-event"><span class="cw-time">${esc(time(m.at))} · ${esc(m.kind)}</span><strong>${esc(m.from)}</strong><p>${esc(m.text)}</p></div>`).join(''):'<div class="cw-empty"><h3>No messages yet</h3><p>Messages received by this agent will appear here.</p></div>');
   } else {
     const value=detail[state.tab];
     const assignments = n?.assignment ? [...(n.assignmentHistory || []), n.assignment] : [];
     const history = state.tab === 'result' && assignments.length ? `<div class="cw-source-note">${assignments.map(a => `<p>Assignment ${esc(a.id)} · revision ${esc(a.revision)} · ${esc(a.status)}${a.accepted ? ` · accepted by ${esc(a.accepted.by)}` : ''}</p>${a.submissions.map(s => `<p>Submission ${esc(s.ref)}${s.accepted ? ' · accepted by '+esc(s.accepted.by)+' at '+esc(s.accepted.at) : ''}<br>Revision ${esc(s.revision)} · ${esc(s.status)}<br><code>${esc(s.hash)}</code><br><code>${esc(s.result)}</code></p>`).join('')}`).join('')}</div>` : '';
-    el('details').innerHTML=warnings+history+(value?`<pre class="cw-document">${esc(value)}</pre>`:`<div class="cw-empty"><h3>${state.tab==='packet'?'No Crew packet':'No result yet'}</h3><p>${state.tab==='packet'?'Root sessions receive their instructions in the host app. Select a Crew member to inspect its packet.':'The agent’s recorded result will appear here when it writes one.'}</p></div>`);
+    el('details').innerHTML=warnings+history+(value?`<div class="cw-document cw-prose">${renderProse(value)}</div>`:`<div class="cw-empty"><h3>${state.tab==='packet'?'No Crew packet':'No result yet'}</h3><p>${state.tab==='packet'?'Root sessions receive their instructions in the host app. Select a Crew member to inspect its packet.':'The agent’s recorded result will appear here when it writes one.'}</p></div>`);
   }
 }
 
@@ -189,7 +216,7 @@ root.addEventListener('click',event=>{
   const b=event.target.closest('button');if(!b)return;
   if(b.dataset.node){select(b.dataset.node);return;}
   if(b.dataset.stream){
-    state.session='';consoleDetail=null;updateSelectionUrl();renderSession();
+    state.session='';consoleDetail=null;team=null;childDetail=null;renderTeamRequests();renderMemberControls();updateSelectionUrl();renderSession();
     state.expanded=false;
     const id=snapshot.nodes.find(n=>n.workstreamId===b.dataset.stream && n.role!=='root' && n.state==='running')?.id || b.dataset.stream;
     select(id);return;
@@ -197,6 +224,7 @@ root.addEventListener('click',event=>{
   if(b.dataset.tab){state.tab=b.dataset.tab;const url=new URL(location.href);url.searchParams.set('view',state.tab);history.replaceState(null,'',url);}
   else if(b.hasAttribute('data-expand'))state.expanded=!state.expanded;
   else if(b.hasAttribute('data-follow'))state.follow=!state.follow;
+  else if(b.hasAttribute('data-raw-output'))state.rawOutput=!state.rawOutput;
   else return;
   const focus=b.hasAttribute('data-expand')?'[data-expand]':b.hasAttribute('data-follow')?'[data-follow]':null;
   renderDetail();if(focus)root.querySelector(focus)?.focus({preventScroll:true});
@@ -209,6 +237,10 @@ window.addEventListener('pageshow',event=>{if(event.persisted)connect();});
 let bootstrap = null;
 /** @type {import('../src/console-types.ts').ConsoleDetail | null} */
 let consoleDetail = null;
+let team = null;
+let childDetail = null;
+let childLoad = 0;
+let childActionBusy = false;
 let capability = 'loading';
 let loadingHistory = false;
 let sessionLoading = false;
@@ -217,7 +249,7 @@ let launchPending = null;
 let actionBusy = false;
 const historyBySession = new Map();
 const historyCursor = new Map();
-const commandLabels = {queued:'Queued · waiting for the current turn', delivered:'Delivered to the root', failed:'Failed', uncertain:'Delivery uncertain · check before sending again', sending:'Sending…'};
+const commandLabels = {queued:'Queued · waiting for the current turn', delivered:'Delivered', failed:'Failed', uncertain:'Delivery uncertain · check before sending again', sending:'Sending…'};
 const storage = {
   get(key, fallback = '') { try { return sessionStorage.getItem('crew-console:' + key) ?? fallback; } catch { return fallback; } },
   set(key, value) { try { sessionStorage.setItem('crew-console:' + key, value); } catch { /* Private browsing can deny storage. Current drafts remain in the page. */ } }
@@ -311,13 +343,13 @@ async function selectSession(id) {
   state.node = priorSession === id && snapshot.nodes.some(n => n.id === priorNode && n.workstreamId === s.rootNodeId) ? priorNode : (!snapshot.nodes.length && wanted && new URLSearchParams(location.search).get('session') === id ? wanted : s.rootNodeId);
   wanted = '';
   state.expanded = false; state.conversationFollow = true;
-  consoleDetail = null; detail = null; detailHash = ''; snapshotHash = ''; setError('console-error', '');
+  consoleDetail = null; team=null;childDetail=null;childLoad++;renderTeamRequests();renderMemberControls();detail = null; detailHash = ''; snapshotHash = ''; setError('console-error', '');
   sessionLoading = true;
   el('message').value = drafts.get(id) ?? storage.get('draft:' + id);
   el('conversation').replaceChildren(); el('requests').replaceChildren();
   updateSelectionUrl(); renderSessions(); renderSession(); renderSnapshot(); renderDetail(); connect();
   const load = ++consoleLoad;
-  try { const d = await api(`/api/console/sessions/${encodeURIComponent(id)}`); if (load === consoleLoad && state.session === id) { sessionLoading = false; acceptConsoleDetail(d); } }
+  try { const [d,t] = await Promise.all([api(`/api/console/sessions/${encodeURIComponent(id)}`),api(`/api/console/sessions/${encodeURIComponent(id)}/team`)]); if (load === consoleLoad && state.session === id) { team=t;sessionLoading = false; acceptConsoleDetail(d);renderSnapshot();renderTeamRequests();renderMemberControls();loadChildDetail(); } }
   catch (error) { if (load === consoleLoad) { sessionLoading = false; setError('console-error', error.message); renderSession(); } }
 }
 
@@ -339,7 +371,7 @@ function renderSession() {
   el('conversation-meta').textContent = s ? `${s.model || 'Host default'}${s.effort ? ' · ' + s.effort : ''} · ${s.cwd}` : state.stream ? 'Observe the team here. Talk to this root in its host app.' : 'Launch a root. Talk here. Follow the whole team alongside it.';
   el('session-state').textContent = s ? `${s.state}${s.pendingRequests ? ' · needs your answer' : ''}` : '';
   el('older').hidden = !s || !consoleDetail?.before;
-  el('older').disabled = loadingHistory;
+  el('older').disabled = loadingHistory || (historyBySession.get(state.session)?.size || 0)>=500;
   if (!s) {
     el('requests').replaceChildren(); el('outbox').replaceChildren(); el('session-actions').replaceChildren();
     if (state.stream) el('conversation').innerHTML = '<div class="cw-welcome"><span class="cw-welcome-mark" aria-hidden="true">↗</span><h2>Following an external root.</h2><p>This workstream was launched outside the console. Select a member in the team pane to inspect its output, mission, result, and mail.</p></div>';
@@ -368,6 +400,7 @@ function acceptConsoleDetail(next) {
   if (index >= 0) bootstrap.sessions[index] = next.session; else bootstrap.sessions.unshift(next.session);
   const cache = historyBySession.get(state.session) || new Map();
   for (const event of next.events) cache.set(event.id, event);
+  if(cache.size>500)for(const e of [...cache.values()].sort((a,b)=>a.sequence-b.sequence).slice(0,cache.size-500))cache.delete(e.id);
   historyBySession.set(state.session, cache);
   if (!historyCursor.has(state.session)) historyCursor.set(state.session, next.before);
   consoleDetail = {...next, before:historyCursor.get(state.session)};
@@ -382,53 +415,69 @@ function acceptConsoleDetail(next) {
   renderSession(); renderSessions(); renderConversation(); renderRequests();
 }
 
-function renderConversation() {
-  if (!consoleDetail) return;
-  const thread = el('conversation');
-  const scroll = thread.scrollTop, height = thread.scrollHeight;
-  const cached = historyBySession.get(state.session);
-  const rows = [...cached.values()].sort((a,b) => a.sequence - b.sequence);
-  if (!rows.length) { thread.innerHTML = '<p class="cw-subtitle">Waiting for the root’s first message…</p>'; return; }
-  thread.querySelectorAll(':scope > :not([data-event])').forEach(e => e.remove());
-  const existing = new Map([...thread.children].map(e => [e.dataset.event,e]));
-  for (const event of rows) {
-    let item = existing.get(event.id);
-    if (!item) { item = document.createElement('article'); item.dataset.event = event.id; }
-    let html;
-    if (event.kind === 'tool') {
-      item.className = 'cw-tool';
-      const opened = item.querySelector('details')?.open;
-      html = `<details ${opened ? 'open' : ''}><summary>${esc(event.title)} <span class="cw-tool-state">· ${esc(event.state)}</span></summary><pre>${esc(event.text)}</pre></details>`;
-    } else if (event.kind === 'status') {
-      item.className = 'cw-status-event'; html = esc(event.text);
-    } else {
-      item.className = 'cw-message cw-' + event.kind;
-      html = `<div class="cw-message-header"><strong>${event.kind === 'user' ? 'You' : 'Root'}</strong><time datetime="${esc(event.at)}">${esc(time(event.at))}</time>${event.streaming ? '<span class="cw-streaming">Writing…</span>' : ''}</div><div class="cw-message-text">${esc(event.text)}</div>${event.command ? `<div class="cw-delivery">${esc(commandLabels[event.command.state])}${event.command.error ? ' · ' + esc(event.command.error) : ''}</div>` : ''}`;
-    }
-    if (item._html !== html) { item.innerHTML = html; item._html = html; }
-    // Insert only new nodes or out-of-order history; existing selection and tool expansion survive updates.
-    if (!item.isConnected) {
-      const successor = [...thread.children].find(e => (cached.get(e.dataset.event)?.sequence ?? Infinity) > event.sequence);
-      thread.insertBefore(item, successor || null);
-    }
-  }
-  if (loadingHistory) thread.scrollTop = scroll + thread.scrollHeight - height;
-  else thread.scrollTop = state.conversationFollow ? thread.scrollHeight : scroll;
-  el('follow-conversation').hidden = state.conversationFollow;
+function streamHtml(event, speaker, opened) {
+  if(event.kind==='tool') return `<details ${opened?'open':''}><summary>${esc(event.title || 'Tool')} <span class="cw-tool-state">· ${esc(event.state || 'Recorded')}</span></summary><div class="cw-tool-actions"><button type="button" class="cw-text-button" data-copy-output>Copy output</button><span role="status"></span></div><pre>${esc(prettyOutput(event.text))}</pre></details>`;
+  if(event.kind==='status')return esc(event.text);
+  return `<div class="cw-message-header"><strong>${esc(event.kind==='user'?'You':speaker)}</strong><time datetime="${esc(event.at || '')}">${esc(time(event.at))}</time>${event.streaming?'<span class="cw-streaming">Writing…</span>':''}</div><div class="${event.kind==='user'?'cw-message-text':'cw-prose'}">${event.kind==='user'?esc(event.text):renderProse(event.text)}</div>${event.command?`<div class="cw-delivery">${esc(commandLabels[event.command.state])}${event.command.error?' · '+esc(event.command.error):''}</div>`:''}`;
 }
 
+function syncStream(container, rows, speaker, empty) {
+  const ids=new Set(rows.map(e=>e.id));
+  container.querySelectorAll(':scope > [data-event]').forEach(e=>{if(!ids.has(e.dataset.event))e.remove();});
+  if(!rows.length){container.innerHTML=`<p class="cw-subtitle">${esc(empty)}</p>`;return;}
+  container.querySelectorAll(':scope > :not([data-event])').forEach(e=>e.remove());
+  const existing=new Map([...container.children].map(e=>[e.dataset.event,e]));
+  for(const [index,event] of rows.entries()) {
+    let item=existing.get(event.id);
+    if(!item){item=document.createElement('article');item.dataset.event=event.id;}
+    item.className=event.kind==='tool'?'cw-tool':event.kind==='status'?'cw-status-event':'cw-message cw-'+event.kind;
+    const html=streamHtml(event,speaker,item.querySelector('details')?.open);
+    if(item._html!==html){item.innerHTML=html;item._html=html;}
+    if(container.children[index]!==item)container.insertBefore(item,container.children[index] || null);
+  }
+}
+
+function renderConversation() {
+  if(!consoleDetail)return;
+  const thread=el('conversation'),scroll=thread.scrollTop,height=thread.scrollHeight;
+  const cache=historyBySession.get(state.session);
+  const rows=[...cache.values()].sort((a,b)=>a.sequence-b.sequence);
+  syncStream(thread,rows,'Root','Waiting for the root’s first message…');
+  if(cache.size>=500)thread.insertAdjacentHTML('afterbegin','<p class="cw-source-note">Recent 500 messages shown. Reload to start a fresh history window.</p>');
+  if(loadingHistory)thread.scrollTop=scroll+thread.scrollHeight-height;
+  else thread.scrollTop=state.conversationFollow?thread.scrollHeight:scroll;
+  el('follow-conversation').hidden=state.conversationFollow;
+}
+
+root.addEventListener('click',async event=>{
+  const button=event.target.closest('[data-copy-output]');if(!button)return;
+  const output=button.closest('details').querySelector('pre').textContent;
+  const status=button.nextElementSibling;
+  try {await navigator.clipboard.writeText(output);status.textContent='Copied';}
+  catch {status.textContent='Copy unavailable. Select the output to copy.';}
+});
+
 function renderRequests() {
-  if (!consoleDetail) return;
-  const container = el('requests');
-  const ids = new Set(consoleDetail.requests.map(r => r.id));
+  if(!consoleDetail)return;
+  renderRequestCards(el('requests'),consoleDetail.requests,{sessionId:state.session,title:'Root'});
+}
+
+function targetPath(target) {return `/api/console/sessions/${encodeURIComponent(target.sessionId)}`+(target.runId?`/children/${encodeURIComponent(target.runId)}`:'');}
+
+function renderRequestCards(container, requests, target) {
+  const scope=target.sessionId+'/'+(target.runId || 'root');
+  if(container.dataset.scope!==scope){container.replaceChildren();container.dataset.scope=scope;}
+  const ids = new Set(requests.map(r => r.id));
   container.querySelectorAll('[data-request]').forEach(e => { if (!ids.has(e.dataset.request)) e.remove(); });
-  for (const r of consoleDetail.requests) {
+  for (const r of requests) {
     if ([...container.children].some(e => e.dataset.request === r.id)) continue;
     const card = document.createElement('form'); card.className = 'cw-request'; card.dataset.request = r.id;
-    const heading = `<div class="cw-eyebrow">${r.kind === 'approval' ? 'Approval needed' : 'Your input needed'}</div><h3>${esc(r.title)}</h3>`;
+    const heading = `<p class="cw-request-owner">${esc(target.title)}</p><div class="cw-eyebrow">${r.kind === 'approval' ? 'Approval needed' : 'Your input needed'}</div><h3>${esc(r.title)}</h3>`;
     if (r.kind === 'approval') card.innerHTML = heading + `<p>${esc(r.description)}</p><div class="cw-request-actions">${r.options.map(o => `<button type="submit" name="option" value="${esc(o.id)}" aria-label="${esc(o.label)}" class="cw-secondary">${esc(o.label)}</button>`).join('')}</div>`;
-    else card.innerHTML = heading + r.questions.map((q, qi) => `<fieldset data-question="${esc(q.id)}"><legend>${esc(q.question)}</legend>${(q.options || []).map((o, oi) => `<label class="cw-question-option"><input type="${q.multiSelect ? 'checkbox' : 'radio'}" name="q-${qi}" value="${esc(o.label)}"><span>${esc(o.label)}${o.description ? `<br><span class="cw-muted">${esc(o.description)}</span>` : ''}</span></label>`).join('')}<label class="cw-sr-only" for="answer-${esc(r.id)}-${qi}">Written answer: ${esc(q.question)}</label><textarea id="answer-${esc(r.id)}-${qi}" name="text-${qi}" rows="2" placeholder="${q.options?.length ? 'Or write your answer…' : 'Your answer…'}"></textarea></fieldset>`).join('') + '<div class="cw-request-actions"><button type="submit" class="cw-primary">Send answers</button></div>';
+    else card.innerHTML = heading + r.questions.map((q, qi) => `<fieldset data-question="${esc(q.id)}"><legend>${esc(q.question)}</legend>${(q.options || []).map((o, oi) => `<label class="cw-question-option"><input type="${q.multiSelect ? 'checkbox' : 'radio'}" name="q-${qi}" value="${esc(o.label)}"><span>${esc(o.label)}${o.description ? `<br><span class="cw-muted">${esc(o.description)}</span>` : ''}</span></label>`).join('')}<label class="cw-sr-only" for="answer-${esc(target.runId || 'root')}-${esc(r.id)}-${qi}">Written answer: ${esc(q.question)}</label><textarea id="answer-${esc(target.runId || 'root')}-${esc(r.id)}-${qi}" name="text-${qi}" rows="2" placeholder="${q.options?.length ? 'Or write your answer…' : 'Your answer…'}"></textarea></fieldset>`).join('') + '<div class="cw-request-actions"><button type="submit" class="cw-primary">Send answers</button></div>';
     card.insertAdjacentHTML('beforeend','<p class="cw-request-status" role="status"></p>');
+    const saved=[...pending.values()].find(p=>p.sessionId===target.sessionId && p.runId===target.runId && p.body.pendingRequestId===r.id && p.state!=='failed');
+    if(saved){card.querySelectorAll('button,input,textarea').forEach(e=>e.disabled=true);card.querySelector('.cw-request-status').textContent=commandLabels[saved.state];}
     container.append(card);
     card.addEventListener('submit', async event => {
       event.preventDefault();
@@ -447,13 +496,76 @@ function renderRequests() {
         }
       }
       card.querySelectorAll('button,input,textarea').forEach(e => e.disabled = true);
-      const sessionId = state.session;
-      const item = await mutate(`/api/console/sessions/${encodeURIComponent(sessionId)}/answers`, body, sessionId, r.kind === 'approval' ? 'Approval answer' : 'Question answers');
+      const item = await mutate(targetPath(target)+'/answers', body, target.sessionId, target.title+' · '+(r.kind === 'approval' ? 'Approval answer' : 'Question answers'),undefined,target.runId);
       if (item.state === 'failed') card.querySelectorAll('button,input,textarea').forEach(e => e.disabled = false);
-      card.querySelector('.cw-request-status').textContent = commandLabels[item.state];
+      card.querySelector('.cw-request-status').textContent = commandLabels[item.state]+(item.error?' · '+item.error:'');
     });
   }
 }
+
+function renderTeamRequests() {
+  const container=el('team-requests');
+  const requests=team?.pendingRequests || [];
+  container.hidden=!requests.length;
+  container.innerHTML=requests.length?`<h3>Team needs you <span>${requests.length}</span></h3>`+requests.map(({runId,request})=>{
+    const c=team.children.find(c=>c.runId===runId);
+    return `<button type="button" data-node="${esc(runId)}" aria-label="Review ${esc(request.kind)} for ${esc(c?.title || runId)} (${esc(runId)})" class="cw-team-request"><span><strong>${esc(c?.title || runId)}</strong><small>${esc(c?.role || 'member')} · ${esc(hostName(c?.host || ''))} · ${esc(runId)}</small></span><span>${esc(request.kind==='approval'?'Approval':'Question')} · ${esc(request.title)} ↗</span></button>`;
+  }).join(''):'';
+}
+
+async function loadChildDetail() {
+  const c=team?.children.find(c=>c.runId===state.node);
+  if(!c?.managed)return;
+  const load=++childLoad,sessionId=state.session;
+  try {
+    const next=await api(targetPath({sessionId,runId:c.runId}));
+    if(load===childLoad && sessionId===state.session && state.node===c.runId)acceptChildDetail(next);
+  } catch(error) {if(load===childLoad)setError('member-notice',error.message);}
+}
+
+function acceptChildDetail(next) {
+  if(next.child.rootSessionId!==state.session || next.child.runId!==state.node || (childDetail && next.child.revision<childDetail.child.revision))return;
+  childDetail=next;
+  for(const command of next.commands || [])if(pending.has(command.requestId))Object.assign(pending.get(command.requestId),{state:command.state,error:command.error});
+  for(const event of next.events)if(event.command && pending.has(event.command.requestId))Object.assign(pending.get(event.command.requestId),{state:event.command.state,error:event.command.error});
+  persistPending();renderOutbox();renderMemberControls();renderDetail();
+}
+
+function renderMemberControls() {
+  const container=el('member-controls'),requests=el('member-requests');
+  const c=childDetail?.child.runId===state.node?childDetail.child:team?.children.find(c=>c.runId===state.node);
+  if(!c) {
+    container.replaceChildren();requests.replaceChildren();setError('member-notice','');
+    const n=node();
+    if(n && n.role!=='root')container.innerHTML='<p class="cw-source-note">View only · This member has no console control connection. Resolve host prompts in its native app.</p>';
+    return;
+  }
+  const actions=[];
+  if(c.managed) {
+    if(activeTurn(c) && c.capabilities.interrupt)actions.push(['interrupt','Interrupt member']);
+    if(['idle','interrupted','disconnected','failed'].includes(c.state))actions.push(['resume','Resume member']);
+    if(c.state!=='closed')actions.push(['stop','Stop member']);
+  }
+  const html=`<p class="cw-member-state"><strong>${esc(c.state)}</strong> · Crew ${esc(c.runState || 'unknown')}${c.assignmentState?' · assignment '+esc(c.assignmentState):''}</p>`+(c.managed?`<div class="cw-session-actions">${actions.map(([action,label])=>`<button type="button" class="cw-text-button" data-child-action="${action}" ${childActionBusy || capability!=='ready'?'disabled':''}>${label}</button>`).join('')}</div>`:'<p class="cw-source-note">View only · This member has no console control connection. Resolve host prompts in its native app.</p>');
+  if(container.innerHTML!==html)container.innerHTML=html;
+  setError('member-notice',c.error || '');
+  if(c.managed && childDetail?.child.runId===c.runId)renderRequestCards(requests,childDetail.requests,{sessionId:state.session,runId:c.runId,title:`${c.title} · ${c.role} · ${hostName(c.host)} · ${c.runId}`});
+  else requests.replaceChildren();
+}
+
+root.addEventListener('click',async event=>{
+  const button=event.target.closest('[data-child-action]');if(!button || childActionBusy)return;
+  const c=childDetail?.child.runId===state.node?childDetail.child:team?.children.find(c=>c.runId===state.node);
+  if(!c?.managed || capability!=='ready')return;
+  const action=button.dataset.childAction;
+  if(action==='stop') {
+    const confirmed=await confirmAction(`Stop ${c.title}?`,'This stops this member. Its result and output stay available.','Stop member','Keep member');
+    if(!confirmed || state.node!==c.runId || state.session!==c.rootSessionId)return;
+  }
+  childActionBusy=true;renderMemberControls();
+  await mutate(targetPath({sessionId:c.rootSessionId,runId:c.runId})+'/actions',{requestId:requestId(),action,revision:c.revision},c.rootSessionId,c.title+' · '+action,undefined,c.runId);
+  childActionBusy=false;renderMemberControls();
+});
 
 function renderOutbox() {
   const visible = [...pending.values()].filter(item => item.sessionId === state.session && item.state !== 'delivered');
@@ -462,15 +574,24 @@ function renderOutbox() {
   if (focusId) [...el('outbox').querySelectorAll('button')].find(b => b.dataset.retry === focusId)?.focus({preventScroll:true});
 }
 
-async function mutate(path, body, sessionId, label, previous) {
-  const item = previous || {path, body, sessionId, label};
+async function mutate(path, body, sessionId, label, previous, runId) {
+  const item = previous || {path, body, sessionId, label, ...(runId?{runId}:{})};
   item.state = 'sending'; item.error = ''; pending.set(body.requestId, item); persistPending(); renderOutbox();
   try {
     const result = await api(path, body);
     item.state = result.command.state; item.error = result.command.error || '';
-    const index = bootstrap.sessions.findIndex(s => s.id === result.session.id);
-    if (index < 0) bootstrap.sessions.unshift(result.session); else if (bootstrap.sessions[index].revision <= result.session.revision) bootstrap.sessions[index] = result.session;
-    renderSessions();
+    if(result.child) {
+      if(team?.sessionId===sessionId) {
+        const index=team.children.findIndex(c=>c.runId===result.child.runId);
+        if(index>=0 && team.children[index].revision<=result.child.revision)team.children[index]=result.child;
+      }
+      if(childDetail?.child.runId===result.child.runId && childDetail.child.revision<=result.child.revision)childDetail.child=result.child;
+      renderMemberControls();renderTeamRequests();
+    } else {
+      const index = bootstrap.sessions.findIndex(s => s.id === result.session.id);
+      if (index < 0) bootstrap.sessions.unshift(result.session); else if (bootstrap.sessions[index].revision <= result.session.revision) bootstrap.sessions[index] = result.session;
+      renderSessions();
+    }
     if (state.session === sessionId) { setError('console-error', ''); renderSession(); }
   } catch (error) { item.state = error.uncertain ? 'uncertain' : 'failed'; item.error = error.message; }
   persistPending(); renderOutbox();
@@ -499,9 +620,9 @@ async function action(action) {
   actionBusy = false; renderSession();
 }
 
-function confirmAction(title, copy, button) {
+function confirmAction(title, copy, button, cancel='Keep session') {
   el('confirm-title').textContent = title; el('confirm-copy').textContent = copy; el('confirm-action').textContent = button; el('confirm-action').setAttribute('aria-label',button);
-  const dialog = el('confirm-dialog'); dialog.returnValue = ''; dialog.showModal();
+  const dialog = el('confirm-dialog');const cancelButton=dialog.querySelector('[value=cancel]');cancelButton.textContent=cancel;cancelButton.setAttribute('aria-label',cancel); dialog.returnValue = ''; dialog.showModal();
   return new Promise(resolve => dialog.addEventListener('close', () => resolve(dialog.returnValue === 'confirm'), {once:true}));
 }
 
@@ -574,7 +695,7 @@ root.addEventListener('click', async event => {
     if (b.disabled) return; b.disabled = true;
     const previous = pending.get(b.dataset.retry); if (!previous) return;
     const body = previous.state === 'uncertain' ? previous.body : {...previous.body, requestId:requestId()};
-    if (body.revision !== undefined && previous.state !== 'uncertain') body.revision = selectedSession()?.revision ?? body.revision;
+    if (body.revision !== undefined && previous.state !== 'uncertain') body.revision = (previous.runId ? team?.children.find(c=>c.runId===previous.runId)?.revision : selectedSession()?.revision) ?? body.revision;
     pending.delete(previous.body.requestId);
     await mutate(previous.path, body, previous.sessionId, previous.label, {...previous,body});
   }
@@ -602,7 +723,7 @@ el('older').addEventListener('click', async () => {
     const older = await api(`/api/console/sessions/${encodeURIComponent(id)}?before=${encodeURIComponent(cursor)}`);
     if (state.session !== id) return;
     const cache = historyBySession.get(id);
-    for (const event of older.events) if (!cache.has(event.id)) cache.set(event.id,event);
+    for (const event of older.events) if (!cache.has(event.id) && cache.size<500) cache.set(event.id,event);
     historyCursor.set(id, older.before); consoleDetail.before = older.before;
     renderConversation();
   } catch (error) { if (state.session === id) setError('console-error',error.message); }
