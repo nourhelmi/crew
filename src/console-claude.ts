@@ -333,7 +333,10 @@ export function createClaudeHost(options: HostOptions & { args?: string[] }): Co
     const owned = new Set(['--print', '-p', '--input-format', '--output-format', '--include-partial-messages', '--verbose',
       '--session-id', '--resume', '-r', '--continue', '-c', '--fork-session', '--no-session-persistence',
       '--append-system-prompt', '--system-prompt', '--system-prompt-snapshot', '--replay-user-messages', '--permission-prompts', '--permission-prompt-tool']);
-    for (const arg of configured) if (owned.has(arg.split('=')[0]!)) throw new Error(`Claude configured argument conflicts with console transport: ${arg}`);
+    for (const arg of configured) {
+      const flag = arg.split('=')[0]!;
+      if (owned.has(flag)) throw new Error(`Claude configured argument conflicts with console transport: ${flag}`);
+    }
     let extra = [...configured];
     if (options.launch.access === 'full') {
       extra = [];

@@ -61,6 +61,7 @@ input.on('line', line => {
   const wire = JSON.parse(line), settings = scenario();
   record({ kind: 'wire', ...wire });
   if (!wire.method) {
+    if (settings.holdAnswers) return;
     if (settings.disconnectAnswers) process.exit(0);
     if ('result' in wire) event('serverRequest/resolved', { requestId: wire.id });
     return;
@@ -68,7 +69,9 @@ input.on('line', line => {
   const response = (result: object) => send({ id: wire.id, result });
   if (wire.method === 'initialize') {
     if (settings.startupFlood) for (let i = 0; i < 129; i++) notify('warning', { threadId: 'before-thread', message: 'x'.repeat(32_768) });
-    response({ userAgent: 'fake' }); return;
+    if (typeof settings.initializeDelayMs === 'number') setTimeout(() => response({ userAgent: 'fake' }), settings.initializeDelayMs);
+    else response({ userAgent: 'fake' });
+    return;
   }
   if (wire.method === 'initialized') return;
   if (wire.method === 'config/read') { response({ config: { sandbox_workspace_write: { writable_roots: settings.configuredRoots || [], network_access: true } }, origins: {}, layers: null }); return; }

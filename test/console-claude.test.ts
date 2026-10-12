@@ -282,6 +282,9 @@ it('keeps host default permissions, explicitly overrides full, and fails workspa
   assert.ok(!existsSync(join(invalid.dir, 'launched.json')));
   const conflict = fixture(t, { args: ['--resume=anything'] });
   await assert.rejects(conflict.host.start(), /conflicts/);
+  const privateArg = fixture(t, { args: ['--append-system-prompt=synthetic-private-value'] });
+  await assert.rejects(privateArg.host.start(), /conflicts.*--append-system-prompt/);
+  assert.doesNotMatch(JSON.stringify(privateArg.states) + JSON.stringify(privateArg.commands), /synthetic-private-value/);
 });
 
 it('reports initialization rejection, process loss, malformed output and session mismatches explicitly', async t => {

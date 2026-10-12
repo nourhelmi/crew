@@ -38,7 +38,7 @@ async function fixture() {
     const source = resolve(`test/fixtures/console-${host}.ts`);
     const script = `#!${process.execPath}\nimport {mkdirSync,writeFileSync,existsSync} from 'node:fs';import {join} from 'node:path';
 const dir=join(process.env.CREW_HOME,'providers',process.env.CREW_RUN);mkdirSync(dir,{recursive:true});
-if(${JSON.stringify(host)}==='codex'){process.env.FAKE_CODEX_LOG=join(dir,'wire.jsonl');process.env.FAKE_CODEX_SCENARIO=join(dir,'scenario.json');if(!existsSync(process.env.FAKE_CODEX_SCENARIO))writeFileSync(process.env.FAKE_CODEX_SCENARIO,JSON.stringify({threadId:'native-'+process.env.CREW_RUN,initialChildRequest:'approval',holdOnStdinClose:true}));}
+if(${JSON.stringify(host)}==='codex'){process.env.FAKE_CODEX_LOG=join(dir,'wire.jsonl');process.env.FAKE_CODEX_SCENARIO=join(dir,'scenario.json');if(!existsSync(process.env.FAKE_CODEX_SCENARIO))writeFileSync(process.env.FAKE_CODEX_SCENARIO,JSON.stringify({threadId:'native-'+process.env.CREW_RUN,initialChildRequest:'approval',holdOnStdinClose:true,initializeDelayMs:Number(process.env.CHILD_FIXTURE_DELAY||0)}));}
 else{process.env.CLAUDE_FIXTURE_DIR=dir;for(const name of ['input.ndjson','output.ndjson'])if(!existsSync(join(dir,name)))writeFileSync(join(dir,name),'');}
 await import(${JSON.stringify(source)});\n`;
     writeFileSync(join(root, 'bin', host), script, { mode: 0o755 });
@@ -209,5 +209,88 @@ test('env markers never adopt external children; disconnected owned children req
     const resumed = JSON.parse(readFileSync(join(f.root, 'providers', codex.id, 'launched.json'), 'utf8'));
     assert.ok(resumed.args.includes(`--resume=${codex.sessionId}`));
     assert.equal(f.wires(codex).filter(w => w.type === 'user' && w.message.content.startsWith('Read and follow your crew brief:')).length, 1);
+  } finally { await f.cleanup(); }
+});
+
+test('a blocked native answer cannot block another child; stop cancels the in-flight decision without replay', async () => {
+  const f = await fixture();
+  try {
+    const slow = await f.child('codex'); const fast = await f.child('claude');
+    const scenario = join(f.root, 'providers', slow.id, 'scenario.json');
+    writeJson(scenario, { ...JSON.parse(readFileSync(scenario, 'utf8')), holdAnswers: true });
+    const pending = f.controller.childDetail(f.id, slow.id)!.requests[0]!;
+    const answering = f.controller.childAnswer(f.id, slow.id, { requestId: 'slow-answer', pendingRequestId: pending.id, option: 'accept' });
+    await until(() => readReceipt(childTargetId(slow.id), 'slow-answer', f.root)?.phase === 'attempted');
+    f.emit(fast, { type: 'control_request', request_id: 'fast-answer', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'synthetic' } } });
+    const request = await until(() => f.controller.childDetail(f.id, fast.id)?.requests[0]);
+    const start = Date.now();
+    const result = await f.controller.childAnswer(f.id, fast.id, { requestId: 'fast-answer', pendingRequestId: request.id, option: 'deny' });
+    assert.equal(result.command.state, 'delivered'); assert.ok(Date.now() - start < 2000);
+    await stopRun(readRun(slow.id)!);
+    const ambiguous = await answering;
+    assert.equal(ambiguous.command.state, 'uncertain');
+    assert.equal(f.wires(slow).filter(w => w.result?.decision === 'accept').length, 1);
+    assert.equal(f.controller.childDetail(f.id, slow.id)!.requests.length, 0);
+    assert.equal(f.controller.childDetail(f.id, fast.id)!.child.state, 'running');
+  } finally { await f.cleanup(); }
+});
+
+test('nested children keep verified ancestry; root close waits for an in-flight launch and blocks descendants from stopped parents', async () => {
+  const f = await fixture();
+  try {
+    const advisor = await f.child('codex');
+    process.env.CREW_RUN = advisor.id; process.env.CODEX_THREAD_ID = advisor.sessionId;
+    const nested = await f.child('claude');
+    assert.equal(nested.parent.mailbox, advisor.id);
+    assert.equal(f.controller.childDetail(f.id, nested.id)!.child.parentRunId, advisor.id);
+    assert.equal(nested.console!.rootSessionId, f.id);
+    delete process.env.CREW_RUN; process.env.CODEX_THREAD_ID = readMeta(f.id, f.root)!.identity!.sessionId;
+    process.env.CHILD_FIXTURE_DELAY = '500';
+    const late = await spawn({ role: 'builder', task: 'Synthetic delayed launch.', cwd: f.root, keep: true, model: 'codex/fixture', effort: 'high' });
+    delete process.env.CHILD_FIXTURE_DELAY;
+    await until(() => readMeta(childTargetId(late.id), f.root)?.pid);
+    await f.controller.action(f.id, { requestId: 'close-nested-team', action: 'close', revision: f.controller.detail(f.id)!.session.revision });
+    for (const run of [advisor, nested, late]) {
+      assert.equal(readRun(run.id)!.state, 'stopped');
+      const provider = readMeta(childTargetId(run.id), f.root)?.identity?.provider;
+      if (provider) assert.equal(processExists(provider.pid), false);
+      assert.equal(f.controller.childDetail(f.id, run.id)!.requests.length, 0);
+    }
+    const lateLog = join(f.root, 'providers', late.id, 'wire.jsonl');
+    try { assert.equal(readFileSync(lateLog, 'utf8').split('\n').filter(Boolean).map(v => JSON.parse(v)).filter(v => v.method === 'turn/start').length, 0); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; } // Pre-start cancellation launches no provider.
+    process.env.CREW_RUN = advisor.id; process.env.CODEX_THREAD_ID = advisor.sessionId;
+    await assert.rejects(f.child('codex'), /retired|stopped|disconnected/);
+  } finally { await f.cleanup(); }
+});
+
+test('resume preserves policy, active Claude mail waits for idle and interrupted mail requires explicit continuation', async () => {
+  const f = await fixture();
+  try {
+    const claude = await f.child('claude');
+    const identity = claude.sessionId;
+    appendMail(claude.id, { id: 'claude-new-mail', at: new Date().toISOString(), from: f.address, kind: 'message', text: 'Advice only.' });
+    await new Promise(r => setTimeout(r, 350));
+    assert.equal(f.wires(claude).filter(w => w.type === 'user').length, 1);
+    f.emit(claude, { fixture: 'result' });
+    await until(() => f.wires(claude).filter(w => w.type === 'user').length === 2);
+    assert.match(f.wires(claude).filter(w => w.type === 'user')[1].message.content, /Unread agent mail/);
+    takeUnread(claude.id);
+    await f.action(claude, 'interrupt');
+    appendMail(claude.id, { id: 'interrupted-mail', at: new Date().toISOString(), from: f.address, kind: 'message', text: 'Still advice.' });
+    await new Promise(r => setTimeout(r, 350));
+    assert.equal(f.wires(claude).filter(w => w.type === 'user').length, 2);
+    const config = JSON.parse(readFileSync(process.env.CREW_CONFIG!, 'utf8'));
+    writeJson(process.env.CREW_CONFIG!, { ...config, args: { ...config.args, claude: ['--permission-mode', 'bypassPermissions'] } });
+    await assert.rejects(f.action(claude, 'resume', 'changed-policy'), /configuration changed/);
+    assert.equal(readRun(claude.id)!.sessionId, identity);
+    assert.equal(f.wires(claude).filter(w => w.type === 'user').length, 2);
+    writeJson(process.env.CREW_CONFIG!, config);
+    await f.action(claude, 'resume', 'restored-policy');
+    await until(() => f.wires(claude).filter(w => w.type === 'user').length === 3);
+    assert.equal(readRun(claude.id)!.sessionId, identity);
+    const args = JSON.parse(readFileSync(join(f.root, 'providers', claude.id, 'launched.json'), 'utf8')).args;
+    assert.deepEqual(args.slice(0, 2), ['--permission-mode', 'default']);
+    assert.ok(args.includes(`--resume=${identity}`));
   } finally { await f.cleanup(); }
 });

@@ -29,11 +29,14 @@ export function belongsToRoot(run: RunMeta, id: string, root = home()): boolean 
   return true;
 }
 export function ownedChild(run: RunMeta, root = home()): ConsoleMeta | undefined {
-  const binding = run.console;
-  if (run.launcher !== 'console' || !binding || binding.sessionId !== childTargetId(run.id)) return;
+  const live = childRun(run.id, root);
+  const binding = live?.console;
+  if (!live || live.launcher !== 'console' || !binding || binding.sessionId !== childTargetId(live.id)) return;
   const meta = readMeta(binding.sessionId, root);
-  if (meta?.child?.runId !== run.id || meta.child.rootSessionId !== binding.rootSessionId || !belongsToRoot(run, binding.rootSessionId, root)) return;
-  if (meta.identity && meta.identity.sessionId !== run.sessionId) return;
+  if (meta?.child?.runId !== live.id || meta.child.rootSessionId !== binding.rootSessionId || !belongsToRoot(live, binding.rootSessionId, root)) return;
+  // The adapter publishes run identity before its own metadata. Re-read at the seam
+  // rather than mistaking a retained pre-start snapshot for changed ownership.
+  if (meta.identity && meta.identity.sessionId !== childRun(live.id, root)?.sessionId) return;
   return meta;
 }
 /** All intermediate parents must themselves have an owned native pipe. No external adoption. */

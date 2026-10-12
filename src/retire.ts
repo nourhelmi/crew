@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { closePane } from './herdr.ts';
 import { bgActive, hostEnv } from './spawn.ts';
-import { listRuns, mailDir, updateRun, withLock, writeJson } from './store.ts';
+import { listRuns, mailDir, readRun, updateRun, withLock, writeJson } from './store.ts';
 import { join } from 'node:path';
 import type { RunMeta } from './types.ts';
 import { ownedChild } from './console-children.ts';
@@ -27,7 +27,8 @@ export async function stopRun(run: RunMeta, visited = new Set<string>(), waitFor
     if (waitForConsole) {
       const deadline = Date.now() + 35_000;
       for (;;) {
-        const live = ownedChild(current);
+        const fresh = readRun(current.id);
+        const live = fresh && ownedChild(fresh);
         if (!live) throw new Error(`crew: ${current.name}'s console ownership changed during stop`);
         // A startup can record its provider after stop took the first snapshot.
         if (live.identity?.provider) await terminateOwnedProcess(live.identity.provider);
