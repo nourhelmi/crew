@@ -15,6 +15,7 @@ let events;
 let detailHash = '';
 let snapshotHash = '';
 let wanted = new URLSearchParams(location.search).get('run') || '';
+let requestToReview = null;
 
 const node = () => snapshot.nodes.find(n => n.id === state.node);
 const group = () => snapshot.workstreams.find(w => w.id === state.stream);
@@ -82,10 +83,11 @@ function connect() {
   });
 }
 
-function select(id) {
+function select(id, requestId) {
   const n = snapshot.nodes.find(n=>n.id===id);
   if(!n)return;
   state.node=n.id;state.stream=n.workstreamId;
+  requestToReview=requestId?{sessionId:state.session,runId:id,requestId}:null;
   detail=null;childDetail=null;detailHash='';snapshotHash='';childLoad++;
   const url=new URL(location.href);url.searchParams.set('run',id);history.replaceState(null,'',url);
   renderSnapshot();renderDetail();renderMemberControls();if(!state.session)renderSession();connect();loadChildDetail();
@@ -100,7 +102,8 @@ function renderStreams() {
 
 function nodeCard(n) {
   const children=snapshot.nodes.filter(c=>c.parentId===n.id).length;
-  const summary=n.role==='root' ? `${children} direct ${children===1?'member':'members'} · ${hostName(n.host)}` : n.status || `${hostName(n.host)} · ${n.launcher==='herdr'?'Herdr pane':n.launcher==='bg'?'Background session':'Captured process'}`;
+  const member=team?.children.find(c=>c.runId===n.id);
+  const summary=n.role==='root' ? `${children} direct ${children===1?'member':'members'} · ${hostName(n.host)}` : n.status || `${hostName(n.host)} · ${member?.managed?'Managed console connection':n.launcher==='herdr'?'Herdr pane':n.launcher==='bg'?'Background session':'Captured process'}`;
   return `<button type="button" class="cw-node" data-node="${esc(n.id)}" aria-pressed="${state.node===n.id}" aria-label="${esc(n.name)}, ${esc(status(n))}"><span class="cw-node-head">${host(n)}<span class="cw-role">${esc(roleName(n))}</span>${badge(n)}</span><span class="cw-node-title">${esc(n.name)}</span><span class="cw-node-summary">${esc(summary)}</span><span class="cw-node-foot"><span>${esc(n.model || hostName(n.host))}</span><span>${esc(elapsed(n.updatedAt))}</span></span></button>`;
 }
 
@@ -125,8 +128,10 @@ function renderSnapshot() {
   el('cwd').textContent=snapshot.nodes.find(n=>n.id===w.id)?.cwd || '';
   el('count').textContent=w.runs+' members';
   const needs=snapshot.nodes.filter(n=>n.workstreamId===w.id && attention(n));
+  const attentionMember=team?.children.find(c=>c.runId===needs[0]?.id);
+  const attentionLabel=attentionMember?.managed ? (attentionMember.pendingRequests?'Needs your answer here':status(needs[0])) : needs[0]?.waitingSince ? 'Needs attention in its host' : needs[0] ? status(needs[0]) : '';
   el('attention').classList.toggle('cw-clear',!needs.length);
-  el('attention').innerHTML=needs.length ? `<span class="cw-attention-copy"><strong>${esc(needs[0].name)}</strong> · ${esc(needs[0].waitingSince ? 'Needs attention in its host' : status(needs[0]))}${needs.length>1 ? ` · ${needs.length-1} more` : ''}</span><button type="button" data-node="${esc(needs[0].id)}">Inspect agent ↗</button>` : '<span class="cw-attention-copy">No recorded blockers. Select a member to inspect its work.</span>';
+  el('attention').innerHTML=needs.length ? `<span class="cw-attention-copy"><strong>${esc(needs[0].name)}</strong> · ${esc(attentionLabel)}${needs.length>1 ? ` · ${needs.length-1} more` : ''}</span><button type="button" data-node="${esc(needs[0].id)}">Inspect agent ↗</button>` : '<span class="cw-attention-copy">No recorded blockers. Select a member to inspect its work.</span>';
   const list=snapshot.nodes.filter(n=>n.workstreamId===w.id);
   const rendered=new Set();
   function tree(n) {
@@ -214,7 +219,7 @@ function renderDetailContent() {
 
 root.addEventListener('click',event=>{
   const b=event.target.closest('button');if(!b)return;
-  if(b.dataset.node){select(b.dataset.node);return;}
+  if(b.dataset.node){select(b.dataset.node,b.dataset.reviewRequest);return;}
   if(b.dataset.stream){
     state.session='';consoleDetail=null;team=null;childDetail=null;renderTeamRequests();renderMemberControls();updateSelectionUrl();renderSession();
     state.expanded=false;
@@ -342,6 +347,7 @@ async function selectSession(id) {
   state.session = id; state.stream = s.rootNodeId;
   state.node = priorSession === id && snapshot.nodes.some(n => n.id === priorNode && n.workstreamId === s.rootNodeId) ? priorNode : (!snapshot.nodes.length && wanted && new URLSearchParams(location.search).get('session') === id ? wanted : s.rootNodeId);
   wanted = '';
+  requestToReview=null;
   state.expanded = false; state.conversationFollow = true;
   consoleDetail = null; team=null;childDetail=null;childLoad++;renderTeamRequests();renderMemberControls();detail = null; detailHash = ''; snapshotHash = ''; setError('console-error', '');
   sessionLoading = true;
@@ -509,7 +515,7 @@ function renderTeamRequests() {
   container.hidden=!requests.length;
   container.innerHTML=requests.length?`<h3>Team needs you <span>${requests.length}</span></h3>`+requests.map(({runId,request})=>{
     const c=team.children.find(c=>c.runId===runId);
-    return `<button type="button" data-node="${esc(runId)}" aria-label="Review ${esc(request.kind)} for ${esc(c?.title || runId)} (${esc(runId)})" class="cw-team-request"><span><strong>${esc(c?.title || runId)}</strong><small>${esc(c?.role || 'member')} · ${esc(hostName(c?.host || ''))} · ${esc(runId)}</small></span><span>${esc(request.kind==='approval'?'Approval':'Question')} · ${esc(request.title)} ↗</span></button>`;
+    return `<button type="button" data-node="${esc(runId)}" data-review-request="${esc(request.id)}" aria-label="Review ${esc(request.kind)} for ${esc(c?.title || runId)} (${esc(runId)})" class="cw-team-request"><span><strong>${esc(c?.title || runId)}</strong><small>${esc(c?.role || 'member')} · ${esc(hostName(c?.host || ''))} · ${esc(runId)}</small></span><span>${esc(request.kind==='approval'?'Approval':'Question')} · ${esc(request.title)} ↗</span></button>`;
   }).join(''):'';
 }
 
@@ -529,6 +535,11 @@ function acceptChildDetail(next) {
   for(const command of next.commands || [])if(pending.has(command.requestId))Object.assign(pending.get(command.requestId),{state:command.state,error:command.error});
   for(const event of next.events)if(event.command && pending.has(event.command.requestId))Object.assign(pending.get(event.command.requestId),{state:event.command.state,error:event.command.error});
   persistPending();renderOutbox();renderMemberControls();renderDetail();
+  if(requestToReview?.sessionId===state.session && requestToReview.runId===next.child.runId) {
+    const card=[...el('member-requests').children].find(c=>c.dataset.request===requestToReview.requestId);
+    requestToReview=null;
+    if(card){card.scrollIntoView({block:'center'});card.tabIndex=-1;(card.querySelector('button:not(:disabled),input:not(:disabled),textarea:not(:disabled)') || card).focus({preventScroll:true});}
+  }
 }
 
 function renderMemberControls() {

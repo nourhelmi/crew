@@ -16,8 +16,8 @@ events.push({id:'stream-1',sequence:43,at,kind:'assistant',text:'The conversatio
 details.set('session-1',{session:sessions[0]!,events,requests:[]});
 const snapshot: DashboardSnapshot = {nodes:[
 {id:'managed-root',workstreamId:'managed-root',name:'Ship the Crew console',role:'root',host:'codex',cwd:'/fixture/crew',state:'running',createdAt:at,updatedAt:at},
-{id:'core',parentId:'managed-root',workstreamId:'managed-root',name:'console-core',role:'advisor',host:'codex',model:'gpt-test',cwd:'/fixture/crew',state:'running',status:'Implementing durable delivery and provider control.',createdAt:at,updatedAt:at},
-{id:'ui',parentId:'managed-root',workstreamId:'managed-root',name:'console-ui',role:'advisor',host:'claude',model:'claude-test',cwd:'/fixture/crew',state:'running',status:'Verifying root conversation and team inspection.',createdAt:at,updatedAt:at},
+{id:'core',parentId:'managed-root',workstreamId:'managed-root',name:'console-core',role:'advisor',host:'codex',model:'gpt-test',cwd:'/fixture/crew',state:'running',launcher:'console',createdAt:at,updatedAt:at},
+{id:'ui',parentId:'managed-root',workstreamId:'managed-root',name:'console-ui',role:'advisor',host:'claude',model:'claude-test',cwd:'/fixture/crew',state:'running',launcher:'console',createdAt:at,updatedAt:at},
 {id:'checker',parentId:'core',workstreamId:'managed-root',name:'delivery-checker',role:'checker',host:'codex',cwd:'/fixture/crew',state:'idle',waitingSince:at,createdAt:at,updatedAt:at,assignment:{id:'assignment-1',revision:1,createdAt:at,status:'accepted',submissions:[{ref:'submission-1',hash:'fixture',packetHash:'fixture-packet',revision:1,at,status:'PASS',result:'PASS: synthetic delivery proof',accepted:{submission:'submission-1',at,by:'parent'}}],accepted:{at,by:'parent',submission:'submission-1'}}},
 {id:'external-root',workstreamId:'external-root',name:'Library cleanup',role:'root',host:'claude',cwd:'/fixture/library',state:'untracked',createdAt:at,updatedAt:at}],workstreams:[{id:'managed-root',name:'Ship the Crew console',project:'crew',runs:3,running:2,attention:1,updatedAt:at},{id:'external-root',name:'Library cleanup',project:'library',runs:0,running:0,attention:0,updatedAt:at}],warnings:[]};
 const bootstrap: ConsoleBootstrap = {token:'synthetic-capability',providers:[{id:'codex',label:'Codex',available:true,defaultModel:'gpt-test',models:[{id:'gpt-test',label:'GPT fixture',efforts:['low','high']}],capabilities:capabilities as ConsoleSession['capabilities']},{id:'claude',label:'Claude Code',available:true,models:[{id:'claude-test',label:'Claude fixture'}],capabilities:{...capabilities,activeInput:'queue',accessModes:['default','full']} as ConsoleSession['capabilities']}],projects:[{cwd:'/fixture/crew',name:'Crew fixture'}],sessions};
@@ -44,6 +44,7 @@ const server = createServer(async (req,res) => {
    if (body.state) {d.session.state = body.state as ConsoleSession['state'];d.session.revision++;}
    if (body.requests) d.requests = body.requests as ConsoleDetail['requests'];
    const cd=childDetails.get(String(body.child || 'core'))!;
+   if(body.childWaiting!==undefined){const n=snapshot.nodes.find(n=>n.id===cd.child.runId)!;if(body.childWaiting)n.waitingSince=at;else delete n.waitingSince;}
    if(body.childRequests){cd.requests=body.childRequests as ConsoleDetail['requests'];cd.child.pendingRequests=cd.requests.length;cd.child.revision++;}
    if(body.childState){cd.child.state=body.childState as ConsoleSession['state'];cd.child.revision++;}
    if(body.childStreaming!==undefined){const e=cd.events[0];if(e?.kind==='assistant')e.text=String(body.childStreaming);}

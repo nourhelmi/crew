@@ -8,7 +8,7 @@ export function prettyOutput(text) {
   return text.slice(0,LIMIT)+(source.length>LIMIT || text.length>LIMIT?'\n[Output shortened for display]':'');
 }
 function inline(text) {
-  const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*|!?\[[^\[\]\n]+\]\([^\s)]+\))/g;
+  const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*|!?\[[^\[\]\n]+\]\([^\s()[\]]+\))/g;
   let result = '', from = 0;
   for (const match of text.matchAll(pattern)) {
     result += escapeHtml(text.slice(from, match.index));

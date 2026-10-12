@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { performance } from 'node:perf_hooks';
 import { renderProse, prettyOutput } from '../web/stream-format.js';
 
 test('bounded prose supports readable structure and incomplete streaming fences', () => {
@@ -34,4 +35,11 @@ test('tool output only pretty prints complete JSON and keeps arbitrary source li
 test('malformed repeated delimiters stay literal without nested parsing', () => {
   const value='['.repeat(100_000);
   assert.equal(renderProse(value), '<p>'+value+'</p>');
+});
+
+test('incomplete repeated link openings do not repeatedly rescan the remaining stream', () => {
+  const value='![x](https://'.repeat(8000).slice(0,100000);
+  const started=performance.now();
+  assert.equal(renderProse(value), '<p>'+value+'</p>');
+  assert.ok(performance.now()-started<500, 'Malformed links must not block the browser for seconds');
 });
