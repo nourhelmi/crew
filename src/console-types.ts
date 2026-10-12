@@ -119,7 +119,8 @@ export interface ConsoleChild {
   parentRunId?: string;
   managed: boolean;
   state: ConsoleState;
-  assignmentState: 'running' | 'done' | 'failed' | 'blocked' | 'stopped';
+  runState: 'running' | 'idle' | 'stalled' | 'done' | 'failed' | 'blocked' | 'stopped';
+  assignmentState?: 'active' | 'submitted' | 'accepted';
   revision: number;
   capabilities: ConsoleCapabilities;
   pendingRequests: number;
