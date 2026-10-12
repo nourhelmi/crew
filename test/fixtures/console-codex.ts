@@ -5,7 +5,7 @@ import { createInterface } from 'node:readline';
 const log = process.env.FAKE_CODEX_LOG!;
 const scenario = (): Record<string, unknown> => JSON.parse(readFileSync(process.env.FAKE_CODEX_SCENARIO!, 'utf8'));
 const record = (value: object) => appendFileSync(log, JSON.stringify(value) + '\n');
-record({ kind: 'launch', pid: process.pid, args: process.argv.slice(2), cwd: process.cwd(), env: { CREW_RUN: process.env.CREW_RUN, CREW_HOME: process.env.CREW_HOME, HOME: process.env.HOME, CODEX_HOME: process.env.CODEX_HOME } });
+record({ kind: 'launch', pid: process.pid, args: process.argv.slice(2), cwd: process.cwd(), env: { CREW_RUN: process.env.CREW_RUN, CREW_ROUTER: process.env.CREW_ROUTER, CREW_HOME: process.env.CREW_HOME, HOME: process.env.HOME, CODEX_HOME: process.env.CODEX_HOME } });
 const send = (value: object) => process.stdout.write(JSON.stringify(value) + '\n');
 const notify = (method: string, params: object) => send({ method, params });
 let threadId = 'thread-new', turnId = '', counter = 0;

@@ -177,7 +177,8 @@ export class ConsoleSupervisor {
     current();
     const childArgs = this.meta.child && this.meta.launch.host === 'claude' ? [...args, ...[...writableRoots(this.meta.launch.cwd), ROOT].flatMap(root => ['--add-dir', root])] : args;
     this.adapter = factory({ launch: this.meta.launch, instructions: this.meta.instructions, args: childArgs,
-      env: { ...rootEnv(), CREW_HOME: this.root, CREW_CONSOLE_SESSION: this.meta.child?.rootSessionId ?? this.id, ...(this.meta.child ? { CREW_RUN: this.meta.child.runId } : {}) },
+      env: { ...rootEnv(), CREW_HOME: this.root, CREW_CONSOLE_SESSION: this.meta.child?.rootSessionId ?? this.id, ...(this.meta.child ? { CREW_RUN: this.meta.child.runId,
+        ...(this.meta.child.router === undefined ? {} : { CREW_ROUTER: this.meta.child.router ? 'on' : 'off' }) } : {}) },
       ...(this.meta.child ? { child: { runId: this.meta.child.runId } } : {}), callbacks: this.callbacks(this.generation), ...(this.meta.identity ? { identity: this.meta.identity } : {}) });
     await this.adapter.start();
     current();

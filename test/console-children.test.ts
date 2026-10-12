@@ -17,6 +17,7 @@ import { runHook } from '../src/hook.ts';
 import { resume } from '../src/resume.ts';
 import { stopRun } from '../src/retire.ts';
 import { processExists } from '../src/console-process.ts';
+import { setSessionRouter } from '../src/settings.ts';
 import { appendMail, listRuns, mailDir, readRun, resultPath, updateRun, writeJson, writeRun } from '../src/store.ts';
 import type { ConsoleChildMutation } from '../src/console-types.ts';
 import type { RunMeta } from '../src/types.ts';
@@ -29,7 +30,7 @@ async function until<T>(read: () => T | false | undefined, timeout = 6000): Prom
 async function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'crew-child-console-'));
   const prior = { ...process.env };
-  for (const key of ['CREW_RUN', 'CREW_MAILBOX', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_SESSION_ID', 'HERDR_ENV', 'HERDR_PANE_ID', 'HERDR_SESSION', 'CREW_CONSOLE_SESSION']) delete process.env[key];
+  for (const key of ['CREW_RUN', 'CREW_MAILBOX', 'CREW_ROUTER', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_SESSION_ID', 'HERDR_ENV', 'HERDR_PANE_ID', 'HERDR_SESSION', 'CREW_CONSOLE_SESSION']) delete process.env[key];
   Object.assign(process.env, { HOME: root, CREW_HOME: root, CREW_CONFIG: join(root, 'config.json'), CREW_ROSTER: join(root, 'roster.json'), CODEX_HOME: join(root, 'codex-home'), CLAUDE_CONFIG_DIR: join(root, 'claude-home'), ADVISOR_STATE_DIR: join(root, 'advisor'), CODEX_THREAD_ID: 'before-root' });
   writeJson(process.env.CREW_CONFIG!, { router: { enabled: false }, args: { codex: ['--sandbox', 'workspace-write', '--ask-for-approval', 'on-request'], claude: ['--permission-mode', 'default'] } });
   writeJson(process.env.CREW_ROSTER!, { models: [{ model: 'codex/fixture', effort: 'high', roles: ['builder'], cost: 0, use: 'test' }, { model: 'claude/fixture', effort: 'high', roles: ['builder'], cost: 0, use: 'test' }, { model: 'opencode/fixture', effort: 'high', roles: ['builder'], cost: 0, use: 'test' }] });
@@ -294,6 +295,22 @@ test('resume preserves policy, active Claude mail waits for idle and interrupted
     const args = JSON.parse(readFileSync(join(f.root, 'providers', claude.id, 'launched.json'), 'utf8')).args;
     assert.deepEqual(args.slice(0, 2), ['--permission-mode', 'default']);
     assert.ok(args.includes(`--resume=${identity}`));
+  } finally { await f.cleanup(); }
+});
+
+test('managed children retain their inherited session router override through resume', async () => {
+  const f = await fixture();
+  try {
+    setSessionRouter(f.address, true); // Opposite of this fixture's global default.
+    const codex = await f.child('codex'); const claude = await f.child('claude');
+    assert.equal(f.wires(codex)[0].env.CREW_ROUTER, 'on');
+    const claudeLaunch=()=>JSON.parse(readFileSync(join(f.root,'providers',claude.id,'launched.json'),'utf8'));
+    assert.equal(claudeLaunch().crewRouter,'on');
+    setSessionRouter(f.address, false); // Existing children keep their original choice.
+    await f.action(codex,'interrupt');await f.action(codex,'resume');
+    assert.equal(f.wires(codex).filter(w=>w.kind==='launch').at(-1).env.CREW_ROUTER,'on');
+    await f.action(claude,'interrupt');await f.action(claude,'resume');
+    assert.equal(claudeLaunch().crewRouter,'on');
   } finally { await f.cleanup(); }
 });
 

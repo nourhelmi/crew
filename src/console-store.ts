@@ -21,7 +21,7 @@ export interface ConsoleMeta {
   launch: ConsoleLaunch;
   instructions: string;
   /** A Crew run with a live owned pipe, not another console root. */
-  child?: { runId: string; rootSessionId: string };
+  child?: { runId: string; rootSessionId: string; router?: boolean };
   /** Bind policy without duplicating credential-bearing native CLI arguments. */
   argsHash?: string;
   /** Legacy private metadata, scrubbed when its supervisor next owns it. */

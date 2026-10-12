@@ -313,7 +313,7 @@ export async function spawn(options: SpawnOptions): Promise<RunMeta> {
     writeFileSync(briefPath(id), `${bootstrap(run)}\n`, { mode: 0o600 });
     writeRun(run);
     if (controlled) {
-      try { prepareConsoleChild(run); }
+      try { prepareConsoleChild(run, home(), router.source !== 'config' ? router.on : undefined); }
       catch (error) { updateRun(id, current => ({ ...current, state: 'failed' })); throw error; }
     }
   });

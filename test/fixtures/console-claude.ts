@@ -12,6 +12,7 @@ const args = process.argv.slice(2);
 const sessionId = args.find(a => a.startsWith('--session-id=') || a.startsWith('--resume='))!.split('=')[1]!;
 writeFileSync(join(dir, 'launched.json'), JSON.stringify({ args, cwd: process.cwd(), sessionId, pid: process.pid,
   crewRun: process.env.CREW_RUN ?? null, config: process.env.CLAUDE_CONFIG_DIR, home: process.env.CREW_HOME,
+  crewRouter: process.env.CREW_ROUTER ?? null,
   stateEvents: process.env.CLAUDE_CODE_SDK_READS_SESSION_STATE, inheritedAuth: process.env.ANTHROPIC_API_KEY ?? null,
   claudeSession: process.env.CLAUDE_SESSION_ID, claudeCodeSession: process.env.CLAUDE_CODE_SESSION_ID,
   crewMailbox: process.env.CREW_MAILBOX, codexThread: process.env.CODEX_THREAD_ID ?? null,

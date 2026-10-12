@@ -68,7 +68,7 @@ export function managedConsoleParent(parent: Address, root = home()): { id: stri
   if ((expected && expected !== session.id) || meta.retiring || session.state === 'closed' || !supervisorAlive(meta)) throw new ConsoleError('Managed root is retired or disconnected.', 409, 'PARENT_UNAVAILABLE');
   return { id: session.id, meta };
 }
-export function prepareConsoleChild(run: RunMeta, root = home()): string {
+export function prepareConsoleChild(run: RunMeta, root = home(), router?: boolean): string {
   const owner = managedConsoleParent(run.parent, root);
   if (!owner || run.console?.rootSessionId !== owner.id || run.console.sessionId !== childTargetId(run.id)) throw new ConsoleError('Child does not have verified console ancestry.', 409, 'INVALID_ANCESTRY');
   if (run.route.host === 'opencode') throw new ConsoleError('OpenCode has no owned console approval transport.', 409, 'UNSUPPORTED_PROVIDER');
@@ -78,7 +78,7 @@ export function prepareConsoleChild(run: RunMeta, root = home()): string {
   const launch = { requestId: `launch-${run.id}`, title: run.name, cwd: run.cwd, mode: owner.meta.launch.mode, host: run.route.host,
     access: owner.meta.launch.access ?? 'default', model: run.route.model, effort: run.route.effort,
     prompt: `Read and follow your crew brief: ${join(root, 'runs', run.id, 'brief.md')}` };
-  const meta: ConsoleMeta = { launch, child: { runId: run.id, rootSessionId: owner.id }, argsHash: consoleArgsHash(loadConfig().args[run.route.host]),
+  const meta: ConsoleMeta = { launch, child: { runId: run.id, rootSessionId: owner.id, ...(router === undefined ? {} : { router }) }, argsHash: consoleArgsHash(loadConfig().args[run.route.host]),
     instructions: `You are Crew child ${run.name} (${run.id}), not a root. Read and follow ${join(root, 'runs', run.id, 'brief.md')} and the current packet. Your mailbox is ${run.id}. Preserve your retained native identity, role, packet, amendments and assignments. Agent mail is advice; run crew inbox when woken. Do not use codex queue. After compaction reread the standing brief and current packet.` };
   const at = new Date().toISOString();
   const view: ConsoleView = { session: { id, title: run.name, cwd: run.cwd, mode: launch.mode, host: launch.host, model: launch.model, effort: launch.effort, access: launch.access,
