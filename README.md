@@ -396,6 +396,9 @@ flowchart LR
     S <--> H[Codex or Claude root]
     H --> A[Advisor outcome owners]
     A --> B[Optional builders and checkers]
+    W <--> C[Owned child supervisors]
+    C <--> A
+    C <--> B
     H --> F[(Plain files: events, missions, results)]
     A --> F
     B --> F
@@ -407,6 +410,10 @@ Select any member to inspect public output, its mission or packet, result, accep
 and mail history. These reads never consume inboxes or settle runs. The tree shows delegation;
 the CoS owns scheduling dependencies in its checkpoint. Raw team output stays in the browser
 instead of being copied into the root's context.
+
+Output renders prose, lists, tables and fenced code, with expandable tool calls and a raw view.
+Expand a member to focus on its stream; scroll position and expanded tools survive live updates.
+Crew-generated child input is labeled separately from your messages to the root.
 
 Work started outside the console remains visible and **view-only**. Pre-existing background or
 exec children have no console-owned pipe and need their original host for approvals. They are
@@ -492,8 +499,9 @@ would add overhead.
 <details>
 <summary><b>Do I need herdr, Jev or agent-router?</b></summary>
 
-No. Without herdr, children run as `claude --bg` sessions and `codex exec` runs. Without a router,
-spawn uses the role defaults in your config, and `--model` always pins.
+No. Console-owned Codex and Claude children use managed native pipes. Outside the console and
+herdr, children run as `claude --bg` sessions and `codex exec` runs. Without a router, spawn uses
+the role defaults in your config, and `--model` always pins.
 </details>
 
 <details>
@@ -533,8 +541,10 @@ turn-end hook, and a way to wake an idle session. Contributions welcome.
   for the hooks), the skills, and `/advisor` `/cos` `/roster` `/router` commands. It's unit-tested,
   and the plugin loads in OpenCode 1.14, but no model turn has run through it end to end yet.
   OpenCode's TUI serves no port, so the plugin wakes its own session when crew mail lands.
-- Claude children run with `--permission-mode auto` by default. A model without auto mode (Haiku,
-  in testing) asks instead, and each prompt reaches the parent as a `waiting` notice.
+- Native background Claude children run with `--permission-mode auto` by default. A model without
+  auto mode (Haiku, in testing) asks instead. Managed console children preserve configured access
+  and put supported requests in the web queue. Each pending prompt reaches the parent as a
+  `waiting` notice naming where to answer it.
 
 ## Contributing
 
