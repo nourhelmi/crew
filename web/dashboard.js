@@ -200,13 +200,13 @@ function renderDetailContent() {
       if(warnings)el('details').insertAdjacentHTML('afterbegin',warnings);
     }
     if(state.rawOutput) output.innerHTML=`<pre id="terminal-text" class="cw-code">${esc(bounded || empty)}</pre>`;
-    else syncStream(output,displayEvents.slice(-150),n.name,empty);
+    else syncStream(output,displayEvents.slice(-150),n.name,empty,managedOutput?'Crew input':'You');
     el('output-freshness').textContent=freshness+(short?' · Recent output only':'');
     const follow=root.querySelector('[data-follow]');follow.textContent=state.follow?'↓ Following output':'↓ Follow output';follow.setAttribute('aria-pressed',String(state.follow));
     output.scrollTop=state.follow ? output.scrollHeight : scroll;
   } else if(state.tab==='activity') {
     el('details').innerHTML=warnings+`<p class="cw-source-note">${esc(source)} · ${esc(freshness)} · Latest 35 events</p><div class="cw-activity-list"></div>`;
-    syncStream(el('details').querySelector('.cw-activity-list'),displayEvents.slice(-35).reverse(),n.name,'No public activity recorded yet.');
+    syncStream(el('details').querySelector('.cw-activity-list'),displayEvents.slice(-35).reverse(),n.name,'No public activity recorded yet.',managedOutput?'Crew input':'You');
   } else if(state.tab==='messages') {
     el('details').innerHTML=warnings+'<p class="cw-source-note">Mail history · reading here does not consume it.</p>'+(detail.messages.length?detail.messages.slice().reverse().map(m=>`<div class="cw-event"><span class="cw-time">${esc(time(m.at))} · ${esc(m.kind)}</span><strong>${esc(m.from)}</strong><p>${esc(m.text)}</p></div>`).join(''):'<div class="cw-empty"><h3>No messages yet</h3><p>Messages received by this agent will appear here.</p></div>');
   } else {
@@ -421,13 +421,13 @@ function acceptConsoleDetail(next) {
   renderSession(); renderSessions(); renderConversation(); renderRequests();
 }
 
-function streamHtml(event, speaker, opened) {
+function streamHtml(event, speaker, opened, inputLabel) {
   if(event.kind==='tool') return `<details ${opened?'open':''}><summary>${esc(event.title || 'Tool')} <span class="cw-tool-state">· ${esc(event.state || 'Recorded')}</span></summary><div class="cw-tool-actions"><button type="button" class="cw-text-button" data-copy-output>Copy output</button><span role="status"></span></div><pre>${esc(prettyOutput(event.text))}</pre></details>`;
   if(event.kind==='status')return esc(event.text);
-  return `<div class="cw-message-header"><strong>${esc(event.kind==='user'?'You':speaker)}</strong><time datetime="${esc(event.at || '')}">${esc(time(event.at))}</time>${event.streaming?'<span class="cw-streaming">Writing…</span>':''}</div><div class="${event.kind==='user'?'cw-message-text':'cw-prose'}">${event.kind==='user'?esc(event.text):renderProse(event.text)}</div>${event.command?`<div class="cw-delivery">${esc(commandLabels[event.command.state])}${event.command.error?' · '+esc(event.command.error):''}</div>`:''}`;
+  return `<div class="cw-message-header"><strong>${esc(event.kind==='user'?inputLabel:speaker)}</strong><time datetime="${esc(event.at || '')}">${esc(time(event.at))}</time>${event.streaming?'<span class="cw-streaming">Writing…</span>':''}</div><div class="${event.kind==='user'?'cw-message-text':'cw-prose'}">${event.kind==='user'?esc(event.text):renderProse(event.text)}</div>${event.command?`<div class="cw-delivery">${esc(commandLabels[event.command.state])}${event.command.error?' · '+esc(event.command.error):''}</div>`:''}`;
 }
 
-function syncStream(container, rows, speaker, empty) {
+function syncStream(container, rows, speaker, empty, inputLabel='You') {
   const ids=new Set(rows.map(e=>e.id));
   container.querySelectorAll(':scope > [data-event]').forEach(e=>{if(!ids.has(e.dataset.event))e.remove();});
   if(!rows.length){container.innerHTML=`<p class="cw-subtitle">${esc(empty)}</p>`;return;}
@@ -437,7 +437,7 @@ function syncStream(container, rows, speaker, empty) {
     let item=existing.get(event.id);
     if(!item){item=document.createElement('article');item.dataset.event=event.id;}
     item.className=event.kind==='tool'?'cw-tool':event.kind==='status'?'cw-status-event':'cw-message cw-'+event.kind;
-    const html=streamHtml(event,speaker,item.querySelector('details')?.open);
+    const html=streamHtml(event,speaker,item.querySelector('details')?.open,inputLabel);
     if(item._html!==html){item.innerHTML=html;item._html=html;}
     if(container.children[index]!==item)container.insertBefore(item,container.children[index] || null);
   }
