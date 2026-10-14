@@ -62,20 +62,32 @@ export function activeDescendants(id: string): RunMeta[] {
   return active;
 }
 
+/** The exact current submission to accept, or why `submission` is not it, named precisely enough to act on. */
+function acceptable(run: RunMeta, submission: string): { assignment: Assignment; record: Submission } | string {
+  const assignment = run.assignment;
+  if (run.state === 'stopped') return `${run.name} is stopped, and a stopped run's submissions cannot be accepted; accept before \`crew stop\``;
+  if (!assignment) return `${run.name} has no submitted assignment yet`;
+  const record = assignment.submissions.find(s => s.ref === submission);
+  const current = `${run.name}'s current submission is ${assignment.submission ?? 'none yet'}`;
+  if (!record) return `stale or unknown submission ${submission}; ${current}`;
+  if (assignment.status === 'active') return `stale submission ${submission}: ${run.name}'s assignment is active again; accept its next submission once it settles`;
+  if (assignment.submission !== submission || record.revision !== assignment.revision) return `stale submission ${submission}; ${current}`;
+  if (packetMail(run)) return `stale submission ${submission}: ${run.name} has an unread amendment; accept its resubmission once it settles`;
+  if (readResult(resultPath(run.id))?.hash !== record.hash) return `stale submission ${submission}: ${run.name} changed its result since; accept the newer submission once it settles`;
+  if (readResult(record.result)?.hash !== record.hash) return `stale submission ${submission}: its snapshot no longer matches the recorded hash`;
+  if (packetHash(run.id) !== record.packetHash) return `stale submission ${submission}: ${run.name}'s packet changed since; accept its resubmission once it settles`;
+  return { assignment, record };
+}
+
 /** Acceptance names the exact current immutable submission, never merely a member or DONE. */
 export function accept(from: Address, ref: string, submission: string): RunMeta {
   const run = findRun(ref);
   if (!run) throw new Error(`crew: no run matches "${ref}"`);
   return updateRun(run.id, current => {
     if (current.parent.mailbox !== from.mailbox) throw new Error(`crew: only ${current.name}'s parent can accept its submission`);
-    const assignment = current.assignment;
-    const record = assignment?.submissions.find(s => s.ref === submission);
-    if (current.state === 'stopped' || !assignment || assignment.status === 'active' || assignment.submission !== submission
-      || !record || record.revision !== assignment.revision || packetMail(current)
-      || readResult(resultPath(current.id))?.hash !== record.hash || readResult(record.result)?.hash !== record.hash
-      || packetHash(current.id) !== record.packetHash) {
-      throw new Error('crew: stale or unsubmitted result; accept the current assignment submission after packet changes and repairs settle');
-    }
+    const found = acceptable(current, submission);
+    if (typeof found === 'string') throw new Error(`crew: ${found}`);
+    const { assignment, record } = found;
     if (!/^(DONE|PASS(ED)?)\b/i.test(record.status)) throw new Error('crew: blocked/failed submissions cannot be accepted as delivered outcomes');
     if (activeDescendants(current.id).length) throw new Error('crew: active descendants must settle before acceptance');
     const accepted = { submission, at: assignment.accepted?.at ?? new Date().toISOString(), by: from.mailbox };

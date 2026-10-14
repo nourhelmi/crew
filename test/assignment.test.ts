@@ -85,6 +85,16 @@ describe('retained assignments and exact acceptance', () => {
     accept(parent, 'advisor', ref());
   });
 
+  it('names why each refusal happened, so a parent that stopped first knows the stop did it', () => {
+    fixture(); result('DONE: first'); mail.settle('a-test'); const first = ref();
+    result('DONE: rewritten');
+    assert.throws(() => accept(parent, 'advisor', first), /stale submission .*advisor changed its result since/);
+    assert.throws(() => accept(parent, 'advisor', 'initial-r9-nope'), /unknown submission initial-r9-nope; advisor's current submission is/);
+    mail.settle('a-test'); const second = ref(); cli(['stop', 'advisor']);
+    assert.throws(() => accept(parent, 'advisor', second), (error: Error) =>
+      /advisor is stopped.*accept before `crew stop`/.test(error.message) && !/stale/.test(error.message));
+  });
+
   it('invalidates acceptance when a retained member writes a new draft', () => {
     fixture(); result('DONE'); mail.settle('a-test'); const first = ref(); accept(parent, 'advisor', first);
     store.updateRun('a-test', current => ({ ...current, state: 'running' })); // advisory resume can become a repair
