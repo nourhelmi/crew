@@ -225,6 +225,10 @@ export function waitHint(parent: Address): string | undefined {
   if (!names.length) return undefined;
   if (parent.host !== 'claude') return `wake: crew wait (live: ${names.join(', ')})`;
   if (hasWaiter(parent.mailbox)) return `wake: your background crew wait covers ${names.join(', ')}`;
+  return armWaitHint(names);
+}
+
+export function armWaitHint(names: string[]): string {
   return `wake: nothing is waiting on ${names.join(', ')}. Start \`crew wait\` now as a background Bash command`
     + ` (run_in_background, description "crew: ${names.join(', ')}"): it lists them as a background task and wakes you when one settles.`;
 }

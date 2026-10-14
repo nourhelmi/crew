@@ -171,6 +171,27 @@ describe('retained assignments and exact acceptance', () => {
     assert.throws(() => mail.assign(parent, 'advisor', 'new work'), /retained member/);
   });
 
+  it('lets a Claude root end its turn while a background crew wait covers its live work', () => {
+    const root = { host: 'claude' as const, mailbox: 'claude-root' };
+    fixture({ parent: root }); fixture({ id: 'b-child', name: 'child', parent: { mailbox: 'a-test', host: 'claude' }, keep: false });
+    const stop = (active = false) => runHook('stop', 'claude', JSON.stringify({ session_id: 'root', stop_hook_active: active }), process.env);
+    const block = JSON.parse(stop());
+    assert.match(block.reason, /Start `crew wait` now as a background Bash command.*"crew: advisor"/);
+    assert.doesNotMatch(block.reason, /child/, 'a grandchild is its own parent\'s to wait on');
+    assert.equal(stop(true), '', 'blocked once');
+    const release = store.markWaiter(root.mailbox);
+    try { assert.equal(stop(), '', 'an armed background wait wakes the root'); } finally { release(); }
+  });
+
+  it('lets a Claude crew run end its turn while its background crew wait covers its builders', () => {
+    fixture({ route: { host: 'claude', model: 'claude-opus-5-5', effort: 'high', strategy: 'pinned' }, launcher: 'bg', sessionId: 'adv' });
+    fixture({ id: 'b-child', name: 'builder', parent: { mailbox: 'a-test', host: 'claude' }, keep: false });
+    const stop = () => runHook('stop', 'claude', '{"session_id":"adv"}', { ...process.env, CREW_RUN: 'a-test' });
+    assert.match(JSON.parse(stop()).reason, /Start `crew wait` now as a background Bash command.*"crew: builder"/);
+    const release = store.markWaiter('a-test');
+    try { assert.equal(stop(), '', 'an armed background wait wakes the run'); } finally { release(); }
+  });
+
   it('recovers late outboxes after replacement and explicit retirement without replaying inbox mail', async () => {
     const legacy = fixture(); result('DONE: committed'); mail.settle('a-test');
     const settled = store.readRun('a-test')!.settled!;

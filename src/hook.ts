@@ -6,8 +6,8 @@ import { hookSelf, ownRun, sessionMailbox } from './identity.ts';
 import { format, paused, reopen, settle, stall, takeUnread } from './mail.ts';
 import { contract, progressLine, readResult } from './result.ts';
 import { bootstrap, ROOT } from './spawn.ts';
-import { briefPath, home, mailDir, packetPath, readRun, resultPath, unread, updateRun } from './store.ts';
-import { ensureWatcher, waitHint } from './wait.ts';
+import { briefPath, hasWaiter, home, mailDir, packetPath, readRun, resultPath, unread, updateRun } from './store.ts';
+import { armWaitHint, ensureWatcher, liveChildren, waitHint } from './wait.ts';
 import type { Host } from './types.ts';
 
 export interface HookInput {
@@ -126,8 +126,14 @@ function stop(host: Host, input: HookInput, env: NodeJS.ProcessEnv): HookOutput 
         + 'If you need a decision first, write Status BLOCKED: <question> (or ask with crew msg parent "...") and stop.');
     } else if (!run.keep) stall(run.id, 'stopped without a result');
   }
+  // A Claude session's background `crew wait` re-invokes it when its work settles, so it may end its
+  // turn with work live; holding the turn in foreground waits only blocks its user.
   const descendants = activeDescendants(me.mailbox);
-  if (descendants.length && !input.stop_hook_active) reasons.push(`Crew work remains active: ${descendants.map(r => r.name).join(', ')}. Wait for its actual settlement or stop the owned work before ending this assignment.`);
+  if (descendants.length && !input.stop_hook_active && !(host === 'claude' && hasWaiter(me.mailbox))) {
+    const live = liveChildren(me.mailbox);
+    reasons.push(host === 'claude' ? armWaitHint((live.length ? live : descendants).map(r => r.name))
+      : `Crew work remains active: ${descendants.map(r => r.name).join(', ')}. Wait for its actual settlement or stop the owned work before ending this assignment.`);
+  }
   const mails = takeUnread(me.mailbox);
   if (mails.length) {
     reasons.push('Crew mail arrived. An [assignment] or [amendment] from your parent is part of your packet; anything else is advice from'
