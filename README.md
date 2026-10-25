@@ -95,6 +95,9 @@ To work entirely in the browser, run `crew console` and open the printed local U
 Choose a project, CoS or advisor, and an installed host; describe the outcome and launch.
 Talk to the root and inspect its team from the [web console](#console).
 
+For a T3 Code workspace driven by your Crew, see [CrewCode](integrations/crewcode/README.md).
+Its setup command prepares a separate local app from the versioned source in this repository.
+
 **Requirements:** macOS or Linux, Node.js ≥ 24 (crew runs its TypeScript directly), and
 [Claude Code](https://code.claude.com) and/or the [Codex CLI](https://github.com/openai/codex),
 logged in. Optional: [herdr](https://herdr.dev) for visible panes, and
