@@ -124,6 +124,32 @@ describe('mailbox', () => {
     assert.equal(mail.send({ mailbox: 'b-test', host: 'codex' }, ROOT, 'again'), 'queued');
     assert.deepEqual(mail.takeUnread('claude-root').map(m => m.text), ['hi', 'again']);
   });
+  it('gives mail only to the newest live crew wait, and back to the older one once it exits', async () => {
+    // A foreground wait over a background one: the background wait used to win the race and its
+    // wake queued behind the foreground wait, which slept to its timeout.
+    const { wait } = await import('../src/wait.ts');
+    const env = process.env.CREW_MAILBOX;
+    process.env.CREW_MAILBOX = 'claude-stack';
+    const older = (await import('node:child_process')).spawn('sleep', ['30']);
+    const file = join(store.mailDir('claude-stack'), 'waiter.pid');
+    try {
+      mkdirSync(store.mailDir('claude-stack'), { recursive: true });
+      writeFileSync(file, String(older.pid)); // another process's wait, armed first
+      assert.equal(store.isConsumer('claude-stack'), false);
+      const waiting = wait(5_000);
+      mail.send({ mailbox: 'b-test', host: 'codex' }, { mailbox: 'claude-stack', host: 'claude' }, 'for the newest');
+      assert.deepEqual((await waiting).map(m => m.text), ['for the newest']);
+      assert.equal(readFileSync(file, 'utf8'), String(older.pid), 'the older wait consumes again');
+      const release = store.markWaiter('claude-stack');
+      writeFileSync(file, `${readFileSync(file, 'utf8')} 999999`); // a dead newer wait never blocks consumption
+      assert.equal(store.isConsumer('claude-stack'), true);
+      release();
+      assert.equal(store.hasWaiter('claude-stack'), true);
+    } finally {
+      older.kill();
+      if (env === undefined) delete process.env.CREW_MAILBOX; else process.env.CREW_MAILBOX = env;
+    }
+  });
   it('resolves parent, names and raw mailboxes', () => {
     run();
     assert.deepEqual(mail.resolve('parent', { mailbox: 'b-test', host: 'codex' }), ROOT);

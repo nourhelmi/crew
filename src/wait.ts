@@ -9,7 +9,7 @@ import { format, hasPendingSettlement, reopen, settle, stall, takeUnread, waitin
 import { requestResume, resuming } from './resume.ts';
 import { readResult } from './result.ts';
 import { bgActive, bgSession, ROOT } from './spawn.ts';
-import { alive, hasWaiter, listRuns, mailDir, markWaiter, mtime, readRun, resultPath, unread, updateRun, withLock } from './store.ts';
+import { alive, hasWaiter, isConsumer, listRuns, mailDir, markWaiter, mtime, readRun, resultPath, unread, updateRun, withLock } from './store.ts';
 import type { Address, Host, Mail, RunMeta } from './types.ts';
 import { ownedChild } from './console-children.ts';
 import { publicSession, supervisorAlive } from './console-store.ts';
@@ -103,7 +103,8 @@ export async function wait(timeoutMs: number): Promise<Mail[]> {
         lastSweep = now;
         if (checkBg) lastBg = now;
       }
-      const mails = takeUnread(me.mailbox);
+      // A newer wait on this mailbox (often a foreground one over a background one) takes the mail.
+      const mails = isConsumer(me.mailbox) ? takeUnread(me.mailbox) : [];
       if (mails.length) {
         await sleep(BATCH_MS);
         return mails.concat(takeUnread(me.mailbox));

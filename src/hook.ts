@@ -109,14 +109,20 @@ function stop(host: Host, input: HookInput, env: NodeJS.ProcessEnv): HookOutput 
   const reasons: string[] = [];
   const found = readRun(me.mailbox);
   const run = found && reopen(found);
+  // A Claude session's background `crew wait` re-invokes it when its work settles, so it may end its
+  // turn with work live; holding the turn in foreground waits only blocks its user.
+  const descendants = activeDescendants(me.mailbox);
+  const armed = host === 'claude' && hasWaiter(me.mailbox);
   // A blocked child often continues once its parent answers, and a settled one can take an
   // amendment after its DONE, so its next result settles too. Only a stopped run is over.
   if (run && run.state !== 'stopped') {
     // A draft saying IN PROGRESS is still working (often waiting on its own background task):
-    // nudged once, then reported as paused, never as stalled.
+    // nudged once, then reported as paused, never as stalled. One whose armed wait covers its own
+    // live children is neither: a nudge only provokes a second, foreground wait.
     const progress = progressLine(resultPath(run.id));
     if (readResult(resultPath(run.id))) settle(run.id, true);
     else if (run.state !== 'running') { /* already reported; wait for a result or new mail */ }
+    else if (progress && armed && descendants.length) { /* its wait wakes it */ }
     else if (progress && !input.stop_hook_active) {
       reasons.push(`Your result says "${progress}". Keep going toward this assignment's done-when now;`
         + ' set Status to DONE, PASS, FAIL or BLOCKED: <question> only when that is true.');
@@ -126,10 +132,7 @@ function stop(host: Host, input: HookInput, env: NodeJS.ProcessEnv): HookOutput 
         + 'If you need a decision first, write Status BLOCKED: <question> (or ask with crew msg parent "...") and stop.');
     } else if (!run.keep) stall(run.id, 'stopped without a result');
   }
-  // A Claude session's background `crew wait` re-invokes it when its work settles, so it may end its
-  // turn with work live; holding the turn in foreground waits only blocks its user.
-  const descendants = activeDescendants(me.mailbox);
-  if (descendants.length && !input.stop_hook_active && !(host === 'claude' && hasWaiter(me.mailbox))) {
+  if (descendants.length && !input.stop_hook_active && !armed) {
     const live = liveChildren(me.mailbox);
     reasons.push(host === 'claude' ? armWaitHint((live.length ? live : descendants).map(r => r.name))
       : `Crew work remains active: ${descendants.map(r => r.name).join(', ')}. Wait for its actual settlement or stop the owned work before ending this assignment.`);

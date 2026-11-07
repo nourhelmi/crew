@@ -217,15 +217,42 @@ export function alive(pid: number | undefined): boolean {
 
 const waiterFile = (mailbox: string): string => join(mailDir(mailbox), 'waiter.pid');
 
+/** Live waiter pids, oldest first. */
+function waiters(mailbox: string): number[] {
+  let text = '';
+  try { text = readFileSync(waiterFile(mailbox), 'utf8'); } catch { return []; }
+  return text.split(/\s+/).map(Number).filter(pid => alive(pid));
+}
+
+/**
+ * Waiters stack: a session can hold several `crew wait`s (a Claude background wait plus a
+ * foreground one its model started anyway). Only the newest live one consumes, so mail never goes
+ * to a wait whose wake is queued behind another wait that then sleeps to its timeout.
+ * When it exits, the next one down resumes consuming.
+ */
 export function markWaiter(mailbox: string): () => void {
   mkdirSync(mailDir(mailbox), { recursive: true });
-  writeFileSync(waiterFile(mailbox), String(process.pid));
-  return () => { try { if (readFileSync(waiterFile(mailbox), 'utf8') === String(process.pid)) writeFileSync(waiterFile(mailbox), ''); } catch { /* gone */ } };
+  const edit = (change: (pids: number[]) => number[]): void => withLock(`waiter-${mailbox}`, () => {
+    writeFileSync(waiterFile(mailbox), change(waiters(mailbox)).join(' '));
+  });
+  edit(pids => [...pids, process.pid]);
+  return () => {
+    try {
+      edit(pids => {
+        const at = pids.lastIndexOf(process.pid);
+        return at < 0 ? pids : [...pids.slice(0, at), ...pids.slice(at + 1)];
+      });
+    } catch { /* gone */ }
+  };
 }
 
 export function hasWaiter(mailbox: string): boolean {
-  try { return alive(Number(readFileSync(waiterFile(mailbox), 'utf8'))); }
-  catch { return false; }
+  return waiters(mailbox).length > 0;
+}
+
+/** This process is the newest live waiter on the mailbox: the one that consumes its mail. */
+export function isConsumer(mailbox: string): boolean {
+  return waiters(mailbox).at(-1) === process.pid;
 }
 
 export function mtime(path: string): number | undefined {

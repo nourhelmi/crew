@@ -202,6 +202,21 @@ describe('retained assignments and exact acceptance', () => {
     try { assert.equal(stop(), '', 'an armed background wait wakes the run'); } finally { release(); }
   });
 
+  it('neither nudges nor reports paused an IN PROGRESS Claude run whose armed wait covers its builders', () => {
+    // A "keep going" nudge here made child advisors start a second, foreground crew wait.
+    fixture({ route: { host: 'claude', model: 'claude-opus-5-5', effort: 'high', strategy: 'pinned' }, launcher: 'bg', sessionId: 'adv' });
+    fixture({ id: 'b-child', name: 'builder', parent: { mailbox: 'a-test', host: 'claude' }, keep: false });
+    result('IN PROGRESS: waiting on builder');
+    const stop = (active = false) => runHook('stop', 'claude', JSON.stringify({ session_id: 'adv', stop_hook_active: active }), { ...process.env, CREW_RUN: 'a-test' });
+    const release = store.markWaiter('a-test');
+    try {
+      assert.equal(stop(), '');
+      assert.equal(stop(true), '');
+    } finally { release(); }
+    assert.deepEqual(mail.takeUnread(parent.mailbox).filter(m => m.kind === 'waiting'), []);
+    assert.equal(store.readRun('a-test')?.state, 'running');
+  });
+
   it('recovers late outboxes after replacement and explicit retirement without replaying inbox mail', async () => {
     const legacy = fixture(); result('DONE: committed'); mail.settle('a-test');
     const settled = store.readRun('a-test')!.settled!;
